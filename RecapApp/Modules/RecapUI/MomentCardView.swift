@@ -14,54 +14,74 @@ struct MomentCardView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Spacing.md) {
-            // 青瓷竖条：区别于 LIVE 朱砂「当前块」与回听青瓷高亮，独立标识「用户钉下的时刻」。
+            // 左侧青瓷竖条：区别于 LIVE 朱砂「当前块」与回听青瓷高亮，独立标识「时刻照片」。
             RoundedRectangle(cornerRadius: 1, style: .continuous)
                 .fill(Color.recapCeladon.opacity(0.55))
                 .frame(width: 2)
-                .padding(.top, 2)
+                .padding(.top, 4)
 
-            content
-        }
-        .padding(.vertical, Spacing.sm)
-        .padding(.trailing, Spacing.xl)
-    }
-
-    private var content: some View {
-        HStack(alignment: .top, spacing: Spacing.md) {
-            thumbnail
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: Spacing.md) {
                 header
-                Text(moment.photoCount > 1 ? "拍了 \(moment.photoCount) 张照片" : "拍下一张照片")
-                    .font(.recapRaw)
-                    .foregroundStyle(Color.recapTea)
+                photoPreview
                 if let note = moment.noteText?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !note.isEmpty {
                     Text(note)
                         .font(.recapRaw)
-                        .foregroundStyle(Color.recapInk.opacity(0.88))
+                        .foregroundStyle(Color.recapInk.opacity(0.92))
+                        .lineSpacing(4)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+        .padding(.vertical, Spacing.md)
+        .padding(.trailing, Spacing.xl)
         .contentShape(Rectangle())
         .onTapGesture { onOpen?() }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("会议时刻，\(moment.sourceTime)，\(moment.photoCount) 张照片")
-        .accessibilityHint("查看照片")
+        .accessibilityHint("点按查看全屏照片")
     }
 
     private var header: some View {
         HStack(spacing: Spacing.sm) {
             Image(systemName: RecapSymbol.camera)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.recapCeladon)
-            Text("此刻")
-                .font(.recapSection)
+            Text("现场照片")
+                .font(.system(size: 13, weight: .semibold, design: .default))
                 .foregroundStyle(Color.recapCeladon)
+
+            if moment.photoCount > 1 {
+                Text("\(moment.photoCount) 张")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.recapCeladon)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.recapCeladon.opacity(0.12), in: Capsule())
+            }
+
             timePill
+            #if DEBUG
+            ownershipDebugBadge
+            #endif
             Spacer(minLength: 0)
         }
     }
+
+    #if DEBUG
+    /// 诊断角标：P=照片路径里的 meetingId 前 6 位，R=关系里的 meetingId 前 6 位。
+    /// 二者本应同源；不一致（红底）= SwiftData 关系损坏。
+    private var ownershipDebugBadge: some View {
+        let p = MomentOwnershipDiagnostics.short6(MomentOwnershipDiagnostics.pathMeetingId(moment))
+        let r = MomentOwnershipDiagnostics.short6(MomentOwnershipDiagnostics.relationMeetingId(moment))
+        let bad = p != r
+        return Text("P:\(p) R:\(r)")
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(bad ? Color.red.opacity(0.9) : Color.recapInk.opacity(0.30), in: Capsule())
+    }
+    #endif
 
     @ViewBuilder private var timePill: some View {
         if let onSeek {
@@ -86,37 +106,50 @@ struct MomentCardView: View {
         }
     }
 
-    @ViewBuilder private var thumbnail: some View {
+    @ViewBuilder private var photoPreview: some View {
         if let first = moment.photoRelativePaths.first,
            let img = MeetingMediaStore.loadUIImage(storedPath: first) {
-            Image(uiImage: img)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.recapInk.opacity(0.08), lineWidth: 1)
-                )
-                .overlay(alignment: .bottomTrailing) {
-                    if moment.photoCount > 1 {
-                        Text("\(moment.photoCount)")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Color.recapInk.opacity(0.7), in: Capsule())
-                            .padding(3)
+            ZStack(alignment: .bottomTrailing) {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 190)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.8)
+                    )
+                    .shadow(color: Color.recapShadow, radius: 8, x: 0, y: 3)
+
+                if moment.photoCount > 1 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "photo.stack")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("共 \(moment.photoCount) 张")
+                            .font(.system(size: 11, weight: .semibold, design: .default))
                     }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.black.opacity(0.65), in: Capsule())
+                    .padding(10)
                 }
+            }
         } else {
-            // 占位：照片缺失（seed 占位未生成 / 文件被清）。降级为青瓷图标块，不破坏布局。
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.recapCeladon.opacity(0.12))
-                .frame(width: 56, height: 56)
+            // 占位：照片缺失
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.recapCeladon.opacity(0.08))
+                .frame(maxWidth: .infinity)
+                .frame(height: 110)
                 .overlay(
-                    Image(systemName: RecapSymbol.camera)
-                        .font(.system(size: 20))
-                        .foregroundStyle(Color.recapCeladon.opacity(0.6))
+                    HStack(spacing: 6) {
+                        Image(systemName: RecapSymbol.camera)
+                            .font(.system(size: 18))
+                        Text("照片文件缺失")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(Color.recapTea)
                 )
         }
     }

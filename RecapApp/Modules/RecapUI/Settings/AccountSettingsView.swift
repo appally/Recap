@@ -29,6 +29,7 @@ struct AccountSettingsView: View {
         .navigationTitle("账户")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            Haptics.prepare()
             await AppleCredentialChecker.reconcileIfNeeded()
             reload()
         }
@@ -54,7 +55,7 @@ struct AccountSettingsView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(account.displayName)
-                    .font(.system(size: 20, weight: .semibold, design: .serif))
+                    .font(.system(size: 20, weight: .semibold, design: .default))
                     .foregroundStyle(Color.recapInk)
                 HStack(spacing: Spacing.sm) {
                     SettingsStatusPill(

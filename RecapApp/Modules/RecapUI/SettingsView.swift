@@ -64,7 +64,10 @@ public struct SettingsView: View {
             .sheet(isPresented: $showDebug) {
                 ScaffoldDebugView()
             }
-            .onAppear { refreshToken += 1 }
+            .onAppear {
+                Haptics.prepare()
+                refreshToken += 1
+            }
         }
     }
 
@@ -106,7 +109,7 @@ public struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(account.isSignedIn ? account.displayName : "登录 Recap")
-                    .font(.system(size: 17, weight: .semibold, design: .serif))
+                    .font(.system(size: 17, weight: .semibold, design: .default))
                     .foregroundStyle(Color.recapInk)
                 Text(accountSubtitle)
                     .font(.system(size: 13))

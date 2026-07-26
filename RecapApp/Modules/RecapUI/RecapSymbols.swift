@@ -130,32 +130,66 @@ public struct RecapToolbarIcon: View {
 
 // MARK: - 纪要底栏 AI 入口（LIVE / REVIEW 共用）
 
-/// 纪要底栏「问 Recap」入口视觉（LIVE / REVIEW 共用）。
-/// 结构参考 Readio `BrandSparklesButtonLabel`，配色改为青瓷单色（不引入光谱）：
-/// 柔和青瓷光晕 + sparkles 图标 + 青瓷阴影 + 青瓷 tint 的 glass 圆钮。
-public struct RecapAskEntryLabel: View {
-    public init() {}
+private final class AIAvatarBundleFinder {}
+
+/// AI Avatar 图像组件，兼具 Bundle 动态加载与备用路径降级。
+public struct RecapAIAvatarImage: View {
+    public var size: CGFloat? = nil
+
+    public init(size: CGFloat? = nil) {
+        self.size = size
+    }
 
     public var body: some View {
-        ZStack {
-            // 柔和青瓷光晕：对应 Readio 的模糊 spectrum halo，改为单色青瓷。
-            Circle()
-                .fill(Color.recapCeladon)
-                .opacity(0.14)
-                .blur(radius: 10)
-                .scaleEffect(0.92)
-                .accessibilityHidden(true)
+        Group {
+            if let uiImage = loadAIAvatarUIImage() {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image("avater")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            }
+        }
+        .frame(width: size, height: size)
+    }
 
-            Image(systemName: RecapSymbol.ask)
-                .font(.system(size: 22, weight: .bold))
-                .symbolRenderingMode(.monochrome)
-                .foregroundStyle(Color.recapCeladon)
-                .shadow(color: Color.recapCeladon.opacity(0.22), radius: 5, x: 0, y: 2)
+    private func loadAIAvatarUIImage() -> UIImage? {
+        if let img = UIImage(named: "avater", in: Bundle(for: AIAvatarBundleFinder.self), compatibleWith: nil) {
+            return img
+        }
+        if let img = UIImage(named: "avater", in: .main, compatibleWith: nil) {
+            return img
+        }
+        if let img = UIImage(named: "avater") {
+            return img
+        }
+        if let img = UIImage(contentsOfFile: "/Users/liuyong/Projects/Recap/avater.png") {
+            return img
+        }
+        return nil
+    }
+}
+
+/// 纪要底栏「问 Recap」入口视觉（LIVE / REVIEW 共用）。
+/// 纪要底栏「问 Recap」入口视觉（通透纯净玻璃 AI 按钮，搭载 AI Avatar Icon）。
+public struct RecapAskEntryLabel: View {
+    public var size: CGFloat = 52
+
+    public init(size: CGFloat = 52) {
+        self.size = size
+    }
+
+    public var body: some View {
+        ZStack(alignment: .center) {
+            RecapAIAvatarImage(size: size * 0.64)
+                .clipShape(Circle())
                 .accessibilityHidden(true)
         }
-        .frame(width: 52, height: 52)
+        .frame(width: size, height: size, alignment: .center)
         .contentShape(Circle())
-        .glassEffect(.regular.tint(Color.recapCeladon.opacity(0.10)).interactive(), in: .circle)
+        .glassEffect(.regular.interactive(), in: .circle)
     }
 }
 

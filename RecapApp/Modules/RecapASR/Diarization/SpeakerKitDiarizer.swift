@@ -31,18 +31,21 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> [SpeakerTimelineSegment] {
         let kit = try await ensureKit(modelFolder: nil)
-        let options = PyannoteDiarizationOptions(
-            numberOfSpeakers: numberOfSpeakers,
-            clusterDistanceThreshold: 0.6,
-            useExclusiveReconciliation: true
-        )
-        let result = try await kit.diarize(
-            audioArray: samples,
-            options: options,
-            progressCallback: { p in
-                progress?(p.fractionCompleted)
-            }
-        )
+        // CoreML 推理串行化（#661）：pyannote 与 FluidAudio ASR 不可并发跑。
+        let result = try await CoreMLInferenceGate.shared.exclusive { [kit] () async throws in
+            let options = PyannoteDiarizationOptions(
+                numberOfSpeakers: numberOfSpeakers,
+                clusterDistanceThreshold: 0.6,
+                useExclusiveReconciliation: true
+            )
+            return try await kit.diarize(
+                audioArray: samples,
+                options: options,
+                progressCallback: { p in
+                    progress?(p.fractionCompleted)
+                }
+            )
+        }
         return result.segments.compactMap { seg -> SpeakerTimelineSegment? in
             guard let speakerId = seg.speaker.speakerId else { return nil }
             let start = Double(seg.startTime)

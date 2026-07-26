@@ -7,7 +7,7 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
     public let speaker: Speaker
     public let timestamp: String
     public let raw: String
-    public let polished: String
+    public var polished: String
     public var isFinal: Bool
     /// ASR 原始起止秒；缺省时由 timestamp 字符串回退解析。
     public var startSeconds: Double?

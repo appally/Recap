@@ -24,21 +24,21 @@ public extension Color {
         )
     }
 
-    /// 冷雾纸底：避开暖奶油 AI 模板感，保留青瓷冷调。
-    static let recapBg = Color(light: 0xEEF1ED, dark: 0x121513)
-    static let recapPaper = Color(light: 0xF7F9F6, dark: 0x1C201C)
-    static let recapCurrentBg = Color(light: 0xFAFCFA, dark: 0x222722)
+    /// 纯净静谧纸底：高级冷瓷灰/黑曜石底色，无黄绿杂浊感。
+    static let recapBg = Color(light: 0xF8F9FA, dark: 0x0C0E11)
+    static let recapPaper = Color(light: 0xFFFFFF, dark: 0x16191D)
+    static let recapCurrentBg = Color(light: 0xFFFFFF, dark: 0x1C2025)
 
-    static let recapInk = Color(light: 0x171C19, dark: 0xEDEDE6)
-    static let recapTea = Color(light: 0x66706A, dark: 0x9AA095)
+    static let recapInk = Color(light: 0x111614, dark: 0xF0F2EE)
+    static let recapTea = Color(light: 0x6E7671, dark: 0x9CA29A)
 
-    /// 投影专用色。recapInk 在深色模式接近白，直接拿来投影会变成白色光晕。
-    static let recapShadow = Color(light: 0x171C19, lightAlpha: 0.05, dark: 0x000000, darkAlpha: 0.34)
+    /// 投影专用色。通透自然的软阴影，避免脏发灰。
+    static let recapShadow = Color(light: 0x000000, lightAlpha: 0.04, dark: 0x000000, darkAlpha: 0.28)
 
     /// 中性强调色（原青瓷品牌色已退役）。全 App 走黑白灰中性体系：
     /// 强调靠 recapInk 的深浅 + 字重层次，不靠彩色。此 token 保留命名以免改 133 处引用，
     /// 但语义已等价于 recapInk（墨黑）。朱砂/赭石仅作不可替代的功能语义保留。
-    static let recapCeladon = Color(light: 0x171C19, dark: 0xEDEDE6)
+    static let recapCeladon = Color(light: 0x111614, dark: 0xF0F2EE)
     static let recapCinnabar = Color(light: 0xC8463C, dark: 0xE15A4E)
     static let recapOchre = Color(light: 0xA87842, dark: 0xC99659)
 
@@ -46,11 +46,11 @@ public extension Color {
     /// light 深→浅、dark 浅→深，保证两种模式下 speaker0 都是最高对比。
     static func speaker(_ i: Int) -> Color {
         let palette: [(UInt32, UInt32)] = [
-            (0x171C19, 0xEDEDE6),  // 墨 / 近白（最强）
-            (0x4A524C, 0xB5BCB4),
-            (0x66706A, 0x9AA095),  // tea 档
-            (0x8A918B, 0x747B73),
-            (0xAEB5AF, 0x5C615A),  // 淡（最弱）
+            (0x111614, 0xF0F2EE),  // 墨 / 近白（最强）
+            (0x454D47, 0xB5BCB4),
+            (0x6E7671, 0x9CA29A),  // tea 档
+            (0x8C938E, 0x767D75),
+            (0xB0B7B1, 0x5D635C),  // 淡（最弱）
         ]
         let (l, d) = palette[abs(i) % palette.count]
         return Color(light: l, dark: d)
@@ -108,7 +108,7 @@ public enum Radius {
 public extension View {
     /// 卡片投影：全站一档。只加在形状上，避免连正文一起投影导致文字发虚。
     func recapCardShadow() -> some View {
-        shadow(color: .recapShadow, radius: 14, x: 0, y: 6)
+        shadow(color: .recapShadow, radius: 10, x: 0, y: 4)
     }
 
     @ViewBuilder
@@ -148,14 +148,14 @@ public extension Animation {
     static let recapLand = Animation.spring(response: 0.45, dampingFraction: 0.82)
     static let recapSoft = Animation.spring(response: 0.30, dampingFraction: 0.90)
     static let recapSheet = Animation.spring(response: 0.40, dampingFraction: 0.85)
-    /// 按压缩反馈：短、ease-out，避免 spring 拖尾。
-    static let recapPress = Animation.easeOut(duration: 0.14)
+    /// 按压缩反馈：极短 100ms，超快干脆响应。
+    static let recapPress = Animation.easeOut(duration: 0.10)
     /// 首页冷启动入场：快、ease-out，避免 spring 拖尾。
-    static let recapHomeEnter = Animation.easeOut(duration: 0.18)
-    /// 左滑露出操作：略慢，给决策空间。
-    static let recapSwipeOpen = Animation.spring(response: 0.38, dampingFraction: 0.86)
+    static let recapHomeEnter = Animation.easeOut(duration: 0.16)
+    /// 左滑露出操作：更跟手。
+    static let recapSwipeOpen = Animation.spring(response: 0.30, dampingFraction: 0.82)
     /// 左滑收起：更快，系统响应要干脆。
-    static let recapSwipeClose = Animation.spring(response: 0.24, dampingFraction: 0.90)
+    static let recapSwipeClose = Animation.spring(response: 0.22, dampingFraction: 0.88)
     /// LIVE 贴底跟随：短、ease-out，高频不拖沓。
     static let recapLiveFollow = Animation.easeOut(duration: 0.14)
     /// LIVE 暂停/录音底栏切换：仅 opacity，无位移。
@@ -168,14 +168,14 @@ public extension Animation {
     static let recapNotice = Animation.easeOut(duration: 0.18)
 }
 
-/// 全 App 统一按压：scale 0.97 + 140ms ease-out。
+/// 全 App 统一按压：scale 0.98 + 100ms ease-out。
 public struct RecapPressStyle: ButtonStyle {
     public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.94 : 1)
             .animation(.recapPress, value: configuration.isPressed)
     }
 }

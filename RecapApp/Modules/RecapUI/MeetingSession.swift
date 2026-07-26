@@ -48,6 +48,10 @@ public final class MeetingSession: ObservableObject {
     private var streamTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
+    /// 会后 CoreML 重负载任务（diarization / 端侧重转写）引用，供 scenePhase 切后台时取消。
+    private var postMeetingTask: Task<Void, Never>?
+    /// 会后 LLM 润色任务（独立于 CoreML 的 postMeetingTask，二者可并发）。
+    private var polishTask: Task<Void, Never>?
     private var endingLive = false
     private var liveSpeaker = Speaker(id: "asr-live", name: "转写", colorIndex: 0)
     /// LIVE 字幕合并（index / 续录偏移 / partial·segment）；UI `blocks` 由其投影。
@@ -193,8 +197,16 @@ public final class MeetingSession: ObservableObject {
     private func adoptSegmentsAsBlocks(_ segments: [TranscriptSegment]) {
         merger.loadCheckpoint(segments: segments)
         let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
-        blocks = segments.map {
-            TranscriptBlock(segment: $0, speakers: speakers, isFinal: true)
+        // 若已润色，按段 id 把润色文本并入 block.polished（≠ raw 时 UI 自动双行）
+        let polishedById = Dictionary(
+            uniqueKeysWithValues: meeting.polishedSegments.map { ($0.id, $0.text) }
+        )
+        blocks = segments.map { seg in
+            var block = TranscriptBlock(segment: seg, speakers: speakers, isFinal: true)
+            if let polished = polishedById[seg.id], !polished.isEmpty {
+                block.polished = polished
+            }
+            return block
         }
     }
 
@@ -406,8 +418,15 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
-    /// REVIEW：用本地音频重新转写并刷新 blocks / segments。
-    public func retranscribeFromDisk() async {
+    /// REVIEW：触发本地音频重转写（后台 Task，可被 `cancelPostMeetingCompute` 取消）。
+    /// - Parameter engineKind: 指定重转引擎（如 `.fluidSenseVoice` 端侧高保真）；nil 跟随用户 LIVE 偏好。
+    public func retranscribeFromDisk(engineKind: AsrEngineKind? = nil) {
+        postMeetingTask = Task { [weak self] in
+            await self?.performRetranscribe(engineKind: engineKind)
+        }
+    }
+
+    private func performRetranscribe(engineKind: AsrEngineKind?) async {
         let thermal = ProcessInfo.processInfo.thermalState
         if ThermalGate.shouldDefer(thermalState: thermal) {
             statusMessage = ThermalGate.warningText(thermalState: thermal) ?? "设备温度高，重转已延后"
@@ -418,14 +437,19 @@ public final class MeetingSession: ObservableObject {
             statusMessage = "没有可重转的本地录音"
             return
         }
-        statusMessage = "重转中…"
+        statusMessage = engineKind?.isOnDevice == true ? "端侧重转中…" : "重转中…"
         do {
             let samples = try MeetingAudioStore.loadFloatSamples(storedPath: path)
             guard !samples.isEmpty else {
                 statusMessage = "本地录音为空"
                 return
             }
-            let engine = try await AsrEngineResolver.resolve()
+            let engine: any AsrEngine
+            if let engineKind {
+                engine = try await AsrEngineResolver.resolve(kind: engineKind)
+            } else {
+                engine = try await AsrEngineResolver.resolve()
+            }
             let hints = liveContextualHints
             if !hints.isEmpty { await engine.setContextualHints(hints) }
             let result = try await engine.transcribe(
@@ -436,12 +460,16 @@ public final class MeetingSession: ObservableObject {
             await engine.release()
             let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
             meeting.segments = result.segments
+            // 重转产生新 raw，旧 polished 不再对应：清空，稍后联动重新润色
+            meeting.polishedSegmentsData = nil
+            meeting.polishedModelId = nil
             if meeting.speakers.isEmpty {
                 meeting.speakers = speakers
             }
             adoptSegmentsAsBlocks(result.segments)
             checkpointSaver?()
             statusMessage = result.segments.isEmpty ? "重转完成（无字幕）" : "重转完成"
+            schedulePolishIfNeeded()   // ①③ 联动：新 raw → 自动润色
         } catch {
             statusMessage = "重转失败：\(error.localizedDescription)"
         }
@@ -588,8 +616,10 @@ public final class MeetingSession: ObservableObject {
     private func startProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
                                  persistSummary: @escaping (MeetingSummary, String) -> Void) {
         if MinutesPipelineSmoke.canRunMinutesPipeline {
+            RecapLog.session.info("startProcessing: 闸门通过，启动 LLM 纪要管线")
             startLLMProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
         } else {
+            RecapLog.session.error("startProcessing: 闸门失败（无可用大模型密钥）→ 直接进 review，无纪要")
             statusMessage = "未配置可用的大模型密钥（设置 → 大模型）"
             finishReviewWithoutMock()
         }
@@ -609,6 +639,7 @@ public final class MeetingSession: ObservableObject {
                 let briefSummary = self.meeting.briefPromptSummary
                 let momentsSummary = self.meeting.momentsPromptSummary
                 let provider = try LLMProviderFactory.makeCurrent()
+                RecapLog.session.info("LLM 纪要: provider=\(provider.id, privacy: .public) summary=\(provider.summaryModel, privacy: .public) todo=\(provider.defaultModel, privacy: .public) 转写\(transcript.count) 字")
                 var warning: String?
                 for try await event in MinutesPipeline(provider: provider).run(
                     transcript: transcript,
@@ -661,6 +692,7 @@ public final class MeetingSession: ObservableObject {
                     }
                 }
             } catch {
+                RecapLog.session.error("纪要管线异常: \(error.localizedDescription, privacy: .public)")
                 if !didCommitSummary, !summaryText.isEmpty {
                     self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
                     self.statusMessage = "后续步骤失败：\(error.localizedDescription)"
@@ -691,6 +723,7 @@ public final class MeetingSession: ObservableObject {
             withAnimation(.recapSheet) { phase = .review }
         }
         scheduleDiarizationIfNeeded()
+        schedulePolishIfNeeded()
     }
 
     /// 有 Key 但管线失败且无任何纪要：进入 review，不注入演示数据。
@@ -700,6 +733,7 @@ public final class MeetingSession: ObservableObject {
         meeting.phase = .review
         withAnimation(.recapSheet) { phase = .review }
         scheduleDiarizationIfNeeded()
+        schedulePolishIfNeeded()
     }
 
     /// 有本地录音且尚未标注过说话人时，会后自动跑 SpeakerKit（失败不阻断 REVIEW）。
@@ -711,7 +745,62 @@ public final class MeetingSession: ObservableObject {
             return sid.hasPrefix("spk")
         }
         guard !alreadyLabeled else { return }
-        Task { await diarizeFromDisk() }
+        postMeetingTask = Task { [weak self] in await self?.diarizeFromDisk() }
+    }
+
+    /// 进 REVIEW 时自动润色逐字稿（有 DeepSeek key 且未润色过）。失败不阻断 REVIEW。
+    /// 与 diarization 并发：润色走 LLM、分离走 CoreML，互不抢占。
+    private func schedulePolishIfNeeded() {
+        guard !meeting.segments.isEmpty,
+              meeting.polishedSegmentsData == nil,
+              !(KeychainStore.get(LLMPresets.deepSeekKeychainAccount) ?? "").isEmpty
+        else { return }
+        polishTranscript()
+    }
+
+    /// 切后台 / 离开 REVIEW 时取消在跑的会后 CoreML 任务（iOS 27 #738：后台 ANE 可能被系统拒）。
+    public func cancelPostMeetingCompute() {
+        postMeetingTask?.cancel()
+        postMeetingTask = nil
+        polishTask?.cancel()
+        polishTask = nil
+    }
+
+    /// REVIEW：触发逐字稿 LLM 润色（补标点 / 纠错别字 / 最小书面化），保段写回 polished。
+    /// 不依赖端侧 ASR，任意设备 + 已配 LLM 密钥即可；raw 原文始终保留。
+    public func polishTranscript() {
+        polishTask = Task { [weak self] in await self?.performPolish() }
+    }
+
+    private func performPolish() async {
+        let thermal = ProcessInfo.processInfo.thermalState
+        if ThermalGate.shouldDefer(thermalState: thermal) {
+            statusMessage = ThermalGate.warningText(thermalState: thermal) ?? "设备温度高，逐字稿优化已延后"
+            return
+        }
+        let source = meeting.segments
+        guard !source.isEmpty else {
+            statusMessage = "没有可优化的逐字稿"
+            return
+        }
+        statusMessage = "逐字稿优化中…"
+        do {
+            let provider = try await Task.detached(priority: .userInitiated) {
+                try LLMProviderFactory.makeDefaultDeepSeek()
+            }.value
+            let polisher = TranscriptPolisher { system, user in
+                provider.streamText(system: system, user: user,
+                                     model: LLMPresets.deepSeekFlash, temperature: 0.1)
+            }
+            let polished = try await polisher.polish(source)
+            meeting.polishedSegmentsData = try? JSONEncoder().encode(polished)
+            meeting.polishedModelId = LLMPresets.deepSeekFlash
+            adoptSegmentsAsBlocks(source)   // 重新构造 blocks，这次 polished 有值 → 双行
+            checkpointSaver?()
+            statusMessage = "逐字稿已优化"
+        } catch {
+            statusMessage = "优化失败：\(error.localizedDescription)（请在设置配置 LLM 密钥）"
+        }
     }
 
     /// 仅 DEBUG / 显式验收入口可调用；生产自动路径禁止注入演示纪要。

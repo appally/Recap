@@ -84,13 +84,20 @@ public struct SpeakerBlockView: View {
                 LiveDots()
                     .accessibilityHidden(true)
             } else if showsSpeakerIdentity {
-                Circle()
-                    .fill(Color.speaker(block.speaker.colorIndex))
-                    .frame(width: 6, height: 6)
-                Text(block.speaker.name)
-                    .font(.system(size: 12, weight: .medium, design: .default))
-                    .tracking(0.15)
-                    .foregroundStyle(Color.recapTea)
+                HStack(spacing: 4) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.speaker(block.speaker.colorIndex).opacity(0.22))
+                            .frame(width: 15, height: 15)
+                        Text(String(block.speaker.name.prefix(1)))
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Color.speaker(block.speaker.colorIndex))
+                    }
+                    Text(block.speaker.name)
+                        .font(.system(size: 12, weight: .semibold, design: .default))
+                        .tracking(0.15)
+                        .foregroundStyle(Color.recapTea)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -102,18 +109,22 @@ public struct SpeakerBlockView: View {
     private var timestampLabel: some View {
         if let onSeek {
             Button(action: onSeek) {
-                Text(block.timestamp)
-                    .font(.recapTimestamp)
-                    .tracking(0.2)
-                    .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea.opacity(0.9))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        (isListening ? Color.recapCeladon : Color.recapTea).opacity(0.10),
-                        in: Capsule()
-                    )
+                HStack(spacing: 3) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 8, weight: .bold))
+                    Text(block.timestamp)
+                        .font(.recapTimestamp)
+                        .tracking(0.2)
+                }
+                .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea.opacity(0.9))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(
+                    (isListening ? Color.recapCeladon : Color.recapTea).opacity(0.10),
+                    in: Capsule()
+                )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(RecapPressStyle())
             .accessibilityLabel("从 \(block.timestamp) 回听")
         } else {
             Text(block.timestamp)
@@ -167,26 +178,86 @@ public struct TldrCard: View {
     public let text: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var grown = false
+    @State private var copied = false
+
     public init(text: String) { self.text = text }
 
     public var body: some View {
         HStack(alignment: .top, spacing: Spacing.md) {
             RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                 .fill(Color.recapCinnabar)
-                .frame(width: 3)
+                .frame(width: 3.5)
                 // 朱砂竖条自上而下生长（《完成到纪要过渡》幕④）；Reduce Motion 直接满高。
                 .scaleEffect(y: grown ? 1 : 0, anchor: .top)
-            Text(text)
-                .font(.recapTldr)
-                .foregroundStyle(Color.recapInk)
-                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                HStack(alignment: .center) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(Color.recapCinnabar)
+                        Text("AI 核心摘要")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.recapCinnabar)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3.5)
+                    .background(Color.recapCinnabar.opacity(0.10), in: Capsule())
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        UIPasteboard.general.string = text
+                        Haptics.notify(.success)
+                        withAnimation(.recapNotice) { copied = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                            withAnimation(.recapNotice) { copied = false }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(copied ? "已复制" : "复制")
+                                .font(.system(size: 11, weight: .semibold, design: .default))
+                        }
+                        .foregroundStyle(copied ? Color.recapCeladon : Color.recapTea)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3.5)
+                        .background(
+                            copied ? Color.recapCeladon.opacity(0.12) : Color.recapTea.opacity(0.08),
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(RecapPressStyle())
+                }
+
+                Text(text)
+                    .font(.recapTldr)
+                    .foregroundStyle(Color.recapInk)
+                    .lineSpacing(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
         }
         .padding(Spacing.lg)
         .background {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .fill(Color.recapPaper)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.recapCinnabar.opacity(0.04),
+                            Color.recapPaper
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
                 .shadow(color: .recapShadow, radius: 12, x: 0, y: 4)
         }
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Color.recapCinnabar.opacity(0.10), lineWidth: 0.8)
+        )
         .onAppear {
             guard !grown else { return }
             if reduceMotion {
@@ -431,12 +502,17 @@ public struct ActionItemCard: View {
 
     @ViewBuilder
     private var sourcePill: some View {
-        let pill = Text("↗ \(item.sourceTime)")
-            .font(.recapTimestamp)
-            .foregroundStyle(Color.recapCinnabar)
-            .padding(.horizontal, Spacing.sm)
-            .padding(.vertical, 3)
-            .background(Color.recapCinnabar.opacity(0.10), in: Capsule())
+        let pill = HStack(spacing: 3) {
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 10, weight: .bold))
+            Text("↗ \(item.sourceTime)")
+                .font(.recapTimestamp)
+        }
+        .foregroundStyle(Color.recapCinnabar)
+        .padding(.horizontal, Spacing.sm)
+        .padding(.vertical, 3.5)
+        .background(Color.recapCinnabar.opacity(0.10), in: Capsule())
+
         if let start = item.startSeconds, let onJump = onJumpToSource {
             Button { onJump(start) } label: { pill }
                 .buttonStyle(RecapPressStyle())
@@ -502,7 +578,7 @@ public struct AgentPresenceBar: View {
     }
 }
 
-// MARK: - LIVE 启动台静默标记（未开麦：呼吸环 + 静息波形，绝不像「正在听」）
+// MARK: - LIVE 启动台静默标记（极简悬浮波形：无背景盘、无外圈线）
 
 public struct LiveReadyMark: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -512,33 +588,107 @@ public struct LiveReadyMark: View {
 
     public var body: some View {
         ZStack {
-            Circle()
-                .strokeBorder(Color.recapCeladon.opacity(0.16), lineWidth: 1)
-                .frame(width: 96, height: 96)
-                .scaleEffect(reduceMotion ? 1 : (breathe ? 1.05 : 0.97))
-                .opacity(reduceMotion ? 0.65 : (breathe ? 0.45 : 0.85))
-
-            Circle()
-                .fill(Color.recapCeladon.opacity(0.10))
-                .frame(width: 64, height: 64)
-
-            // 静息波形：固定高低，与 LiveDots 主动画明确区分
-            HStack(alignment: .center, spacing: 3) {
-                ForEach(Array([9, 18, 13, 8].enumerated()), id: \.offset) { _, h in
+            // 纯净静音波形：无背景色盘、无外圈圆线，极简高级悬浮
+            HStack(alignment: .center, spacing: 4) {
+                ForEach(Array([12, 26, 38, 22, 14].enumerated()), id: \.offset) { _, h in
                     Capsule(style: .continuous)
-                        .fill(Color.recapCeladon.opacity(0.55))
-                        .frame(width: 2.5, height: CGFloat(h))
+                        .fill(Color.recapInk.opacity(0.40))
+                        .frame(width: 3.5, height: CGFloat(h))
                 }
             }
+            .scaleEffect(reduceMotion ? 1 : (breathe ? 1.06 : 0.94))
+            .opacity(reduceMotion ? 0.75 : (breathe ? 0.85 : 0.55))
         }
-        .frame(width: 96, height: 96)
+        .frame(width: 64, height: 64)
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
                 breathe = true
             }
         }
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - 手绘感弧形箭头 (Hand-drawn Curved Arrow)
+
+public struct HandDrawnArrow: Shape {
+    public init() {}
+
+    public func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let start = CGPoint(x: rect.minX + 2, y: rect.maxY - 2)
+        let end = CGPoint(x: rect.maxX - 4, y: rect.minY + 4)
+        let control = CGPoint(x: rect.minX + rect.width * 0.75, y: rect.maxY * 0.85)
+
+        path.move(to: start)
+        path.addQuadCurve(to: end, control: control)
+
+        let angle = atan2(end.y - control.y, end.x - control.x)
+        let headLength: CGFloat = 8.5
+        let arrowAngle: CGFloat = .pi / 5.5
+
+        let leftWing = CGPoint(
+            x: end.x - headLength * cos(angle - arrowAngle),
+            y: end.y - headLength * sin(angle - arrowAngle)
+        )
+        let rightWing = CGPoint(
+            x: end.x - headLength * cos(angle + arrowAngle),
+            y: end.y - headLength * sin(angle + arrowAngle)
+        )
+
+        path.move(to: end)
+        path.addLine(to: leftWing)
+        path.move(to: end)
+        path.addLine(to: rightWing)
+
+        return path
+    }
+}
+
+/// 启动台手绘指引：包含手绘感弧形箭头 + 资料说明
+public struct HandDrawnMaterialsGuideView: View {
+    public let hasMaterials: Bool
+    public let action: () -> Void
+
+    public init(hasMaterials: Bool = false, action: @escaping () -> Void) {
+        self.hasMaterials = hasMaterials
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(hasMaterials ? "已加入会议资料" : "可先添加会议资料")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.recapCinnabar.opacity(0.90))
+
+                    Text("议程 · 底稿 · 背景文档")
+                        .font(.system(size: 11, weight: .regular, design: .default))
+                        .foregroundStyle(Color.recapTea.opacity(0.80))
+                }
+
+                HandDrawnArrow()
+                    .stroke(
+                        Color.recapCinnabar.opacity(0.85),
+                        style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
+                    )
+                    .frame(width: 24, height: 20)
+                    .padding(.top, 2)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.recapCinnabar.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(Color.recapCinnabar.opacity(0.14), lineWidth: 0.8)
+                    )
+            )
+        }
+        .buttonStyle(RecapPressStyle())
     }
 }
 
@@ -613,19 +763,31 @@ public struct RecordingButton: View {
 
     public var body: some View {
         Button {
-            Haptics.impact(.light)
+            Haptics.impact(.medium)
             action()
         } label: {
             ZStack {
                 Circle()
-                    .fill(Color.recapCinnabar)
-                    .frame(width: 64, height: 64)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.recapCinnabar, Color(hex: 0xDB4E44)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 60, height: 60)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+
                 Image(systemName: "waveform")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(.white)
             }
-            .scaleEffect(reduceMotion || !allowsPulse ? 1 : (pulse ? 1.03 : 1.0))
-            .shadow(color: Color.recapCinnabar.opacity(0.16), radius: 10, y: 4)
+            .scaleEffect(reduceMotion || !allowsPulse ? 1 : (pulse ? 1.04 : 1.0))
+            .shadow(color: Color.recapCinnabar.opacity(0.28), radius: 14, x: 0, y: 6)
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(RecapPressStyle())
         .accessibilityLabel("新会议")

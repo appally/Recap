@@ -82,9 +82,11 @@ public enum AsrEngineFactory {
     @available(iOS 26.0, *)
     public static func make(_ kind: AsrEngineKind) -> any AsrEngine {
         switch kind {
-        case .speechAnalyzer: SpeechAnalyzerEngine()
-        case .funASR:         FunASREngine()
-        case .volcSeedASR:    VolcASREngine()
+        case .speechAnalyzer:  SpeechAnalyzerEngine()
+        case .funASR:          FunASREngine()
+        case .volcSeedASR:     VolcASREngine()
+        case .fluidSenseVoice: FluidAudioEngine(kind: .fluidSenseVoice)
+        case .fluidParaformer: FluidAudioEngine(kind: .fluidParaformer)
         }
     }
 }

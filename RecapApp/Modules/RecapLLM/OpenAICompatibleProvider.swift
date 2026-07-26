@@ -6,6 +6,7 @@ import RecapModels
 public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let defaultModel: String
+    public let summaryModel: String
     private let client: OpenAI
     private let apiKey: String
     private let host: String
@@ -14,12 +15,15 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     /// - Parameter baseURL: 完整 OpenAI 兼容基址（含路径，如
     ///   `https://dashscope.aliyuncs.com/compatible-mode/v1`）。自动拆 host + basePath；
     ///   MacPaw 与原始 HTTP 都走全路径，修子路径被吞（旧实现在此丢 qwen/glm/doubao/gemini/claude 的路径）。
+    /// - Parameter summaryModel: 纪要等高质量任务用的强模型；nil 时与 defaultModel 同款。
     public init(id: String = "deepseek",
                 apiKey: String,
                 baseURL: String = "https://api.deepseek.com",
-                defaultModel: String = LLMPresets.deepSeekFlash) {
+                defaultModel: String = LLMPresets.deepSeekFlash,
+                summaryModel: String? = nil) {
         self.id = id
         self.defaultModel = defaultModel
+        self.summaryModel = summaryModel ?? defaultModel
         self.apiKey = apiKey
         let parsed = Self.parseBaseURL(baseURL)
         self.host = parsed.host
@@ -74,6 +78,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
                     }
                     continuation.finish()
                 } catch {
+                    RecapLog.provider.error("streamText model=\(m, privacy: .public) host=\(self.host, privacy: .public) 失败: \(error.localizedDescription, privacy: .public)")
                     continuation.finish(throwing: error)
                 }
             }
@@ -159,6 +164,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             let msg = String(data: respData, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            RecapLog.provider.error("extractViaTool HTTP \(http.statusCode): \(msg, privacy: .public)")
             throw ExtractError.http(http.statusCode, msg)
         }
 

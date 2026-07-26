@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import OSLog
 
 /// BYOK 模型配置：预置 DeepSeek/Qwen/GLM/Kimi/Claude/Gemini/OpenAI/自定义。
 /// API Key 不入库，只存 Keychain account 引用（绝不进 UserDefaults/日志/源码）。
@@ -63,4 +64,16 @@ public enum ASRPresets {
     public static let volcAppKeyAccount = "asr.volc.appKey"
     public static let volcAccessKeyAccount = "asr.volc.accessKey"
     public static let volcResourceId = "volc.seedasr.sauc.duration"
+}
+
+/// 集中式 os.Logger 入口：摘要 / LLM 链路用它记录关键节点，让"静默失败"可观测。
+/// 失败原因会写进 Console（subsystem = bundle id），Xcode 调试或 Mac 的 Console.app 可查。
+public enum RecapLog {
+    public static let minutes = Logger(subsystem: RecapLog.subsystem, category: "Minutes")
+    public static let provider = Logger(subsystem: RecapLog.subsystem, category: "LLMProvider")
+    public static let session = Logger(subsystem: RecapLog.subsystem, category: "MeetingSession")
+
+    private static var subsystem: String {
+        Bundle.main.bundleIdentifier ?? "com.recap.app"
+    }
 }

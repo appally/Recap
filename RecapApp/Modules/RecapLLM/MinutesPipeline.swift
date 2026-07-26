@@ -40,6 +40,7 @@ public struct MinutesPipeline: Sendable {
                 // 避免不必要的 map-reduce（分块边界丢中段、串行多轮增延迟）。未知模型回落保守 14k。
                 let threshold = ModelContextWindows.mapReduceThresholdChars(for: LLMPresets.deepSeekPro)
                 if TranscriptChunker.needsMapReduce(trimmed, threshold: threshold) {
+                    RecapLog.minutes.info("run: 长会 map-reduce，\(trimmed.count) 字，summary=\(self.provider.summaryModel, privacy: .public)")
                     await self.runMapReduce(
                         transcript: trimmed,
                         briefSummary: briefSummary,
@@ -47,6 +48,7 @@ public struct MinutesPipeline: Sendable {
                         yield: { c.yield($0) }
                     )
                 } else {
+                    RecapLog.minutes.info("run: 短会 direct，\(trimmed.count) 字，summary=\(self.provider.summaryModel, privacy: .public) todo=\(self.provider.defaultModel, privacy: .public)")
                     await self.runDirect(
                         transcript: trimmed,
                         briefSummary: briefSummary,
@@ -76,7 +78,7 @@ public struct MinutesPipeline: Sendable {
                 let todos = try await self.provider.extractViaTool(
                     system: hasBrief ? Self.todoSystemWithBrief : Self.todoSystem,
                     user: userPayload,
-                    model: LLMPresets.deepSeekFlash,
+                    model: provider.defaultModel,
                     toolName: "extract_action_items",
                     toolDescription: "从会议转写中提取待办/行动项（null-safe：不确定的字段置 null）",
                     parameters: TodoListPayload.schema,
@@ -95,7 +97,7 @@ public struct MinutesPipeline: Sendable {
             let summaryStream = provider.streamText(
                 system: hasBrief ? Self.summarySystemWithBrief : Self.summarySystem,
                 user: userPayload,
-                model: LLMPresets.deepSeekPro,
+                model: provider.summaryModel,
                 temperature: 0.2
             )
             for try await delta in summaryStream {
@@ -108,6 +110,7 @@ public struct MinutesPipeline: Sendable {
                 yield(.summaryDelta(delta))
             }
         } catch {
+            RecapLog.minutes.error("摘要流式失败 emitted=\(emittedSummary): \(error.localizedDescription, privacy: .public)")
             if emittedSummary {
                 yield(.failed("纪要流式收尾异常：\(error.localizedDescription)"))
             } else {
@@ -171,7 +174,7 @@ public struct MinutesPipeline: Sendable {
             let stream = provider.streamText(
                 system: hasBrief ? Self.summarySystemWithBrief : Self.summarySystem,
                 user: reducedInput,
-                model: LLMPresets.deepSeekPro,
+                model: provider.summaryModel,
                 temperature: 0.2
             )
             for try await delta in stream {
@@ -202,7 +205,7 @@ public struct MinutesPipeline: Sendable {
             for try await delta in provider.streamText(
                 system: "你是会议分段摘录助手。只依据本段，不编造。输出精简中文。",
                 user: user,
-                model: LLMPresets.deepSeekFlash,
+                model: provider.defaultModel,
                 temperature: 0.1
             ) {
                 if Task.isCancelled { return text }
@@ -219,7 +222,7 @@ public struct MinutesPipeline: Sendable {
             let todos = try await provider.extractViaTool(
                 system: Self.todoSystem,
                 user: chunk,
-                model: LLMPresets.deepSeekFlash,
+                model: provider.defaultModel,
                 toolName: "extract_action_items",
                 toolDescription: "从会议转写中提取待办/行动项（null-safe）",
                 parameters: TodoListPayload.schema,

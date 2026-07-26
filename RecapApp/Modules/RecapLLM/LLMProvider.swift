@@ -7,6 +7,8 @@ import OpenAI
 public protocol LLMProvider: Sendable {
     var id: String { get }
     var defaultModel: String { get }
+    /// 高质量任务（纪要/调研）用的强模型；默认与 `defaultModel` 同款。
+    var summaryModel: String { get }
 
     /// 流式文本（支持多轮 history）。`messages` 最后一条应为当前 user（含证据块）。
     func streamText(
@@ -30,6 +32,9 @@ public protocol LLMProvider: Sendable {
 }
 
 extension LLMProvider {
+    /// 默认与 `defaultModel` 同款；`OpenAICompatibleProvider` 覆盖为厂商强模型。
+    public var summaryModel: String { defaultModel }
+
     /// 单轮便捷入口（纪要 / 技能等）；委托为仅含一条 user 的多轮 API。
     public func streamText(
         system: String,

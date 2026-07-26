@@ -481,33 +481,30 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// 启动台：静默舞台 + 一句邀请；决策（删/完成）不出现在这里。
+    /// 启动台：静默舞台 + 一句邀请 + 右上角手绘弧形箭头资料指引。
     private var liveReadyStage: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: Spacing.xxxl)
+            // 右上方手绘感弧形箭头指引，指向顶栏右侧的「资料」入口按钮
+            HStack {
+                Spacer()
+                HandDrawnMaterialsGuideView(hasMaterials: hasMaterialsContext) {
+                    Haptics.impact(.soft)
+                    briefInitialShelf = .incoming
+                    showBrief = true
+                }
+                .padding(.trailing, Spacing.lg)
+                .padding(.top, Spacing.xs)
+            }
+
+            Spacer(minLength: Spacing.xl)
 
             VStack(spacing: Spacing.xxl) {
                 LiveReadyMark()
 
-                VStack(spacing: Spacing.sm) {
-                    Text("开始后，话会落在这里")
-                        .font(.system(size: 17, weight: .medium, design: .default))
-                        .foregroundStyle(Color.recapInk.opacity(0.78))
-                        .multilineTextAlignment(.center)
-
-                    // 次路径：资料在右上；Ask 已锚定左下，此处不再抢主 CTA
-                    Button {
-                        Haptics.impact(.soft)
-                        briefInitialShelf = .incoming
-                        showBrief = true
-                    } label: {
-                        Text(hasMaterialsContext ? "已加资料" : "先加资料")
-                            .font(.system(size: 13, weight: .medium, design: .default))
-                            .foregroundStyle(Color.recapTea)
-                    }
-                    .buttonStyle(RecapPressStyle())
-                    .accessibilityHint("打开本场资料")
-                }
+                Text("开始后，话会落在这里")
+                    .font(.system(size: 17, weight: .medium, design: .default))
+                    .foregroundStyle(Color.recapInk.opacity(0.78))
+                    .multilineTextAlignment(.center)
             }
             .padding(.horizontal, Spacing.xxxl)
             .opacity(readyStageAppeared ? 1 : 0)
@@ -787,7 +784,8 @@ public struct MeetingNoteView: View {
                     } else if session.revealStep >= 1 {
                         titleMetaReadonly
                     }
-                    if !session.statusMessage.isEmpty, session.revealStep >= 1 {
+                    if !session.statusMessage.isEmpty,
+                       session.revealStep >= 1 || session.phase == .review {
                         Text(session.statusMessage)
                             .font(.recapMeta)
                             .foregroundStyle(Color.recapOchre)
@@ -871,68 +869,102 @@ public struct MeetingNoteView: View {
     }
 
     private var titleMetaLine: some View {
-        HStack(spacing: Spacing.sm) {
-            Text("\(meeting.dateText) · \(meeting.durationText)")
-                .font(.recapMeta)
-                .foregroundStyle(Color.recapTea)
-            if let location = meeting.locationDisplay {
-                Text("·")
-                    .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
-                Image(systemName: "location")
-                    .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea)
-                Text(location)
-                    .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea)
-                    .lineLimit(1)
-                    .layoutPriority(-1)
-            }
-            if meeting.summaryVersionCount > 1,
-               let v = meeting.latestSummaryOutput?.version {
-                Button {
-                    showMinutesVersions = true
-                } label: {
-                    Text("v\(v)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.recapCeladon)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.recapCeladon.opacity(0.12), in: Capsule())
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Spacing.xs + 2) {
+                HStack(spacing: 4) {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 11, weight: .medium))
+                    Text(meeting.dateText)
+                        .font(.system(size: 12, weight: .medium))
                 }
-                .buttonStyle(RecapPressStyle())
-                .accessibilityLabel("纪要版本历史")
+                .foregroundStyle(Color.recapTea)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Color.recapPaper, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.recapInk.opacity(0.06), lineWidth: 0.8))
+
+                HStack(spacing: 4) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 11, weight: .medium))
+                    Text(meeting.durationText)
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .foregroundStyle(Color.recapTea)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Color.recapPaper, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.recapInk.opacity(0.06), lineWidth: 0.8))
+
+                if let location = meeting.locationDisplay {
+                    HStack(spacing: 4) {
+                        Image(systemName: "mappin.and.ellipse")
+                            .font(.system(size: 11, weight: .medium))
+                        Text(location)
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(Color.recapTea)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.recapPaper, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.recapInk.opacity(0.06), lineWidth: 0.8))
+                }
+
+                if meeting.summaryVersionCount > 1,
+                   let v = meeting.latestSummaryOutput?.version {
+                    Button {
+                        showMinutesVersions = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("v\(v) 历史")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        .foregroundStyle(Color.recapCeladon)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color.recapCeladon.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(RecapPressStyle())
+                    .accessibilityLabel("纪要版本历史")
+                }
             }
         }
     }
 
     private var segmented: some View {
         HStack(spacing: 2) {
-            segButton("摘要", 0)
-            segButton("逐字稿", 1)
+            segButton("摘要", "sparkles", 0)
+            segButton("逐字稿", "quote.bubble.fill", 1)
         }
         .padding(3)
         .background(Color.recapPaper, in: Capsule())
+        .recapCardShadow()
     }
 
-    private func segButton(_ t: String, _ idx: Int) -> some View {
+    private func segButton(_ t: String, _ iconName: String, _ idx: Int) -> some View {
         Button {
             Haptics.selection()
             withAnimation(.recapSoft) { summaryTab = idx }
         } label: {
-            Text(t)
-                .font(.recapMeta.weight(.medium))
-                .foregroundStyle(summaryTab == idx ? Color.recapInk : Color.recapTea)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background {
-                    if summaryTab == idx {
-                        // 选中胶囊在两 Tab 间滑动（matchedGeometry），而非交叉淡入。
-                        Color.recapBg
-                            .matchedGeometryEffect(id: "segIndicator", in: segNamespace)
-                            .clipShape(Capsule())
-                    }
+            HStack(spacing: 5) {
+                Image(systemName: iconName)
+                    .font(.system(size: 12, weight: summaryTab == idx ? .bold : .medium))
+                Text(t)
+                    .font(.system(size: 14, weight: summaryTab == idx ? .semibold : .medium, design: .default))
+            }
+            .foregroundStyle(summaryTab == idx ? Color.recapInk : Color.recapTea)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background {
+                if summaryTab == idx {
+                    Color.recapBg
+                        .matchedGeometryEffect(id: "segIndicator", in: segNamespace)
+                        .clipShape(Capsule())
+                        .shadow(color: Color.black.opacity(0.04), radius: 4, x: 0, y: 2)
                 }
+            }
         }
         .buttonStyle(.plain)
     }
@@ -988,7 +1020,7 @@ public struct MeetingNoteView: View {
 
     private var topicsSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("☰", "议题纪要", color: Color.recapCeladon, count: session.summary.topics.count)
+            sectionTitle("list.bullet.indent", "议题纪要", color: Color.recapCeladon, count: session.summary.topics.count)
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 ForEach(Array(session.summary.topics.enumerated()), id: \.offset) { _, topic in
                     VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -1006,7 +1038,7 @@ public struct MeetingNoteView: View {
 
     private func agendaSection(_ brief: MeetingBrief) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("☰", "对照议程", color: Color.recapCeladon, count: brief.agenda.count)
+            sectionTitle("calendar.badge.clock", "对照议程", color: Color.recapCeladon, count: brief.agenda.count)
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 ForEach(brief.agenda.sorted(by: { $0.order < $1.order })) { item in
                     HStack(alignment: .top, spacing: Spacing.sm) {
@@ -1034,7 +1066,7 @@ public struct MeetingNoteView: View {
         let open = brief.openItems.filter { $0.resolution == "open" }.count
         let closed = brief.openItems.filter { $0.resolution == "closed" }.count
         return VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("↻", "上场遗留", color: Color.recapOchre, count: brief.openItems.count)
+            sectionTitle("arrow.triangle.2.circlepath", "上场遗留", color: Color.recapOchre, count: brief.openItems.count)
             Text("开放 \(open) · 已闭环 \(closed)")
                 .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
@@ -1109,7 +1141,7 @@ public struct MeetingNoteView: View {
 
     private var decisionSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("◆", "关键决议", color: Color.recapCeladon)
+            sectionTitle("checkmark.seal.fill", "关键决议", color: Color.recapCeladon)
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 ForEach(session.summary.decisions, id: \.self) { d in
                     bulletRow(d, color: Color.recapCeladon, ink: Color.recapInk)
@@ -1120,7 +1152,7 @@ public struct MeetingNoteView: View {
 
     private var todoSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("☐", "待办事项", color: Color.recapInk, count: sortedItems.count)
+            sectionTitle("checklist", "待办事项", color: Color.recapInk, count: sortedItems.count)
             ForEach(Array(sortedItems.enumerated()), id: \.element.id) { index, item in
                 ActionItemCard(
                     item: item,
@@ -1158,7 +1190,7 @@ public struct MeetingNoteView: View {
 
     private var researchDraftSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("◇", "资料", color: Color.recapCeladon, count: kitDerivedCount)
+            sectionTitle("folder.fill", "资料", color: Color.recapCeladon, count: kitDerivedCount)
             Button {
                 briefInitialShelf = .derived
                 showBrief = true
@@ -1350,7 +1382,7 @@ public struct MeetingNoteView: View {
 
     private var openQuestionSection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionTitle("◐", "未决问题", color: Color.recapOchre)
+            sectionTitle("questionmark.circle.fill", "未决问题", color: Color.recapOchre)
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 ForEach(session.summary.openQuestions, id: \.self) { q in
                     bulletRow(q, color: Color.recapOchre, ink: Color.recapTea)
@@ -1366,11 +1398,27 @@ public struct MeetingNoteView: View {
         }
     }
 
-    private func sectionTitle(_ symbol: String, _ text: String, color: Color, count: Int? = nil) -> some View {
+    private func sectionTitle(_ iconName: String, _ text: String, color: Color, count: Int? = nil) -> some View {
         HStack(spacing: Spacing.sm) {
-            Text(symbol).foregroundStyle(color)
-            Text(text).font(.recapSection).foregroundStyle(color)
-            if let c = count { Text("\(c)").font(.recapMeta).foregroundStyle(Color.recapTea) }
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(color.opacity(0.12))
+                    .frame(width: 24, height: 24)
+                Image(systemName: iconName)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(color)
+            }
+            Text(text)
+                .font(.system(size: 15, weight: .bold, design: .default))
+                .foregroundStyle(Color.recapInk)
+            if let c = count {
+                Text("\(c)")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(color.opacity(0.10), in: Capsule())
+            }
             Spacer()
         }
     }
@@ -1462,12 +1510,12 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// LIVE 统一底栏：左 Ask（智能体锚点）· 中主控 · 右完成（仅暂停后）。
-    /// 阶段切换只改中央/右侧，Ask 位置不变 → 强化「会议智能体」稳定认知。
+    /// LIVE 统一底栏：左 辅助功能（记录此刻/完成）· 中 主控 · 右 问 Recap（AI 锚点）。
+    /// 无论 LIVE（录音中/暂停）还是 REVIEW（会后），Ask Recap 均统一固定在右下角，符合单手人体工学与一致的 UI/UX 心理模型。
     private var liveStageBottom: some View {
         GlassEffectContainer(spacing: Spacing.md) {
             HStack(alignment: .center, spacing: 0) {
-                askLiveBottomButton
+                liveLeftSlot
                     .frame(width: liveBottomSideSlot, height: liveBottomSideSlot)
 
                 Spacer(minLength: Spacing.md)
@@ -1476,7 +1524,7 @@ public struct MeetingNoteView: View {
 
                 Spacer(minLength: Spacing.md)
 
-                liveRightSlot
+                askLiveBottomButton
                     .frame(width: liveBottomSideSlot, height: liveBottomSideSlot)
             }
         }
@@ -1493,7 +1541,7 @@ public struct MeetingNoteView: View {
         showAgent = true
     }
 
-    /// 左下：问 Recap —— LIVE 全程固定槽位（含启动台）。
+    /// 右下：问 Recap —— 全站统一固定槽位（含启动台）。
     private var askLiveBottomButton: some View {
         Button { askRecap() } label: {
             RecapAskEntryLabel()
@@ -1542,7 +1590,7 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// 开始 / 继续：同一视觉语言的居中主 CTA。
+    /// 开始 / 继续：全站最高可点击性与质感的居中主 CTA。
     private func livePrimaryStartContinue(
         title: String,
         accessibilityLabel: String,
@@ -1555,27 +1603,40 @@ public struct MeetingNoteView: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: RecapSymbol.play)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 15, weight: .bold))
                     .offset(x: 0.5)
                 Text(title)
-                    .font(.system(size: 16, weight: .semibold, design: .default))
-                    .tracking(1.0)
+                    .font(.system(size: 16, weight: .bold, design: .default))
+                    .tracking(1.2)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 30)
+            .padding(.horizontal, 32)
             .padding(.vertical, 18)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color.recapCinnabar,
+                        Color(hex: 0xDB4E44)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: Capsule()
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
+            )
             .contentShape(Capsule())
         }
         .buttonStyle(RecapPressStyle())
-        // 朱砂染色玻璃：与同底栏的暂停钮/完成钮同属 Liquid Glass 族，
-        // 仅以朱砂 tint（录音语义色）+ 胶囊形状承担「主操作」权重，
-        // 不再是独一份的实心色块，避免打断 GlassEffectContainer 的融合。
-        .glassEffect(.regular.tint(Color.recapCinnabar.opacity(0.60)), in: .capsule)
+        .shadow(color: Color.recapCinnabar.opacity(0.35), radius: 14, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(accessibilityHint)
     }
 
-    @ViewBuilder private var liveRightSlot: some View {
+    @ViewBuilder private var liveLeftSlot: some View {
         if session.isLivePaused && session.hasStartedRecording {
             Button {
                 showEndLiveConfirm = true
@@ -1591,19 +1652,14 @@ public struct MeetingNoteView: View {
             .glassEffect(.regular.tint(Color.recapCeladon.opacity(0.22)), in: .circle)
             .accessibilityLabel("完成并整理纪要")
             .transition(.opacity)
-        } else if session.isRecordingLive {
-            // 录音中：记录此刻（拍照锚定到当前秒，不打断录音）
+        } else {
+            // 录音中/未开始：记录此刻（拍照锚定到当前秒）
             cameraLiveBottomButton
                 .transition(.opacity)
-        } else {
-            // 与左侧 Ask 等宽占位，保证中央光学居中
-            Color.clear
-                .frame(width: 52, height: 52)
-                .accessibilityHidden(true)
         }
     }
 
-    /// 右下：记录此刻 —— 录音中固定入口（暂停态让位给「完成」）。
+    /// 左下：记录此刻 —— 辅助功能固定入口（暂停态让位给「完成」）。
     private var cameraLiveBottomButton: some View {
         Button {
             Haptics.impact(.soft)
@@ -1623,7 +1679,7 @@ public struct MeetingNoteView: View {
         .accessibilityHint("拍下白板或此刻，锚定到录音当前秒，不打断录音")
     }
 
-    /// 会后底栏：右下浮钮，与 LIVE 左下同源同形（参考 Readio 首页右下角 AI 入口）。
+    /// 会后底栏：右下浮钮（全站统一右下角 AI 入口）。
     private var reviewBottom: some View {
         HStack {
             Spacer(minLength: 0)
@@ -1641,6 +1697,33 @@ public struct MeetingNoteView: View {
     /// 低频破坏动作：删除进「更多」，也可在首页列表左滑/长按删除。
     private var meetingMoreMenu: some View {
         Menu {
+            // 逐字稿 LLM 润色（补标点 / 纠错别字 / 最小书面化），保段双行展示；不依赖端侧 ASR
+            if session.phase == .review, !session.blocks.isEmpty {
+                Button {
+                    session.polishTranscript()
+                } label: {
+                    Label("优化逐字稿（补标点·纠错）", systemImage: "wand.and.stars")
+                }
+            }
+            // 端侧高保真重转（仅 REVIEW + feature flag 开 + 有本地录音时显示）
+            if session.phase == .review,
+               ASRFeatureFlags.fluidRetranscribeEnabled,
+               meeting.audioPath != nil {
+                Menu {
+                    Button {
+                        session.retranscribeFromDisk(engineKind: .fluidSenseVoice)
+                    } label: {
+                        Label("SenseVoice · 中英混排", systemImage: "waveform")
+                    }
+                    Button {
+                        session.retranscribeFromDisk(engineKind: .fluidParaformer)
+                    } label: {
+                        Label("Paraformer · 纯中文最准", systemImage: "waveform")
+                    }
+                } label: {
+                    Label("端侧高保真重转", systemImage: "iphone.radiowaves.left.and.right")
+                }
+            }
             Button(role: .destructive) {
                 showDeleteLiveConfirm = true
             } label: {

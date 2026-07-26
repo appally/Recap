@@ -17,6 +17,8 @@ public final class RecordingSession: ObservableObject {
     private var engine: (any AsrEngine)?
     private var audioTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
+    /// LIVE VAD 门控（CPU 能量门限）；flag 关时为 nil → 恒喂 ASR（回归原行为）。
+    private var vad: EnergyVAD?
 
     public init() {}
 
@@ -86,12 +88,15 @@ public final class RecordingSession: ObservableObject {
             }
 
             let audioStream = try await recorder.start(targetSampleRate: sampleRate, fileURL: audioFileURL)
+            vad = ASRFeatureFlags.vadGateEnabled ? EnergyVAD() : nil
             isRunning = true
             statusText = "录音中"
 
             audioTask = Task { [weak self] in
                 for await chunk in audioStream {
                     guard let self, !Task.isCancelled else { break }
+                    // VAD 门控：静音帧不喂 ASR（落盘 PCM / elapsed 时间轴不受影响，仅省 ASR 算力 + 去幻听）
+                    if !self.vadShouldFeed(chunk) { continue }
                     do {
                         try await self.engine?.feed(chunk)
                     } catch {
@@ -140,6 +145,11 @@ public final class RecordingSession: ObservableObject {
         isRunning = false
         statusText = "已停止"
         return result
+    }
+
+    /// VAD 门控判定：flag 关 / `vad` 为 nil → 恒喂（回归原行为）；否则走能量+过零率状态机。
+    private func vadShouldFeed(_ chunk: [Float]) -> Bool {
+        vad?.shouldFeed(chunk) ?? true
     }
 
     private static func withTimeout<T: Sendable>(

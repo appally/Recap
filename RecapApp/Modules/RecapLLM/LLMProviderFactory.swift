@@ -55,12 +55,14 @@ public enum LLMProviderFactory {
         guard let key = KeychainStore.get(template.keychainAccount), !key.isEmpty else {
             throw FactoryError.missingAPIKey(account: template.keychainAccount)
         }
-        let model = LLMSelection.selectedModel ?? template.defaultModel
+        // 用户显式选过模型则全任务统一用它；否则按厂商分档（摘要 summaryModel / 待办 defaultModel）。
+        let userPicked = LLMSelection.selectedModel
         return OpenAICompatibleProvider(
             id: template.rawValue,
             apiKey: key,
             baseURL: template.baseURL,
-            defaultModel: model
+            defaultModel: userPicked ?? template.defaultModel,
+            summaryModel: userPicked ?? template.summaryModel
         )
     }
 

@@ -267,6 +267,23 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
+    /// 纪要/调研等高质量任务的强模型；待办/分段用 `defaultModel`。
+    /// 非 DeepSeek 厂商默认与 `defaultModel` 同款（保证模型名合法、不打到别家 endpoint）；
+    /// 若需更强质量，改成该厂商现页最新强档 ID（如 qwen-max / glm-4-plus / gemini-3.6-pro）。
+    public var summaryModel: String {
+        switch self {
+        case .deepseek: return LLMPresets.deepSeekPro
+        case .qwen: return "qwen-plus"
+        case .glm: return "glm-4-flash"
+        case .kimi: return "moonshot-v1-128k"
+        case .doubao: return "doubao-pro-32k"
+        case .openai: return "gpt-5.6-luna"
+        case .claude: return "claude-sonnet-5"
+        case .gemini: return "gemini-3.6-flash"
+        case .custom: return "gpt-4o-mini"
+        }
+    }
+
     public var keychainAccount: String {
         "llm.\(rawValue).apikey"
     }

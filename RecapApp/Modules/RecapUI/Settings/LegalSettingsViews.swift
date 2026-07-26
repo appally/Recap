@@ -174,7 +174,8 @@ struct AboutRecapView: View {
             VStack(spacing: Spacing.xxl) {
                 VStack(spacing: Spacing.md) {
                     Text("Recap")
-                        .font(.system(size: 36, weight: .bold, design: .serif))
+                        .font(.system(size: 36, weight: .bold, design: .default))
+                        .tracking(-0.8)
                         .foregroundStyle(Color.recapInk)
                     Text("把会议变成可行动的纪要")
                         .font(.system(size: 15))

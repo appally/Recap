@@ -33,6 +33,7 @@ struct MembershipSettingsView: View {
         .navigationTitle("会员")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            Haptics.prepare()
             await membership.start()
             preferYearlyIfNeeded()
         }
@@ -51,7 +52,8 @@ struct MembershipSettingsView: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Recap Pro")
-                    .font(.system(size: 28, weight: .bold, design: .serif))
+                    .font(.system(size: 28, weight: .bold, design: .default))
+                    .tracking(-0.5)
                     .foregroundStyle(Color.recapInk)
                 Spacer(minLength: Spacing.sm)
                 SettingsStatusPill(text: "已开通", kind: .ready)
@@ -100,7 +102,7 @@ struct MembershipSettingsView: View {
     private var offerHero: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("Recap Pro")
-                .font(.system(size: 32, weight: .bold, design: .serif))
+                .font(.system(size: 32, weight: .bold, design: .default))
                 .tracking(-0.6)
                 .foregroundStyle(Color.recapInk)
 
@@ -182,6 +184,7 @@ struct MembershipSettingsView: View {
                 .foregroundStyle(Color.recapTea)
 
             Button {
+                Haptics.impact(.medium)
                 Task { await membership.loadProducts() }
             } label: {
                 Text("重新加载")
@@ -267,6 +270,7 @@ struct MembershipSettingsView: View {
 
         return Button {
             guard let product else { return }
+            Haptics.impact(.medium)
             Task { await membership.purchase(product) }
         } label: {
             Text(label)

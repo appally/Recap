@@ -15,6 +15,8 @@ struct RecapAppApp: App {
         } catch {
             fatalError("无法初始化 ModelContainer: \(error)")
         }
+        // 端侧 FluidAudio 模型下载走国内镜像（HuggingFace 直连不稳）
+        FluidAudioBootstrap.configureModelEndpoint()
         // 后台预拉 SpeechAnalyzer 中文资源，避免首次点录音卡在下载上
         if #available(iOS 26.0, *) {
             SpeechAnalyzerEngine.prefetchAssetsInBackground()

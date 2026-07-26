@@ -181,6 +181,7 @@ public struct MeetingListView: View {
                 }
             }
             .onAppear {
+                Haptics.prepare()
                 consumeDeepLinkIfNeeded()
                 guard !appeared else { return }
                 if reduceMotion {
@@ -204,22 +205,12 @@ public struct MeetingListView: View {
             Color.recapBg
             RadialGradient(
                 colors: [
-                    Color.recapCeladon.opacity(0.14),
-                    Color.recapCeladon.opacity(0.03),
+                    Color.recapCinnabar.opacity(0.025),
                     Color.clear,
                 ],
-                center: UnitPoint(x: 0.92, y: 0.02),
-                startRadius: 8,
-                endRadius: 380
-            )
-            RadialGradient(
-                colors: [
-                    Color.recapInk.opacity(0.04),
-                    Color.clear,
-                ],
-                center: UnitPoint(x: 0.15, y: 1.05),
+                center: UnitPoint(x: 0.88, y: 0.05),
                 startRadius: 20,
-                endRadius: 300
+                endRadius: 380
             )
         }
         .ignoresSafeArea()
@@ -236,7 +227,7 @@ public struct MeetingListView: View {
 
             if !meetings.isEmpty {
                 Text(statsLine)
-                    .font(.system(size: 14, weight: .medium, design: .default))
+                    .font(.system(size: 13, weight: .medium, design: .default))
                     .foregroundStyle(Color.recapTea)
             }
         }
@@ -494,39 +485,63 @@ public struct MeetingListView: View {
 
 // MARK: - Unfinished resume tile
 
-/// 未结束会议卡：与归档卡同一外壳，左侧朱砂条 + 极淡朱砂染底抬一层。
+/// 未结束会议卡：去除粗重红线与沉重染底，采用轻量呼吸胶囊标与精致白瓷浅框外壳。
 private struct LiveMeetingCard: View {
     let meeting: Meeting
 
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.md) {
-            VStack(alignment: .leading, spacing: 8) {
+        HStack(alignment: .center, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    // 软状态胶囊标（替换沉重的 4pt 粗红条与全卡红色染色）
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.recapCinnabar)
+                            .frame(width: 5, height: 5)
+                            .modifier(BreathingModifier())
+                        Text("未结束")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.recapCinnabar)
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2.5)
+                    .background(Color.recapCinnabar.opacity(0.08), in: Capsule())
+
+                    if meeting.durationSeconds > 0 {
+                        Text(meeting.durationText)
+                            .font(.recapMeta)
+                            .monospacedDigit()
+                            .foregroundStyle(Color.recapTea)
+                    }
+
+                    if meeting.attendeeCount > 0 {
+                        Text("· \(meeting.attendeeCount) 人")
+                            .font(.recapMeta)
+                            .foregroundStyle(Color.recapTea)
+                    }
+                }
+
                 Text(meeting.title)
                     .font(.system(size: 17, weight: .semibold, design: .default))
                     .tracking(-0.2)
                     .foregroundStyle(Color.recapInk)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let meta = metaText {
-                    meta
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                    .lineLimit(1)
             }
 
-            // 接上 ›
+            Spacer(minLength: 0)
+
+            // 极简微胶囊「接上 ›」
             HStack(spacing: 3) {
                 Text("接上")
                     .font(.system(size: 13, weight: .semibold, design: .default))
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.top, 1)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 11, weight: .bold))
             }
-            .foregroundStyle(Color.recapCeladon)
+            .foregroundStyle(Color.recapCinnabar)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.recapCinnabar.opacity(0.08), in: Capsule())
             .accessibilityHidden(true)
-            .padding(.top, 2)
         }
         .padding(.horizontal, Spacing.lg)
         .padding(.vertical, Spacing.lg)
@@ -535,29 +550,13 @@ private struct LiveMeetingCard: View {
         .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
-    /// 卡片外壳：纸白 + 朱砂淡染 + 左侧 4pt 朱砂条（随圆角裁切）+ 细描边 + 全站投影。
+    /// 卡片外壳：纯净瓷白 + 微弱朱砂强调边框 + 全站轻量投影。
     private var cardBackground: some View {
         let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
         return shape
             .fill(Color.recapPaper)
-            .overlay(shape.fill(Color.recapCinnabar.opacity(0.04)))
-            .overlay(alignment: .leading) {
-                Color.recapCinnabar.frame(width: 4)
-            }
-            .clipShape(shape)
-            .overlay(shape.stroke(Color.recapTea.opacity(0.08), lineWidth: 1))
+            .overlay(shape.stroke(Color.recapCinnabar.opacity(0.18), lineWidth: 0.8))
             .recapCardShadow()
-    }
-
-    /// 单行 meta：已暂停（赭）· 时长 · 人数。
-    private var metaText: Text? {
-        var parts: [Text?] = []
-        parts.append(Text("已暂停").foregroundColor(.recapOchre).font(.system(size: 13, weight: .semibold)))
-        parts.append(Text(meeting.durationText).foregroundColor(.recapTea).font(.recapMeta).monospacedDigit())
-        if meeting.attendeeCount > 0 {
-            parts.append(Text("\(meeting.attendeeCount) 人").foregroundColor(.recapTea).font(.recapMeta))
-        }
-        return joinedMeta(parts)
     }
 }
 
@@ -760,6 +759,9 @@ private struct SwipeableMeetingRow<Content: View>: View {
         }
 
         snap(open: shouldOpen)
+        if shouldOpen != isOpen {
+            Haptics.selection()
+        }
         if shouldOpen {
             onOpen()
         } else {

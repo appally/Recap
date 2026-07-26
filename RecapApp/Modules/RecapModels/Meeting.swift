@@ -26,6 +26,11 @@ public final class Meeting {
     /// 会议地点快照（开录时自动定位 + 反地理编码）；可空，无定位时行为与旧版一致。
     public var locationData: Data?
 
+    /// LLM 润色后的转写分段（保段对应：与 segments 同 id/时间戳，仅 text 被润色）；nil = 未润色。
+    public var polishedSegmentsData: Data?
+    /// 润色所用模型 id（如 deepSeekFlash）；nil = 未润色。
+    public var polishedModelId: String?
+
     @Relationship(deleteRule: .cascade, inverse: \TranscriptVersion.meeting)
     public var transcriptVersions: [TranscriptVersion] = []
 
@@ -121,6 +126,12 @@ public final class Meeting {
                 segmentsCache = newValue
             }
         }
+    }
+
+    /// LLM 润色后的转写分段（与 `segments` 一一对应，同 id/时间戳，text 已润色）；未润色返回空。
+    public var polishedSegments: [TranscriptSegment] {
+        guard let data = polishedSegmentsData else { return [] }
+        return (try? JSONDecoder().decode([TranscriptSegment].self, from: data)) ?? []
     }
 
     public var speakers: [Speaker] {

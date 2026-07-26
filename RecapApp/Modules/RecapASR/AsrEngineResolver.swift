@@ -115,6 +115,12 @@ public enum AsrEngineResolver {
         }
     }
 
+    /// 显式按引擎种类解析（用于「会后重转写」指派 FluidAudio，不走 .auto 偏好链）。
+    @available(iOS 26.0, *)
+    public static func resolve(kind: AsrEngineKind) async throws -> any AsrEngine {
+        try await prepare(kind)
+    }
+
     @available(iOS 26.0, *)
     private static func prepare(_ kind: AsrEngineKind) async throws -> any AsrEngine {
         let engine = AsrEngineFactory.make(kind)

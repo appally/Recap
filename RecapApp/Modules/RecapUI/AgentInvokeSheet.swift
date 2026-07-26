@@ -202,10 +202,8 @@ public struct AgentInvokeSheet: View {
         GlassEffectContainer(spacing: Spacing.sm) {
             HStack(spacing: Spacing.sm) {
                 HStack(spacing: Spacing.sm) {
-                    Image(systemName: RecapSymbol.ask)
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(Color.recapCeladon)
-                        .symbolRenderingMode(.monochrome)
+                    RecapAIAvatarImage(size: 20)
+                        .clipShape(Circle())
                     Text("问 Recap")
                         .font(.system(size: 17, weight: .semibold, design: .default))
                         .foregroundStyle(Color.recapInk)
@@ -604,10 +602,8 @@ public struct AgentInvokeSheet: View {
             }
 
             HStack(alignment: .center, spacing: Spacing.sm) {
-                Image(systemName: RecapSymbol.ask)
-                    .font(.system(size: 14, weight: .medium))
-                    .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(Color.recapCeladon)
+                RecapAIAvatarImage(size: 18)
+                    .clipShape(Circle())
 
                 TextField(
                     phase == .live ? "问任何关于此刻的问题" : "问任何关于本会议的问题",

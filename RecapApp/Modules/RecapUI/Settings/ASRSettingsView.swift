@@ -13,6 +13,9 @@ struct ASRSettingsView: View {
     @State private var hasVolc = AsrEngineResolver.hasVolcCredentials
     @State private var status = ""
     @State private var isPreparingSpeakerModel = false
+    @State private var fluidRetranscribe = ASRFeatureFlags.fluidRetranscribeEnabled
+    @State private var vadGate = ASRFeatureFlags.vadGateEnabled
+    @State private var isPreparingFluidModel = false
 
     var body: some View {
         ScrollView {
@@ -22,6 +25,7 @@ struct ASRSettingsView: View {
                     cloudBillingHint
                 }
                 speakerModelSection
+                fluidModelSection
                 if needsFunCredentials {
                     funSection
                 }
@@ -186,6 +190,97 @@ struct ASRSettingsView: View {
             }
             .buttonStyle(SettingsPressStyle())
             .disabled(isPreparingSpeakerModel)
+        }
+    }
+
+    // MARK: - On-device high-fidelity FluidAudio (experimental)
+
+    private var fluidModelSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("端侧高保真（实验）")
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(1.4)
+                .foregroundStyle(Color.recapTea)
+
+            VStack(spacing: Spacing.sm) {
+                Toggle(isOn: $fluidRetranscribe) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("会后端侧高保真重转")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.recapInk)
+                        Text("用 SenseVoice / Paraformer 从录音重转，中文更准、带标点。在纪要「更多」菜单触发。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.recapTea.opacity(0.9))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .onChange(of: fluidRetranscribe) { _, newValue in
+                    ASRFeatureFlags.fluidRetranscribeEnabled = newValue
+                }
+
+                Toggle(isOn: $vadGate) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("LIVE 静音门控")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.recapInk)
+                        Text("静音段不喂转写，减少幻听废话。纯 CPU，不影响落盘录音。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.recapTea.opacity(0.9))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .onChange(of: vadGate) { _, newValue in
+                    ASRFeatureFlags.vadGateEnabled = newValue
+                }
+            }
+
+            Button {
+                guard !isPreparingFluidModel else { return }
+                isPreparingFluidModel = true
+                status = "正在下载/加载端侧模型（SenseVoice ~225MB）…"
+                Task {
+                    defer { isPreparingFluidModel = false }
+                    do {
+                        let engine = FluidAudioEngine(kind: .fluidSenseVoice)
+                        try await engine.prepare()
+                        await engine.release()
+                        status = "端侧模型已就绪"
+                    } catch {
+                        status = "模型准备失败：\(error.localizedDescription)"
+                    }
+                }
+            } label: {
+                HStack(spacing: Spacing.md) {
+                    Image(systemName: isPreparingFluidModel
+                          ? "arrow.down.circle"
+                          : "waveform.badge.checkmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.recapCeladon)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(isPreparingFluidModel ? "下载中…" : "预下载端侧 ASR 模型")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Color.recapInk)
+                        Text("FluidAudio / SenseVoice；首次需联网（已走国内镜像）。仅真机可完成 ANE 加载。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.recapTea.opacity(0.9))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(Spacing.lg)
+                .background(
+                    Color.recapPaper,
+                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
+                )
+            }
+            .buttonStyle(SettingsPressStyle())
+            .disabled(isPreparingFluidModel)
         }
     }
 

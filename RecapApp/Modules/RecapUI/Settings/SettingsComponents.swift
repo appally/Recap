@@ -9,21 +9,11 @@ struct SettingsAmbientBackground: View {
             Color.recapBg
             RadialGradient(
                 colors: [
-                    Color.recapCeladon.opacity(0.12),
-                    Color.recapBg.opacity(0),
+                    Color.recapCinnabar.opacity(0.025),
+                    Color.clear,
                 ],
                 center: .topLeading,
                 startRadius: 10,
-                endRadius: 280
-            )
-            // 收尾色取同一色相的零透明度：渐变到 .clear（透明黑）会在中段压出灰死区。
-            RadialGradient(
-                colors: [
-                    Color.recapOchre.opacity(0.07),
-                    Color.recapOchre.opacity(0),
-                ],
-                center: .bottomTrailing,
-                startRadius: 20,
                 endRadius: 320
             )
         }
@@ -188,7 +178,7 @@ struct SettingsAvatar: View {
                         )
                     )
                 Text(account.initials)
-                    .font(.system(size: size * 0.40, weight: .bold, design: .serif))
+                    .font(.system(size: size * 0.40, weight: .bold, design: .default))
                     .foregroundStyle(.white)
             } else {
                 Circle()
@@ -392,6 +382,8 @@ struct SettingsSecureFieldBlock: View {
     var onSave: () -> Void
     var onClear: (() -> Void)?
 
+    @State private var showSecret = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
@@ -405,19 +397,42 @@ struct SettingsSecureFieldBlock: View {
                 )
             }
 
-            SecureField(placeholder, text: $text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 15, design: .monospaced))
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 12)
-                .background(
-                    Color.recapBg,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
+            HStack(spacing: Spacing.sm) {
+                if showSecret {
+                    TextField(placeholder, text: $text)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(size: 14, design: .monospaced))
+                } else {
+                    SecureField(placeholder, text: $text)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(size: 14, design: .monospaced))
+                }
+
+                Button {
+                    showSecret.toggle()
+                } label: {
+                    Image(systemName: showSecret ? "eye.slash" : "eye")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.recapTea)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, Spacing.md)
+            .padding(.vertical, 10)
+            .background(
+                Color.recapBg,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
 
             HStack(spacing: Spacing.md) {
-                Button(action: onSave) {
+                Button(action: {
+                    Haptics.impact(.medium)
+                    onSave()
+                }) {
                     Text("保存")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white)
@@ -430,9 +445,14 @@ struct SettingsSecureFieldBlock: View {
                 .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
 
                 if configured, let onClear {
-                    Button("清除", role: .destructive, action: onClear)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.recapCinnabar)
+                    Button(role: .destructive) {
+                        Haptics.impact(.medium)
+                        onClear()
+                    } label: {
+                        Text("清除")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Color.recapCinnabar)
+                    }
                 }
 
                 Spacer()
