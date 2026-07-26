@@ -1,0 +1,510 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		13A17A91F4A956710FF8AA93 /* RecapASRBenchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2741EA79E329402463D97E1 /* RecapASRBenchApp.swift */; };
+		1E021273D79CA68F21FBB901 /* AsrEngineProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF16A95E498D86C8815220D3 /* AsrEngineProtocol.swift */; };
+		271EFF0AEF982C2A75F7958A /* Pods_RecapASRBench.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 017A9B26E21E63F78E0C97EF /* Pods_RecapASRBench.framework */; };
+		6516DF9873D3D9F410A148E8 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 083110484506FBC305BF6FFB /* RootView.swift */; };
+		6F488FA283D980ED421336C2 /* BenchMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365A5442F4D39B100DD4853F /* BenchMonitor.swift */; };
+		7CAD4DFAFDF8859F913B6EB9 /* BenchRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6D39B2B412AA4ACD212C87 /* BenchRecord.swift */; };
+		9C7881E90CB79427880172B9 /* AsrEngineKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A0C377E39994BF6E5DD2BA /* AsrEngineKind.swift */; };
+		ADAA75D187D15D03AC21D3CB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 917DC08D34248F3A7CB00581 /* ContentView.swift */; };
+		AF78E766FE95F01B829B1250 /* AudioFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D31A07B89DC3655943577049 /* AudioFileReader.swift */; };
+		B20DE2F081B9170D97C79CA1 /* FluidAudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7772FE32A1CB2D3FA9A26102 /* FluidAudioEngine.swift */; };
+		C133EDF5CF1E4298C8D27FCA /* VolcSpeechEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAAC248C2CE5EEB06DA487D /* VolcSpeechEngine.swift */; };
+		C633CBA07DB7803A159B50C2 /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A301B9BEE990330B8E5557B /* AudioRecorder.swift */; };
+		CA7DC252DE50BBF20E6029A1 /* VolcASREngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2912FA9F1FC6B891B7DC69A /* VolcASREngine.swift */; };
+		F1F6C79C2A7270628E01005C /* CERScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAEDDF7B5C2D4E5EEC7044F9 /* CERScorer.swift */; };
+		F842C3CC329055AEA70DC765 /* LiveTranscribeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE761232B40EAF4D72DA915 /* LiveTranscribeView.swift */; };
+		F9C5689257A70F59A9EE3448 /* BenchRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 521E8C6F1F096D0C579072C7 /* BenchRunner.swift */; };
+		FB9BE8788FB33B3E95A3AD4D /* SpeechAnalyzerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08097AB58AE7D0CE73E0DD05 /* SpeechAnalyzerEngine.swift */; };
+		FEC26B91E0BD8F7578C57CA1 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C597AFEC25E41044F28D5708 /* FluidAudio */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		017A9B26E21E63F78E0C97EF /* Pods_RecapASRBench.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_RecapASRBench.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		08097AB58AE7D0CE73E0DD05 /* SpeechAnalyzerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechAnalyzerEngine.swift; sourceTree = "<group>"; };
+		083110484506FBC305BF6FFB /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		17A0C377E39994BF6E5DD2BA /* AsrEngineKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsrEngineKind.swift; sourceTree = "<group>"; };
+		365A5442F4D39B100DD4853F /* BenchMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchMonitor.swift; sourceTree = "<group>"; };
+		3A301B9BEE990330B8E5557B /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
+		3A6D39B2B412AA4ACD212C87 /* BenchRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchRecord.swift; sourceTree = "<group>"; };
+		4419D775C7FAE99D4BAECB35 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		521E8C6F1F096D0C579072C7 /* BenchRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchRunner.swift; sourceTree = "<group>"; };
+		7772FE32A1CB2D3FA9A26102 /* FluidAudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluidAudioEngine.swift; sourceTree = "<group>"; };
+		917DC08D34248F3A7CB00581 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A2741EA79E329402463D97E1 /* RecapASRBenchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapASRBenchApp.swift; sourceTree = "<group>"; };
+		A2912FA9F1FC6B891B7DC69A /* VolcASREngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolcASREngine.swift; sourceTree = "<group>"; };
+		AAAAC248C2CE5EEB06DA487D /* VolcSpeechEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolcSpeechEngine.swift; sourceTree = "<group>"; };
+		CB7A5C90DFA5EB056231503B /* Pods-RecapASRBench.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RecapASRBench.debug.xcconfig"; path = "Target Support Files/Pods-RecapASRBench/Pods-RecapASRBench.debug.xcconfig"; sourceTree = "<group>"; };
+		CF16A95E498D86C8815220D3 /* AsrEngineProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsrEngineProtocol.swift; sourceTree = "<group>"; };
+		D31A07B89DC3655943577049 /* AudioFileReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFileReader.swift; sourceTree = "<group>"; };
+		DAEDDF7B5C2D4E5EEC7044F9 /* CERScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CERScorer.swift; sourceTree = "<group>"; };
+		DBAE8176F9EAD9F5ECF9F12C /* RecapASRBench.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = RecapASRBench.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DDE761232B40EAF4D72DA915 /* LiveTranscribeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranscribeView.swift; sourceTree = "<group>"; };
+		E328EDE819F28E67B8DFD788 /* Pods-RecapASRBench.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RecapASRBench.release.xcconfig"; path = "Target Support Files/Pods-RecapASRBench/Pods-RecapASRBench.release.xcconfig"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		02963C5F884E4A2FA68B1B23 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FEC26B91E0BD8F7578C57CA1 /* FluidAudio in Frameworks */,
+				271EFF0AEF982C2A75F7958A /* Pods_RecapASRBench.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		171C2330E90E762162FA02EB /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				DBAE8176F9EAD9F5ECF9F12C /* RecapASRBench.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		513328F5AD4B5CB57B431801 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				17A0C377E39994BF6E5DD2BA /* AsrEngineKind.swift */,
+				3A6D39B2B412AA4ACD212C87 /* BenchRecord.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		5CFA27985C7C5CEBACB89837 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				CB7A5C90DFA5EB056231503B /* Pods-RecapASRBench.debug.xcconfig */,
+				E328EDE819F28E67B8DFD788 /* Pods-RecapASRBench.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
+		6362C27C89E63C3CF599E879 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				917DC08D34248F3A7CB00581 /* ContentView.swift */,
+				DDE761232B40EAF4D72DA915 /* LiveTranscribeView.swift */,
+				083110484506FBC305BF6FFB /* RootView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		77AAAF47A5E75D42D1DC01BA /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				017A9B26E21E63F78E0C97EF /* Pods_RecapASRBench.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		793F2EDE2CD0E818322BEAD7 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				D31A07B89DC3655943577049 /* AudioFileReader.swift */,
+				3A301B9BEE990330B8E5557B /* AudioRecorder.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
+		8DBC51F76A684CF05EE1264E /* Engines */ = {
+			isa = PBXGroup;
+			children = (
+				CF16A95E498D86C8815220D3 /* AsrEngineProtocol.swift */,
+				7772FE32A1CB2D3FA9A26102 /* FluidAudioEngine.swift */,
+				08097AB58AE7D0CE73E0DD05 /* SpeechAnalyzerEngine.swift */,
+				A2912FA9F1FC6B891B7DC69A /* VolcASREngine.swift */,
+				AAAAC248C2CE5EEB06DA487D /* VolcSpeechEngine.swift */,
+			);
+			path = Engines;
+			sourceTree = "<group>";
+		};
+		945C7713DAC59C74AC651EF4 /* RecapASRBench */ = {
+			isa = PBXGroup;
+			children = (
+				4419D775C7FAE99D4BAECB35 /* Info.plist */,
+				A2741EA79E329402463D97E1 /* RecapASRBenchApp.swift */,
+				793F2EDE2CD0E818322BEAD7 /* Audio */,
+				DA9700423FB04F2F65F59C9D /* Benchmark */,
+				8DBC51F76A684CF05EE1264E /* Engines */,
+				513328F5AD4B5CB57B431801 /* Models */,
+				DA92533FD20F677C4D7DA94B /* Monitoring */,
+				6362C27C89E63C3CF599E879 /* Views */,
+			);
+			path = RecapASRBench;
+			sourceTree = "<group>";
+		};
+		A892171162AC0D68665748B8 = {
+			isa = PBXGroup;
+			children = (
+				945C7713DAC59C74AC651EF4 /* RecapASRBench */,
+				171C2330E90E762162FA02EB /* Products */,
+				5CFA27985C7C5CEBACB89837 /* Pods */,
+				77AAAF47A5E75D42D1DC01BA /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		DA92533FD20F677C4D7DA94B /* Monitoring */ = {
+			isa = PBXGroup;
+			children = (
+				365A5442F4D39B100DD4853F /* BenchMonitor.swift */,
+			);
+			path = Monitoring;
+			sourceTree = "<group>";
+		};
+		DA9700423FB04F2F65F59C9D /* Benchmark */ = {
+			isa = PBXGroup;
+			children = (
+				521E8C6F1F096D0C579072C7 /* BenchRunner.swift */,
+				DAEDDF7B5C2D4E5EEC7044F9 /* CERScorer.swift */,
+			);
+			path = Benchmark;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		F5E6089260F88A5654D1C609 /* RecapASRBench */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D7828FE27E56C20A51BAE9F1 /* Build configuration list for PBXNativeTarget "RecapASRBench" */;
+			buildPhases = (
+				1E5EB81414052A3089C66598 /* [CP] Check Pods Manifest.lock */,
+				F1133CCF6DFB5D80AEB10D40 /* Sources */,
+				02963C5F884E4A2FA68B1B23 /* Frameworks */,
+				BB14B1CC45B8DDBE0A03234B /* [CP] Embed Pods Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RecapASRBench;
+			packageProductDependencies = (
+				C597AFEC25E41044F28D5708 /* FluidAudio */,
+			);
+			productName = RecapASRBench;
+			productReference = DBAE8176F9EAD9F5ECF9F12C /* RecapASRBench.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E76C8E122775B59A608FD818 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					F5E6089260F88A5654D1C609 = {
+						DevelopmentTeam = WTG6UTV87R;
+					};
+				};
+			};
+			buildConfigurationList = FBCA8AD6D9EF1B87B5B6D243 /* Build configuration list for PBXProject "RecapASRBench" */;
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = A892171162AC0D68665748B8;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				512B83C52479748A18C91551 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 171C2330E90E762162FA02EB /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				F5E6089260F88A5654D1C609 /* RecapASRBench */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		1E5EB81414052A3089C66598 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-RecapASRBench-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		BB14B1CC45B8DDBE0A03234B /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-RecapASRBench/Pods-RecapASRBench-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-RecapASRBench/Pods-RecapASRBench-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-RecapASRBench/Pods-RecapASRBench-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		F1133CCF6DFB5D80AEB10D40 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9C7881E90CB79427880172B9 /* AsrEngineKind.swift in Sources */,
+				1E021273D79CA68F21FBB901 /* AsrEngineProtocol.swift in Sources */,
+				AF78E766FE95F01B829B1250 /* AudioFileReader.swift in Sources */,
+				C633CBA07DB7803A159B50C2 /* AudioRecorder.swift in Sources */,
+				6F488FA283D980ED421336C2 /* BenchMonitor.swift in Sources */,
+				7CAD4DFAFDF8859F913B6EB9 /* BenchRecord.swift in Sources */,
+				F9C5689257A70F59A9EE3448 /* BenchRunner.swift in Sources */,
+				F1F6C79C2A7270628E01005C /* CERScorer.swift in Sources */,
+				ADAA75D187D15D03AC21D3CB /* ContentView.swift in Sources */,
+				B20DE2F081B9170D97C79CA1 /* FluidAudioEngine.swift in Sources */,
+				F842C3CC329055AEA70DC765 /* LiveTranscribeView.swift in Sources */,
+				13A17A91F4A956710FF8AA93 /* RecapASRBenchApp.swift in Sources */,
+				6516DF9873D3D9F410A148E8 /* RootView.swift in Sources */,
+				FB9BE8788FB33B3E95A3AD4D /* SpeechAnalyzerEngine.swift in Sources */,
+				CA7DC252DE50BBF20E6029A1 /* VolcASREngine.swift in Sources */,
+				C133EDF5CF1E4298C8D27FCA /* VolcSpeechEngine.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		24758C51E4DDE6EDE9BFAFAE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		5C0F4747A3F6E99A1C3310DE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		CFE18284BFD886F66FE70EAF /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = E328EDE819F28E67B8DFD788 /* Pods-RecapASRBench.release.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WTG6UTV87R;
+				INFOPLIST_FILE = RecapASRBench/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.recap.bench;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		FEF1C93B883352CBEAA96821 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = CB7A5C90DFA5EB056231503B /* Pods-RecapASRBench.debug.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WTG6UTV87R;
+				INFOPLIST_FILE = RecapASRBench/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.recap.bench;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		D7828FE27E56C20A51BAE9F1 /* Build configuration list for PBXNativeTarget "RecapASRBench" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FEF1C93B883352CBEAA96821 /* Debug */,
+				CFE18284BFD886F66FE70EAF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		FBCA8AD6D9EF1B87B5B6D243 /* Build configuration list for PBXProject "RecapASRBench" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5C0F4747A3F6E99A1C3310DE /* Debug */,
+				24758C51E4DDE6EDE9BFAFAE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		512B83C52479748A18C91551 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.15.5;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C597AFEC25E41044F28D5708 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 512B83C52479748A18C91551 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = E76C8E122775B59A608FD818 /* Project object */;
+}

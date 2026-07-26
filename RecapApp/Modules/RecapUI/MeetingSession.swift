@@ -1,0 +1,849 @@
+import Foundation
+import SwiftUI
+import UIKit
+import RecapModels
+import RecapASR
+import RecapLLM
+
+/// 热节流门（§4.3）：serious/critical 时延后会后重计算（说话人分离/重转是最重的 CoreML 负载），
+/// 保护长会议后设备。LIVE 录音/转写不中断（录音不可丢）；仅延后可重做的会后步骤。
+public enum ThermalGate {
+    public static func shouldDefer(thermalState: ProcessInfo.ThermalState) -> Bool {
+        thermalState == .serious || thermalState == .critical
+    }
+    public static var shouldDeferHeavyCompute: Bool {
+        shouldDefer(thermalState: ProcessInfo.processInfo.thermalState)
+    }
+    public static func warningText(thermalState: ProcessInfo.ThermalState) -> String? {
+        switch thermalState {
+        case .serious: return "设备温度较高，已延后该操作，请在降温后重试"
+        case .critical: return "设备温度过高，已延后该操作，请在降温后重试"
+        default: return nil
+        }
+    }
+}
+
+/// 会话状态机（LIVE → PROCESS → REVIEW）。
+/// LIVE：优先 RecordingSession（真麦 + ASR）；失败进入可恢复错误态（禁止静默演示）。
+@MainActor
+public final class MeetingSession: ObservableObject {
+    @Published public var phase: MeetingPhase
+    @Published public var blocks: [TranscriptBlock] = []
+    @Published public var elapsed: Int = 0
+    @Published public var revealStep: Int = 0
+    @Published public var todoCount: Int = 0
+    @Published public var summary: MeetingSummary
+    @Published public var statusMessage: String = ""
+    @Published public var isUsingMockAudio = false
+    /// LIVE 引擎启动失败；供 UI 显示重试 / DEBUG 演示入口。
+    @Published public var liveStartFailed = false
+    /// LIVE 已暂停（停麦、停表，仍为 phase=.live；可继续 / 完成 / 删除）。
+    @Published public var isLivePaused = false
+    /// 会后 SpeakerKit 说话人分离进行中。
+    @Published public var isDiarizing = false
+
+    public let meeting: Meeting
+
+    private var recording: RecordingSession?
+    private var streamTask: Task<Void, Never>?
+    private var clockTask: Task<Void, Never>?
+    private var revealTask: Task<Void, Never>?
+    private var endingLive = false
+    private var liveSpeaker = Speaker(id: "asr-live", name: "转写", colorIndex: 0)
+    /// LIVE 字幕合并（index / 续录偏移 / partial·segment）；UI `blocks` 由其投影。
+    private var merger = LiveTranscriptMerger()
+    private var lastCheckpointAt: Date?
+    /// 由 View 注入：checkpoint 写完后 `modelContext.save()`。
+    public var checkpointSaver: (() -> Void)?
+
+    /// 真麦是否在跑（用于底栏错误态）。
+    public var isRecordingLive: Bool { recording?.isRunning == true }
+
+    /// 是否已开过麦（有时长/字幕）；用于区分启动台与暂停决策台。
+    public var hasStartedRecording: Bool {
+        meeting.durationSeconds >= 1
+            || !meeting.segments.isEmpty
+            || !blocks.isEmpty
+            || elapsed > 0
+    }
+
+    public init(meeting: Meeting) {
+        self.meeting = meeting
+        self.phase = meeting.phase
+        if let existing = meeting.latestSummary {
+            self.summary = existing
+        } else {
+            self.summary = MeetingSummary(tldr: "", decisions: [], openQuestions: [])
+        }
+    }
+
+    public func onAppear() {
+        switch meeting.phase {
+        case .live:
+            loadBlocksIfNeeded()
+            restoreElapsedIfNeeded()
+            if recording?.isRunning == true {
+                isLivePaused = false
+                return
+            }
+            // 进会不自动开麦：未开录 = 启动台（无状态字）；收起后再进 = 已暂停。均等用户点开始。
+            enterPausedState(status: hasStartedRecording ? "已暂停" : "")
+        case .review:
+            loadBlocksIfNeeded()
+            if summary.tldr.isEmpty {
+                summary = meeting.latestSummary
+                    ?? MeetingSummary(tldr: blocks.isEmpty ? "暂无纪要" : "", decisions: [], openQuestions: [])
+            }
+            // 纠正常见脏数据：曾把整篇 Markdown 误写入 tldr
+            summary = MinutesMarkdownParser.sanitizedSummary(summary)
+            revealStep = 5
+            todoCount = meeting.actionItems.count
+        case .processing:
+            // 具体恢复由 resumeOrRecoverProcessing 完成（需要持久化回调）
+            loadBlocksIfNeeded()
+            todoCount = meeting.actionItems.count
+        }
+    }
+
+    /// REVIEW 态按当前底稿重跑纪要/待办（转写不变）。
+    public func regenerateWithBrief(
+        clearDraftTodos: @escaping () -> Void,
+        persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+        persistSummary: @escaping (MeetingSummary, String) -> Void
+    ) {
+        loadBlocksIfNeeded()
+        guard !blocks.isEmpty else {
+            statusMessage = "无转写，无法重生成"
+            return
+        }
+        revealTask?.cancel()
+        clearDraftTodos()
+        summary = MeetingSummary(tldr: "", decisions: [], openQuestions: [])
+        todoCount = 0
+        revealStep = 0
+        statusMessage = meeting.briefPromptSummary == nil ? "按转写重生成…" : "按底稿重生成…"
+        meeting.phase = .processing
+        withAnimation(.recapSheet) { phase = .processing }
+        startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+    }
+
+    /// 重新打开卡在 processing 的会议：有纪要则收尾进 review，否则继续跑管线。
+    public func resumeOrRecoverProcessing(
+        persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+        persistSummary: @escaping (MeetingSummary, String) -> Void
+    ) {
+        guard meeting.phase == .processing || phase == .processing else { return }
+        loadBlocksIfNeeded()
+        todoCount = meeting.actionItems.count
+        phase = .processing
+
+        if let existing = meeting.latestSummary {
+            let clean = MinutesMarkdownParser.sanitizedSummary(existing)
+            if !clean.tldr.isEmpty || !clean.decisions.isEmpty || !clean.topics.isEmpty {
+                summary = clean
+                revealStep = 5
+                statusMessage = ""
+                meeting.phase = .review
+                withAnimation(.recapSheet) { phase = .review }
+                return
+            }
+        }
+
+        // 已有进行中的揭示任务则不重复启动
+        if let revealTask, !revealTask.isCancelled { return }
+
+        if blocks.isEmpty {
+            statusMessage = "无转写内容"
+            finishReviewWithoutMock()
+            return
+        }
+
+        startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+    }
+
+    private func loadBlocksIfNeeded() {
+        guard blocks.isEmpty else { return }
+        guard !meeting.segments.isEmpty else { return }
+        merger.loadCheckpoint(segments: meeting.segments)
+        let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
+        blocks = meeting.segments.map {
+            TranscriptBlock(segment: $0, speakers: speakers, isFinal: true)
+        }
+    }
+
+    /// 将 merger.rows 投影到 `blocks`，尽量保留已有行的说话人。
+    private func publishMergerRows() {
+        let previous = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, $0) })
+        blocks = merger.rows.map { row in
+            let speaker = previous[row.id]?.speaker ?? liveSpeaker
+            let total = Int(row.startSeconds.rounded())
+            return TranscriptBlock(
+                id: row.id,
+                speaker: speaker,
+                timestamp: String(format: "%d:%02d", total / 60, total % 60),
+                raw: row.text,
+                polished: row.text,
+                isFinal: row.isFinal,
+                startSeconds: row.startSeconds,
+                endSeconds: row.endSeconds
+            )
+        }
+    }
+
+    private func adoptSegmentsAsBlocks(_ segments: [TranscriptSegment]) {
+        merger.loadCheckpoint(segments: segments)
+        let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
+        blocks = segments.map {
+            TranscriptBlock(segment: $0, speakers: speakers, isFinal: true)
+        }
+    }
+
+    // MARK: LIVE
+
+    /// 收起续录：从已落盘时长 / 末段时间戳恢复计时，避免顶栏从 0:00 重来。
+    private func restoreElapsedIfNeeded() {
+        let fromDuration = Int(meeting.durationSeconds.rounded())
+        let fromSegments = meeting.segments.map { Int($0.endSeconds.rounded()) }.max() ?? 0
+        let fromBlocks = blocks.compactMap { block -> Int? in
+            if let end = block.endSeconds { return Int(end.rounded()) }
+            return nil
+        }.max() ?? 0
+        let restored = max(fromDuration, fromSegments, fromBlocks, elapsed)
+        if restored > elapsed {
+            elapsed = restored
+        }
+    }
+
+    private func enterPausedState(status: String = "已暂停") {
+        isLivePaused = true
+        liveStartFailed = false
+        statusMessage = status
+        setIdleTimerDisabled(false)
+    }
+
+    /// 会中暂停：停麦停表，留在 LIVE，展示继续 / 完成 / 删除。
+    public func pauseLive() {
+        guard phase == .live || meeting.phase == .live else { return }
+        persistLiveCheckpoint()
+        checkpointSaver?()
+        streamTask?.cancel()
+        clockTask?.cancel()
+        revealTask?.cancel()
+        endingLive = false
+        setIdleTimerDisabled(false)
+        if let recording, recording.isRunning {
+            Task { _ = try? await recording.stop() }
+        }
+        recording = nil
+        enterPausedState(status: "已暂停")
+    }
+
+    /// 从暂停态恢复收音。
+    public func resumeLive() {
+        guard phase == .live || meeting.phase == .live else { return }
+        isLivePaused = false
+        liveStartFailed = false
+        startLive()
+    }
+
+    private func startLive() {
+        restoreElapsedIfNeeded()
+        // 已有字幕再开麦：引擎时间轴从 0 起，必须抬高 absolute offset
+        if !merger.rows.isEmpty {
+            merger.prepareForResume()
+        }
+        isLivePaused = false
+        startClock()
+        statusMessage = "正在准备…"
+        streamTask?.cancel()
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            // 先让首帧/转场画完，再跑引擎准备，避免进页卡死几秒
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            await self.startRecordingOrMock()
+        }
+    }
+
+    /// 端侧 ASR 热词：底稿实体（人名/公司/术语）+ 已知说话人名。注入 SpeechAnalyzer。
+    private var liveContextualHints: [String] {
+        var hints = meeting.brief?.entityHints ?? []
+        for s in meeting.speakers where !s.name.isEmpty && !hints.contains(s.name) {
+            hints.append(s.name)
+        }
+        return Array(hints.prefix(50))
+    }
+
+    private func startRecordingOrMock() async {
+        liveStartFailed = false
+        let session = RecordingSession()
+        session.onPartial = { [weak self] text in
+            self?.applyPartial(text)
+        }
+        session.onSegment = { [weak self] seg in
+            self?.applySegment(seg)
+        }
+        session.onError = { [weak self] msg in
+            guard let self else { return }
+            if msg.isEmpty {
+                // 中断恢复：清空提示，但不盖住启动失败文案
+                if !self.liveStartFailed { self.statusMessage = "" }
+                return
+            }
+            self.statusMessage = msg
+        }
+        recording = session
+
+        do {
+            // 开录即准备本地音频路径（可重转基石）；mock 不写盘
+            let audioURL = try MeetingAudioStore.audioURL(meetingId: meeting.id)
+            meeting.audioPath = MeetingAudioStore.relativeAudioPath(meetingId: meeting.id)
+            checkpointSaver?()
+
+            // 开录即后台记录会议地点（提示性、不阻录音；本场已有地点则跳过）
+            LocationCaptureService.shared.captureIfAbsent(for: meeting) { [weak self] in
+                self?.checkpointSaver?()
+            }
+
+            try await session.start(audioFileURL: audioURL, contextualHints: liveContextualHints)
+            // 暂停后若用户未 resume，丢弃迟到的 start 成功回调
+            guard !self.isLivePaused else {
+                _ = try? await session.stop()
+                self.recording = nil
+                return
+            }
+            isUsingMockAudio = false
+            liveStartFailed = false
+            isLivePaused = false
+            // 引擎名不进字幕行；仅在状态栏短暂可查
+            statusMessage = ""
+            setIdleTimerDisabled(true)
+        } catch {
+            recording = nil
+            isUsingMockAudio = false
+            liveStartFailed = true
+            if !isLivePaused {
+                statusMessage = "转写引擎启动失败：\(error.localizedDescription)"
+            }
+            setIdleTimerDisabled(false)
+        }
+    }
+
+    /// REVIEW：会后 SpeakerKit 说话人分离，按时间重叠写回 `speakerId`。
+    public func diarizeFromDisk(numberOfSpeakers: Int? = nil) async {
+        guard !isDiarizing else { return }
+        let thermal = ProcessInfo.processInfo.thermalState
+        if ThermalGate.shouldDefer(thermalState: thermal) {
+            statusMessage = ThermalGate.warningText(thermalState: thermal) ?? "设备温度高，说话人分离已延后"
+            return
+        }
+        guard let path = meeting.audioPath,
+              MeetingAudioStore.fileExists(storedPath: path) else {
+            statusMessage = "没有可分离的本地录音"
+            return
+        }
+        // 以当前 UI 的 blocks 为准（完整）；过期的 meeting.segments 作 fallback。
+        let fromBlocks = Self.segments(from: blocks)
+        let fromMeeting = meeting.segments
+        let source: [TranscriptSegment] = {
+            if fromBlocks.isEmpty { return fromMeeting }
+            if fromMeeting.isEmpty { return fromBlocks }
+            let blockChars = fromBlocks.map(\.text).joined().count
+            let meetingChars = fromMeeting.map(\.text).joined().count
+            return blockChars >= meetingChars ? fromBlocks : fromMeeting
+        }()
+        guard !source.isEmpty else {
+            statusMessage = "没有可标注的转写分段"
+            return
+        }
+
+        isDiarizing = true
+        statusMessage = "说话人分离中…"
+        defer { isDiarizing = false }
+
+        do {
+            let outcome = try await DiarizationService.diarizeMeeting(
+                audioPath: path,
+                segments: source,
+                numberOfSpeakers: numberOfSpeakers,
+                preserveSpeakerNames: meeting.speakers.filter { !$0.id.hasPrefix("asr-") },
+                progress: { [weak self] fraction in
+                    Task { @MainActor in
+                        guard let self, self.isDiarizing else { return }
+                        let pct = Int((fraction * 100).rounded())
+                        self.statusMessage = pct < 5
+                            ? "准备说话人模型…"
+                            : "说话人分离中… \(pct)%"
+                    }
+                }
+            )
+            let labeled = outcome.segments.filter { ($0.speakerId ?? "").hasPrefix("spk") }.count
+            meeting.segments = outcome.segments
+            meeting.speakers = outcome.speakers
+            adoptSegmentsAsBlocks(outcome.segments)
+            persistTranscriptCheckpoint()
+            checkpointSaver?()
+            if labeled == 0 {
+                statusMessage = "检出 \(outcome.speakers.count) 位说话人，但未能标注逐字稿（可重试）"
+            } else {
+                statusMessage = "已标注 \(labeled)/\(outcome.segments.count) 段 · \(outcome.speakers.count) 位说话人"
+            }
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    private static func segments(from blocks: [TranscriptBlock]) -> [TranscriptSegment] {
+        blocks.map { block in
+            let start = block.startSeconds ?? parseTimestamp(block.timestamp)
+            return TranscriptSegment(
+                startSeconds: start,
+                endSeconds: block.endSeconds ?? start,
+                speakerId: block.speaker.id,
+                text: block.raw
+            )
+        }
+    }
+
+    /// REVIEW：用本地音频重新转写并刷新 blocks / segments。
+    public func retranscribeFromDisk() async {
+        let thermal = ProcessInfo.processInfo.thermalState
+        if ThermalGate.shouldDefer(thermalState: thermal) {
+            statusMessage = ThermalGate.warningText(thermalState: thermal) ?? "设备温度高，重转已延后"
+            return
+        }
+        guard let path = meeting.audioPath,
+              MeetingAudioStore.fileExists(storedPath: path) else {
+            statusMessage = "没有可重转的本地录音"
+            return
+        }
+        statusMessage = "重转中…"
+        do {
+            let samples = try MeetingAudioStore.loadFloatSamples(storedPath: path)
+            guard !samples.isEmpty else {
+                statusMessage = "本地录音为空"
+                return
+            }
+            let engine = try await AsrEngineResolver.resolve()
+            let hints = liveContextualHints
+            if !hints.isEmpty { await engine.setContextualHints(hints) }
+            let result = try await engine.transcribe(
+                samples: samples,
+                sampleRate: MeetingAudioStore.sampleRate,
+                onPartial: nil
+            )
+            await engine.release()
+            let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
+            meeting.segments = result.segments
+            if meeting.speakers.isEmpty {
+                meeting.speakers = speakers
+            }
+            adoptSegmentsAsBlocks(result.segments)
+            checkpointSaver?()
+            statusMessage = result.segments.isEmpty ? "重转完成（无字幕）" : "重转完成"
+        } catch {
+            statusMessage = "重转失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 用户显式选择演示字幕（DEBUG / 验收）；禁止在 ASR 失败路径自动调用。
+    public func startExplicitDemoLive() {
+        guard phase == .live else { return }
+        streamTask?.cancel()
+        recording = nil
+        isUsingMockAudio = true
+        liveStartFailed = false
+        isLivePaused = false
+        statusMessage = "演示字幕（非真实录音）"
+        setIdleTimerDisabled(false)
+        startClock()
+        startMockStream()
+    }
+
+    /// LIVE 失败后重试真麦 + ASR。
+    public func retryLiveRecording() {
+        resumeLive()
+    }
+
+    private func startClock() {
+        clockTask?.cancel()
+        clockTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                self.elapsed += 1
+                if self.elapsed % 15 == 0 {
+                    self.checkpointIfNeeded(force: false)
+                }
+            }
+        }
+    }
+
+    /// 火山等累积全量 / Fun-ASR 当前句草稿。
+    private func applyPartial(_ text: String) {
+        let beforeCount = merger.rows.count
+        merger.applyPartial(text: text, elapsedSeconds: Double(elapsed))
+        if merger.rows.count > beforeCount {
+            withAnimation(.easeOut(duration: 0.18)) { publishMergerRows() }
+        } else {
+            publishMergerRows()
+        }
+    }
+
+    /// SpeechAnalyzer / Fun-ASR 按时间戳分段更新（定稿）。
+    private func applySegment(_ seg: TranscriptSegment) {
+        merger.applySegment(seg)
+        publishMergerRows()
+        // 高频 segment 节流落盘；pause / endLive 仍 force
+        checkpointIfNeeded(force: false)
+    }
+
+    private func startMockStream() {
+        streamTask?.cancel()
+        streamTask = Task { [weak self] in
+            guard let self else { return }
+            for (i, blk) in DemoContent.script.enumerated() {
+                if Task.isCancelled { return }
+                self.merger.finalizeAll()
+                let start = Double(self.elapsed)
+                self.merger.applyPartial(text: blk.raw, elapsedSeconds: start)
+                self.publishMergerRows()
+                if [4, 5].contains(i) { self.todoCount += 1 }
+                try? await Task.sleep(for: .seconds(1.8))
+                guard !self.merger.rows.isEmpty else { return }
+                self.merger.finalizeTrailingDraft()
+                withAnimation(.recapLand) { self.publishMergerRows() }
+            }
+        }
+    }
+
+    private func finalizeAll() {
+        merger.finalizeAll()
+        publishMergerRows()
+    }
+
+    public func endLive(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+                        persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        // 防重入：重复点击会 cancel 正在跑的收尾，表现为「点了没反应」
+        guard phase == .live, !endingLive else { return }
+        endingLive = true
+        isLivePaused = false
+
+        clockTask?.cancel()
+        streamTask?.cancel()
+        statusMessage = "正在收尾…"
+        setIdleTimerDisabled(false)
+
+        // 同步立刻切态，不等 stop()；否则按钮像失灵
+        meeting.phase = .processing
+        withAnimation(.recapSheet) { phase = .processing }
+
+        let recordingToStop = recording
+        recording = nil
+
+        revealTask?.cancel()
+        revealTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.endingLive = false }
+
+            if let recordingToStop {
+                do {
+                    let result = try await recordingToStop.stop()
+                    if !result.segments.isEmpty {
+                        // 收尾结果不应比 LIVE 已展示内容更短（超时/丢段时保留更完整的一侧）
+                        let stopChars = result.segments.map(\.text).joined().count
+                        let liveChars = self.blocks.map(\.raw).joined().count
+                        if self.blocks.isEmpty || stopChars >= liveChars {
+                            // stop() 分段多为引擎相对秒；已有绝对时间轴时勿整表替换砸偏 offset
+                            if self.merger.timelineOffset > 0, !self.merger.rows.isEmpty {
+                                // 保留 LIVE 绝对轴；仅在字数明显更长时仍采用 stop（少见）
+                                if stopChars > liveChars + 32 {
+                                    self.adoptSegmentsAsBlocks(result.segments)
+                                }
+                            } else {
+                                self.adoptSegmentsAsBlocks(result.segments)
+                            }
+                        }
+                    }
+                    if let err = recordingToStop.lastError, !err.isEmpty {
+                        self.statusMessage = err
+                    }
+                } catch {
+                    self.statusMessage = "转写收尾：\(error.localizedDescription)"
+                }
+            }
+            self.finalizeAll()
+
+            // endLive 已切到 processing，不能再用 live 守卫的 checkpoint
+            self.persistTranscriptCheckpoint()
+            self.checkpointSaver?()
+
+            self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+        }
+    }
+
+    // MARK: PROCESS
+
+    private func startProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+                                 persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        if MinutesPipelineSmoke.canRunMinutesPipeline {
+            startLLMProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+        } else {
+            statusMessage = "未配置可用的大模型密钥（设置 → 大模型）"
+            finishReviewWithoutMock()
+        }
+    }
+
+    private func startLLMProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+                                    persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        statusMessage = "云端整理中…"
+        // 注意：不要覆盖仍在跑的 endLive 收尾 task；用独立 task 承接管线
+        let pipelineTask = Task { [weak self] in
+            guard let self else { return }
+            var summaryText = ""
+            var didCommitSummary = false
+            do {
+                let transcript = self.blocks.map { "\($0.speaker.name)：\($0.raw)" }
+                    .joined(separator: "\n")
+                let briefSummary = self.meeting.briefPromptSummary
+                let momentsSummary = self.meeting.momentsPromptSummary
+                let provider = try LLMProviderFactory.makeCurrent()
+                var warning: String?
+                for try await event in MinutesPipeline(provider: provider).run(
+                    transcript: transcript,
+                    briefSummary: briefSummary,
+                    momentsSummary: momentsSummary
+                ) {
+                    if Task.isCancelled { return }
+                    switch event {
+                    case .summaryDelta(let d):
+                        summaryText = Self.mergeStreamText(existing: summaryText, incoming: d)
+                        let draft = MinutesMarkdownParser.parse(summaryText).summary
+                        self.summary = MeetingSummary(
+                            tldr: draft.tldr,
+                            topics: draft.topics,
+                            decisions: draft.decisions,
+                            openQuestions: []
+                        )
+                        if self.revealStep < 1, !draft.tldr.isEmpty { self.setStep(1) }
+                        if self.revealStep < 2, !draft.topics.isEmpty { self.setStep(2) }
+                        if self.revealStep < 3, !draft.decisions.isEmpty { self.setStep(3) }
+                    case .summaryReady(let full):
+                        summaryText = full
+                        self.commitAISummary(raw: full, persistSummary: persistSummary)
+                        didCommitSummary = true
+                        self.statusMessage = warning ?? ""
+                    case .todos(let items):
+                        persistTodos(items)
+                        self.todoCount = items.count
+                        if !items.isEmpty { self.setStep(4) }
+                    case .coverage(let note):
+                        self.statusMessage = note
+                    case .finished:
+                        if !didCommitSummary {
+                            if !summaryText.isEmpty {
+                                self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
+                                self.statusMessage = warning ?? ""
+                            } else {
+                                self.statusMessage = warning ?? "未生成纪要"
+                                self.finishReviewWithoutMock()
+                            }
+                        } else if self.phase != .review {
+                            self.finishReviewWithoutMock()
+                        }
+                    case .failed(let msg):
+                        warning = msg
+                        self.statusMessage = msg
+                        if summaryText.isEmpty, !didCommitSummary {
+                            self.finishReviewWithoutMock()
+                        }
+                    }
+                }
+            } catch {
+                if !didCommitSummary, !summaryText.isEmpty {
+                    self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
+                    self.statusMessage = "后续步骤失败：\(error.localizedDescription)"
+                } else if !didCommitSummary {
+                    self.statusMessage = error.localizedDescription
+                    self.finishReviewWithoutMock()
+                }
+            }
+        }
+        revealTask = pipelineTask
+    }
+
+    /// 将模型 Markdown 拆成短标题 / tldr / 议题 / 决议 / 未决，并进入 review。
+    private func commitAISummary(raw: String,
+                                 persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        let parsed = MinutesMarkdownParser.parse(raw)
+        summary = parsed.summary
+        if let title = parsed.title {
+            meeting.adoptGeneratedTitle(title)
+        }
+        persistSummary(parsed.summary, raw)
+        if !parsed.summary.topics.isEmpty { setStep(2) }
+        if !parsed.summary.decisions.isEmpty { setStep(3) }
+        if todoCount > 0 || revealStep >= 4 { setStep(4) }
+        setStep(5)
+        if meeting.phase != .review { meeting.phase = .review }
+        if phase != .review {
+            withAnimation(.recapSheet) { phase = .review }
+        }
+        scheduleDiarizationIfNeeded()
+    }
+
+    /// 有 Key 但管线失败且无任何纪要：进入 review，不注入演示数据。
+    private func finishReviewWithoutMock() {
+        if revealStep < 1 { setStep(1) }
+        setStep(5)
+        meeting.phase = .review
+        withAnimation(.recapSheet) { phase = .review }
+        scheduleDiarizationIfNeeded()
+    }
+
+    /// 有本地录音且尚未标注过说话人时，会后自动跑 SpeakerKit（失败不阻断 REVIEW）。
+    private func scheduleDiarizationIfNeeded() {
+        guard let path = meeting.audioPath,
+              MeetingAudioStore.fileExists(storedPath: path) else { return }
+        let alreadyLabeled = meeting.segments.contains { seg in
+            guard let sid = seg.speakerId else { return false }
+            return sid.hasPrefix("spk")
+        }
+        guard !alreadyLabeled else { return }
+        Task { await diarizeFromDisk() }
+    }
+
+    /// 仅 DEBUG / 显式验收入口可调用；生产自动路径禁止注入演示纪要。
+    public func startExplicitDemoReveal(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+                                        persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        statusMessage = "演示纪要（非模型生成）"
+        revealTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .seconds(0.35))
+            self.summary = DemoContent.fallbackSummary
+            self.meeting.adoptGeneratedTitle(DemoContent.fallbackTitle)
+            self.setStep(1)
+            try? await Task.sleep(for: .seconds(0.35))
+            self.setStep(2) // topics
+            try? await Task.sleep(for: .seconds(0.25))
+            self.setStep(3) // decisions
+            let demoTodos: [TodoListPayload.Item] = [
+                .init(task: "出移动端评审方案", owner: "李华", owner_source: "explicit",
+                      due: nil, priority: "high", confidence: 0.9,
+                      evidence_quote: "那我周五之前把评审方案弄出来",
+                      start_seconds: 50),
+                .init(task: "确认客户报价", owner: "张明", owner_source: "inferred",
+                      due: nil, priority: nil, confidence: 0.45,
+                      evidence_quote: "客户的报价我再确认一下",
+                      start_seconds: 62),
+            ]
+            if self.meeting.actionItems.isEmpty {
+                persistTodos(demoTodos)
+            }
+            self.todoCount = max(self.todoCount, demoTodos.count)
+            self.setStep(4)
+            try? await Task.sleep(for: .seconds(0.25))
+            persistSummary(self.summary, self.summary.tldr)
+            self.setStep(5)
+            self.meeting.phase = .review
+            withAnimation(.recapSheet) { self.phase = .review }
+            self.statusMessage = "演示纪要（非模型生成）"
+        }
+    }
+
+    private func setStep(_ s: Int) {
+        withAnimation(.easeOut(duration: 0.24)) { revealStep = s }
+    }
+
+    /// 将当前 blocks 写入 meeting.segments（LIVE 检查点）。
+    public func persistLiveCheckpoint() {
+        guard phase == .live || meeting.phase == .live else { return }
+        persistTranscriptCheckpoint()
+    }
+
+    /// 无 phase 守卫：LIVE 中途、endLive 收尾、diarize 后均可落盘字幕。
+    public func persistTranscriptCheckpoint() {
+        guard !isUsingMockAudio || !blocks.isEmpty else { return }
+        meeting.durationSeconds = Double(max(elapsed, Int(meeting.durationSeconds), 1))
+        meeting.segments = Self.segments(from: blocks)
+        // 说话人列表：已有 spk* 时保留；否则从 blocks 汇总
+        if meeting.speakers.isEmpty || !meeting.speakers.contains(where: { $0.id.hasPrefix("spk") }) {
+            let unique = blocks.map(\.speaker)
+            var seen = Set<String>()
+            meeting.speakers = unique.filter { seen.insert($0.id).inserted }
+        }
+        lastCheckpointAt = Date()
+    }
+
+    /// 离开纪要页：先落盘字幕，再停录；保留 phase=.live 与 blocks（等同暂停，可再进续录）。
+    public func pauseOrTeardownForDisappear() {
+        if phase == .live || meeting.phase == .live {
+            persistLiveCheckpoint()
+            checkpointSaver?()
+            isLivePaused = true
+            if statusMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || statusMessage == "正在准备…" {
+                statusMessage = "已暂停"
+            }
+        }
+        streamTask?.cancel()
+        clockTask?.cancel()
+        // 勿取消 revealTask：processing 中离场由 004/后续策略处理；此处仅停 LIVE 采集
+        if phase == .live {
+            revealTask?.cancel()
+        }
+        endingLive = false
+        setIdleTimerDisabled(false)
+        if let recording, recording.isRunning {
+            Task { _ = try? await recording.stop() }
+        }
+        recording = nil
+    }
+
+    /// 真正丢弃会话（会丢未保存数据）；优先用 `pauseOrTeardownForDisappear`。
+    public func reset() {
+        pauseOrTeardownForDisappear()
+        // 兼容旧调用：不主动清空 blocks，避免误伤
+    }
+
+    private func checkpointIfNeeded(force: Bool) {
+        guard phase == .live, !blocks.isEmpty else { return }
+        if !force {
+            // segment 高频路径：最多约 5s 落一次；pause/end 走 force
+            if let last = lastCheckpointAt, Date().timeIntervalSince(last) < 5 { return }
+        }
+        persistLiveCheckpoint()
+        checkpointSaver?()
+    }
+
+    private func setIdleTimerDisabled(_ disabled: Bool) {
+        UIApplication.shared.isIdleTimerDisabled = disabled
+    }
+
+    private func elapsedText(_ s: Int) -> String {
+        String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    private static func parseTimestamp(_ text: String) -> Double {
+        let parts = text.split(separator: ":").compactMap { Int($0) }
+        guard parts.count == 2 else { return 0 }
+        return Double(parts[0] * 60 + parts[1])
+    }
+
+    /// 兼容 delta（增量）与 cumulative（每次回全文）两种流式形态，避免重复拼接。
+    private static func mergeStreamText(existing: String, incoming: String) -> String {
+        guard !incoming.isEmpty else { return existing }
+        if existing.isEmpty { return incoming }
+        if incoming == existing { return existing }
+        if incoming.hasPrefix(existing) { return incoming }          // cumulative
+        if existing.hasPrefix(incoming) { return existing }          // 乱序旧包
+        if incoming.count > existing.count,
+           existing.hasSuffix(String(incoming.prefix(min(24, incoming.count)))) {
+            // 重叠拼接（少见）：用更长的一侧
+            return incoming
+        }
+        return existing + incoming
+    }
+
+}

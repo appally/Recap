@@ -1,0 +1,246 @@
+name: RecapApp
+options:
+  bundleIdPrefix: com.recap
+  deploymentTarget:
+    iOS: "26.0"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+packages:
+  OpenAI:
+    url: https://github.com/MacPaw/OpenAI.git
+    exactVersion: 0.5.1
+  # SpeakerKit（说话人分离）；会拉 WhisperKit 作编译依赖，但不强制下载 Whisper 模型
+  ArgmaxOSS:
+    url: https://github.com/argmaxinc/argmax-oss-swift.git
+    exactVersion: 1.0.0
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: WTG6UTV87R
+    TARGETED_DEVICE_FAMILY: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+
+targets:
+
+  # ─────────────────────────────────────────────
+  # Models：无依赖，SwiftData @Model + 值类型
+  # ─────────────────────────────────────────────
+  RecapModels:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Modules/RecapModels
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.models
+        PRODUCT_NAME: RecapModels
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+
+  # ─────────────────────────────────────────────
+  # ASR：SpeechAnalyzer + FunASR + VolcASR（备）+ AudioRecorder
+  # ─────────────────────────────────────────────
+  RecapASR:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Modules/RecapASR
+    dependencies:
+      - target: RecapModels
+      - package: ArgmaxOSS
+        product: SpeakerKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.asr
+        PRODUCT_NAME: RecapASR
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+
+  # ─────────────────────────────────────────────
+  # LLM：MacPaw/OpenAI + MinutesPipeline + Keychain
+  # ─────────────────────────────────────────────
+  RecapLLM:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Modules/RecapLLM
+    dependencies:
+      - target: RecapModels
+      - package: OpenAI
+        product: OpenAI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.llm
+        PRODUCT_NAME: RecapLLM
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+
+  # ─────────────────────────────────────────────
+  # Persistence：ModelContainer 装配
+  # ─────────────────────────────────────────────
+  RecapPersistence:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Modules/RecapPersistence
+    dependencies:
+      - target: RecapModels
+      - target: RecapLLM
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.persistence
+        PRODUCT_NAME: RecapPersistence
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+
+  # ─────────────────────────────────────────────
+  # UI：DesignSystem + Views（@Model 直驱）
+  # ─────────────────────────────────────────────
+  RecapUI:
+    type: framework
+    platform: iOS
+    sources:
+      - path: Modules/RecapUI
+    dependencies:
+      - target: RecapModels
+      - target: RecapASR
+      - target: RecapLLM
+      - target: RecapPersistence
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.ui
+        PRODUCT_NAME: RecapUI
+        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: YES
+        SKIP_INSTALL: YES
+
+  # ─────────────────────────────────────────────
+  # App：入口 + RecordingSession + Settings
+  # ─────────────────────────────────────────────
+  RecapApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - "Recap.storekit"
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Recap
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        NSMicrophoneUsageDescription: 用于会议录音转写
+        NSCameraUsageDescription: 用于会议中拍照记录此刻（白板、想法），以及扫描纸质议程与上场纪要
+        NSRemindersFullAccessUsageDescription: 用于把会议待办创建为提醒事项
+        NSCalendarsFullAccessUsageDescription: 用于把会议关键节点创建为日历日程
+        NSSiriUsageDescription: 用于通过 Siri / 快捷指令处理会议与待办
+        NSLocationWhenInUseUsageDescription: 用于在会议开始时自动记录会议地点（仅保存在本机）
+        UIBackgroundModes:
+          - audio
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+    entitlements:
+      path: App/RecapApp.entitlements
+      properties:
+        com.apple.developer.applesignin:
+          - Default
+    settings:
+      base:
+        # com.recap.app 已被占用，不可注册；开发期用个人唯一 ID
+        PRODUCT_BUNDLE_IDENTIFIER: com.liuyong.recap
+        PRODUCT_NAME: Recap
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # P0 暂无实际图标 PNG；有 Contents 占位即可，真图 P4/发布前再补
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    dependencies:
+      - target: RecapModels
+      - target: RecapASR
+      - target: RecapLLM
+      - target: RecapPersistence
+      - target: RecapUI
+    scheme:
+      storeKitConfiguration: App/Recap.storekit
+      testTargets:
+        - RecapModelsTests
+        - RecapLLMTests
+        - RecapASRTests
+        - RecapUITests
+
+  # ─────────────────────────────────────────────
+  # Tests
+  # ─────────────────────────────────────────────
+  RecapASRTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/RecapASRTests
+    dependencies:
+      - target: RecapASR
+      - target: RecapModels
+      - target: RecapApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.asr.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Recap.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Recap
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  RecapModelsTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/RecapModelsTests
+    dependencies:
+      - target: RecapModels
+      - target: RecapApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.models.tests
+        GENERATE_INFOPLIST_FILE: YES
+        # App PRODUCT_NAME 是 Recap，不是 RecapApp
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Recap.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Recap
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  RecapLLMTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/RecapLLMTests
+    dependencies:
+      - target: RecapLLM
+      - target: RecapModels
+      - target: RecapApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.llm.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Recap.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Recap
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  RecapUITests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/RecapUITests
+    dependencies:
+      - target: RecapUI
+      - target: RecapModels
+      - target: RecapApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recap.ui.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Recap.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Recap
+        BUNDLE_LOADER: $(TEST_HOST)

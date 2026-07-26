@@ -1,0 +1,247 @@
+import SwiftUI
+import SwiftData
+import RecapModels
+
+/// 隐私政策 / 用户协议摘要（审核可离线阅读；同时提供外链）。
+struct LegalDocumentView: View {
+    enum Kind {
+        case privacy, terms
+
+        var title: String {
+            switch self {
+            case .privacy: return "隐私政策"
+            case .terms: return "用户协议"
+            }
+        }
+
+        var bodyText: String {
+            switch self {
+            case .privacy: return RecapLegal.privacySummary
+            case .terms: return RecapLegal.termsSummary
+            }
+        }
+
+        var url: URL {
+            switch self {
+            case .privacy: return RecapLegal.privacyURL
+            case .terms: return RecapLegal.termsURL
+            }
+        }
+    }
+
+    let kind: Kind
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.xl) {
+                Text(kind.bodyText)
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color.recapInk)
+                    .lineSpacing(5)
+
+                Link(destination: kind.url) {
+                    SettingsNavRow(
+                        icon: "safari",
+                        iconTint: .recapCeladon,
+                        title: "在浏览器中打开完整版",
+                        showChevron: true
+                    )
+                    .background(
+                        Color.recapPaper,
+                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    )
+                }
+            }
+            .padding(.horizontal, Spacing.xl)
+            .padding(.top, Spacing.md)
+            .padding(.bottom, Spacing.xxxl)
+        }
+        .scrollIndicators(.hidden)
+        .background(SettingsAmbientBackground())
+        .navigationTitle(kind.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// 数据导出 / 清除（过审：用户对本地数据的控制）。
+struct DataPrivacySettingsView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query private var meetings: [Meeting]
+
+    @State private var showClearConfirm = false
+    @State private var status = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.xxl) {
+                summaryCard
+
+                VStack(spacing: 0) {
+                    Button {
+                        status = "导出将在后续版本提供（JSON / Markdown）"
+                    } label: {
+                        SettingsNavRow(
+                            icon: "square.and.arrow.up",
+                            iconTint: .recapCeladon,
+                            title: "导出会议数据",
+                            value: "即将推出"
+                        )
+                    }
+                    .buttonStyle(SettingsPressStyle())
+
+                    SettingsDivider()
+
+                    Button {
+                        showClearConfirm = true
+                    } label: {
+                        SettingsNavRow(
+                            icon: "trash.fill",
+                            iconTint: .recapCinnabar,
+                            title: "清除全部会议数据",
+                            showChevron: false
+                        )
+                    }
+                    .buttonStyle(SettingsPressStyle())
+                }
+                .background(
+                    Color.recapPaper,
+                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                )
+
+                Text("清除不会删除 Keychain 中的 API Key。如需一并清除，请到大模型 / 转写设置中手动移除。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.recapTea.opacity(0.9))
+                    .lineSpacing(2)
+
+                if !status.isEmpty {
+                    Text(status)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.recapTea)
+                }
+            }
+            .padding(.horizontal, Spacing.xl)
+            .padding(.top, Spacing.md)
+            .padding(.bottom, Spacing.xxxl)
+        }
+        .scrollIndicators(.hidden)
+        .background(SettingsAmbientBackground())
+        .navigationTitle("数据与隐私")
+        .navigationBarTitleDisplayMode(.inline)
+        .confirmationDialog(
+            "清除全部会议？",
+            isPresented: $showClearConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("清除 \(meetings.count) 条会议", role: .destructive, action: clearAllMeetings)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("录音、转写、纪要与待办将从本机删除，且无法恢复。")
+        }
+    }
+
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("本机数据")
+                .font(.system(size: 12, weight: .semibold))
+                .tracking(1.4)
+                .foregroundStyle(Color.recapTea)
+            Text("\(meetings.count) 场会议保存在此设备")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(Color.recapInk)
+            Text("默认不上传会议内容。仅在你选择云端引擎或云端模型时，相关片段才会发往对应服务商。")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.recapTea)
+                .lineSpacing(3)
+        }
+        .padding(Spacing.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            Color.recapPaper,
+            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        )
+    }
+
+    private func clearAllMeetings() {
+        MeetingDeletion.deleteAll(meetings, in: modelContext)
+        status = "已清除全部会议数据"
+    }
+}
+
+/// 关于 Recap。
+struct AboutRecapView: View {
+    var body: some View {
+        ScrollView {
+            VStack(spacing: Spacing.xxl) {
+                VStack(spacing: Spacing.md) {
+                    Text("Recap")
+                        .font(.system(size: 36, weight: .bold, design: .serif))
+                        .foregroundStyle(Color.recapInk)
+                    Text("把会议变成可行动的纪要")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.recapTea)
+                    Text(versionLabel)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(Color.recapTea.opacity(0.85))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, Spacing.xxl)
+
+                VStack(spacing: 0) {
+                    Link(destination: RecapLegal.supportURL) {
+                        SettingsNavRow(
+                            icon: "questionmark.circle.fill",
+                            iconTint: .recapCeladon,
+                            title: "帮助与支持"
+                        )
+                    }
+                    SettingsDivider()
+                    Link(destination: URL(string: "mailto:\(RecapLegal.supportEmail)")!) {
+                        SettingsNavRow(
+                            icon: "envelope.fill",
+                            iconTint: .recapOchre,
+                            title: "联系我们",
+                            value: RecapLegal.supportEmail
+                        )
+                    }
+                    SettingsDivider()
+                    NavigationLink {
+                        LegalDocumentView(kind: .privacy)
+                    } label: {
+                        SettingsNavRow(
+                            icon: "hand.raised.fill",
+                            iconTint: .recapTea,
+                            title: "隐私政策"
+                        )
+                    }
+                    SettingsDivider()
+                    NavigationLink {
+                        LegalDocumentView(kind: .terms)
+                    } label: {
+                        SettingsNavRow(
+                            icon: "doc.text.fill",
+                            iconTint: .recapTea,
+                            title: "用户协议"
+                        )
+                    }
+                }
+                .background(
+                    Color.recapPaper,
+                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                )
+            }
+            .padding(.horizontal, Spacing.xl)
+            .padding(.bottom, Spacing.xxxl)
+        }
+        .scrollIndicators(.hidden)
+        .background(SettingsAmbientBackground())
+        .navigationTitle("关于")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var versionLabel: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = info?["CFBundleVersion"] as? String ?? "1"
+        return "版本 \(short)（\(build)）"
+    }
+}

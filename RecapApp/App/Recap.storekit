@@ -1,0 +1,96 @@
+{
+  "identifier" : "7B2E9F1A",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21482001",
+      "localizations" : [
+
+      ],
+      "name" : "Recap Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "25",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "21482011",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "云端高保真转写与强模型纪要，无需自备 API Key。",
+              "displayName" : "Recap Pro 月度",
+              "locale" : "zh_CN"
+            },
+            {
+              "description" : "Cloud ASR and strong LLM minutes without bringing your own API keys.",
+              "displayName" : "Recap Pro Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.liuyong.recap.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Pro Monthly",
+          "subscriptionGroupID" : "21482001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "198",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "21482012",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "年付更省，含云端转写与强模型纪要。",
+              "displayName" : "Recap Pro 年度",
+              "locale" : "zh_CN"
+            },
+            {
+              "description" : "Yearly plan with cloud ASR and strong LLM minutes.",
+              "displayName" : "Recap Pro Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.liuyong.recap.pro.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Pro Yearly",
+          "subscriptionGroupID" : "21482001",
+          "type" : "RecurringSubscription",
+          "winbackOffers" : [
+
+          ]
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}
