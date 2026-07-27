@@ -479,7 +479,14 @@ public struct MeetingNoteView: View {
                                 audioPower: session.liveAudioPower
                             )
                             .padding(.horizontal, Spacing.xl)
-                            .padding(.bottom, Spacing.lg)
+                            .padding(.bottom, Spacing.md)
+
+                            // #8：空场文字引导（首跑无字幕 / 暂停空场），接回原 dead-code liveEmptyPrompt 文案
+                            Text(liveEmptyPrompt)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(Color.recapTea.opacity(0.9))
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.bottom, Spacing.lg)
                         }
 
                         ForEach(session.blocks) { block in
