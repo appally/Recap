@@ -1553,10 +1553,7 @@ public struct MeetingNoteView: View {
     private var liveStageBottom: some View {
         HStack(alignment: .center, spacing: 0) {
             liveLeftSlot
-                .frame(
-                    width: (session.isLivePaused && session.hasStartedRecording) ? nil : liveBottomSideSlot,
-                    height: liveBottomSideSlot
-                )
+                .frame(width: liveBottomSideSlot, height: liveBottomSideSlot)
 
             Spacer(minLength: Spacing.md)
 
@@ -1595,126 +1592,85 @@ public struct MeetingNoteView: View {
     }
 
     @ViewBuilder private var liveCenterControl: some View {
-        if session.isLivePaused {
-            livePrimaryStartContinue(
-                title: session.hasStartedRecording ? "继续" : "开始",
-                accessibilityLabel: session.hasStartedRecording ? "继续录音" : "开始录音",
-                accessibilityHint: session.hasStartedRecording ? "恢复收音" : "开始本场录音与转写"
-            )
-        } else {
-            Button {
-                Haptics.impact(.light)
+        Button {
+            Haptics.impact(.light)
+            if session.isLivePaused {
+                session.resumeLive()
+            } else {
                 session.pauseLive()
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.recapCinnabar.opacity(0.15))
-                        .frame(width: 72, height: 72)
-
-                    Circle()
-                        .fill(Color.recapCinnabar)
-                        .frame(width: 56, height: 56)
-
-                    Image(systemName: "pause.fill")
-                        .font(.system(size: 20, weight: .bold))
-                        .foregroundStyle(.white)
-                }
             }
-            .buttonStyle(RecapPressStyle())
-            .accessibilityLabel("暂停录音")
-            .accessibilityHint("停止收音，可继续或完成整理")
-            .overlay(alignment: .top) {
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(
+                        session.isLivePaused
+                            ? Color.recapOchre.opacity(0.15)
+                            : Color.recapCinnabar.opacity(0.15)
+                    )
+                    .frame(width: 72, height: 72)
+
+                Circle()
+                    .fill(
+                        session.isLivePaused
+                            ? Color.recapOchre
+                            : Color.recapCinnabar
+                    )
+                    .frame(width: 56, height: 56)
+
+                Image(systemName: session.isLivePaused ? "play.fill" : "pause.fill")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.white)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+        }
+        .buttonStyle(RecapPressStyle())
+        .accessibilityLabel(session.isLivePaused ? "继续录音" : "暂停录音")
+        .accessibilityHint(session.isLivePaused ? "恢复收音" : "停止收音，可继续或完成整理")
+        .overlay(alignment: .top) {
+            HStack(spacing: 6) {
+                if session.isLivePaused {
+                    Text("已暂停")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Color.recapOchre)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.recapOchre.opacity(0.12), in: Capsule())
+                }
                 Text(elapsedText(session.elapsed))
                     .font(.system(size: 14, weight: .semibold, design: .monospaced))
                     .tracking(0.5)
-                    .foregroundStyle(Color.recapInk.opacity(0.85))
+                    .foregroundStyle(session.isLivePaused ? Color.recapTea : Color.recapInk)
                     .monospacedDigit()
-                    .offset(y: -22)
-                    .accessibilityLabel("已录制 \(elapsedText(session.elapsed))")
             }
+            .offset(y: -24)
+            .accessibilityLabel("已录制 \(elapsedText(session.elapsed))")
         }
-    }
-
-    /// 开始 / 继续：全站最高可点击性与质感的居中主 CTA。
-    private func livePrimaryStartContinue(
-        title: String,
-        accessibilityLabel: String,
-        accessibilityHint: String
-    ) -> some View {
-        Button {
-            // 开始（首次）给 medium 的分量；继续（恢复）退回 light，与暂停对称。
-            Haptics.impact(session.hasStartedRecording ? .light : .medium)
-            session.resumeLive()
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: RecapSymbol.play)
-                    .font(.system(size: 15, weight: .bold))
-                    .offset(x: 0.5)
-                Text(title)
-                    .font(.system(size: 16, weight: .bold, design: .default))
-                    .tracking(1.2)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 16)
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color.recapCinnabar,
-                        Color(hex: 0xE25347)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                in: Capsule()
-            )
-            .overlay(
-                Capsule()
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.35), .white.opacity(0.1)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(Capsule())
-        }
-        .buttonStyle(RecapPressStyle())
-        .shadow(color: Color.recapCinnabar.opacity(0.25), radius: 8, x: 0, y: 4)
-        .shadow(color: Color.black.opacity(0.06), radius: 2, x: 0, y: 1)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint(accessibilityHint)
     }
 
     @ViewBuilder private var liveLeftSlot: some View {
         if session.isLivePaused && session.hasStartedRecording {
             liveFinishButton
-                .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                .transition(.scale.combined(with: .opacity))
         } else {
-            // 录音中/未开始：记录此刻（拍照锚定到当前秒）
             cameraLiveBottomButton
-                .transition(.opacity)
+                .transition(.scale.combined(with: .opacity))
         }
     }
 
-    /// 暂停态左侧 Hero CTA：完成并整理纪要（翡翠青瓷高亮胶囊按钮）。
+    /// 暂停态左侧 Hero CTA：完成并整理纪要（翡翠青瓷圆形按键）。
     private var liveFinishButton: some View {
         Button {
             Haptics.impact(.medium)
             showEndLiveConfirm = true
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: RecapSymbol.check)
-                    .font(.system(size: 15, weight: .bold))
+            VStack(spacing: 2) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 16, weight: .bold))
                 Text("完成")
-                    .font(.system(size: 16, weight: .bold, design: .default))
-                    .tracking(1.2)
+                    .font(.system(size: 11, weight: .bold))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+            .frame(width: 52, height: 52)
             .background(
                 LinearGradient(
                     colors: [
@@ -1724,24 +1680,11 @@ public struct MeetingNoteView: View {
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 ),
-                in: Capsule()
+                in: Circle()
             )
-            .overlay(
-                Capsule()
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.35), .white.opacity(0.1)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
-            )
-            .contentShape(Capsule())
+            .shadow(color: Color(hex: 0x248A4D).opacity(0.3), radius: 6, x: 0, y: 3)
         }
         .buttonStyle(RecapPressStyle())
-        .shadow(color: Color(hex: 0x248A4D).opacity(0.28), radius: 8, x: 0, y: 4)
-        .shadow(color: Color.black.opacity(0.06), radius: 2, x: 0, y: 1)
         .accessibilityLabel("完成并整理纪要")
         .accessibilityHint("结束本场录音，由 AI 自动生成结构化会议纪要")
     }
