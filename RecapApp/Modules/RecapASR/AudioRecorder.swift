@@ -151,8 +151,10 @@ public actor AudioRecorder {
             wasInterrupted = true
             onInterrupted?(true)
         case .ended:
-            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-            guard options.contains(.shouldResume) else { return }
+            // 录音场景：只要本场曾被中断（.began），无论系统是否给出 shouldResume 提示都尝试恢复。
+            // 仅依赖 .shouldResume 会在其缺省（常见）时让 isRunning 永久为 true 却不再产出 PCM → 静默哑录。
+            // 恢复失败由 resumeAfterInterruption 内部经 onInterrupted?(true) 上报，UI 可见而非静默。
+            guard wasInterrupted else { return }
             resumeAfterInterruption()
         @unknown default:
             break

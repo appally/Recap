@@ -13,6 +13,8 @@ public final class RecordingSession: ObservableObject {
     public var onPartial: ((String) -> Void)?
     public var onSegment: ((TranscriptSegment) -> Void)?
     public var onError: ((String) -> Void)?
+    /// 音频中断开始(true)/恢复(false)。与会话层计时耦合：中断期间无 PCM，会话层据此暂停计时。
+    public var onInterrupted: ((Bool) -> Void)?
 
     private let recorder = AudioRecorder()
     private var engine: (any AsrEngine)?
@@ -80,6 +82,8 @@ public final class RecordingSession: ObservableObject {
             await recorder.setOnInterrupted { [weak self] began in
                 Task { @MainActor in
                     guard let self else { return }
+                    // 先转发给会话层（暂停/恢复计时），再更新本地文案
+                    self.onInterrupted?(began)
                     if began {
                         self.statusText = "音频被中断…"
                         self.onError?("音频被中断，结束后将尝试恢复…")

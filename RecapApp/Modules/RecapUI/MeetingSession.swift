@@ -317,6 +317,15 @@ public final class MeetingSession: ObservableObject {
             }
             self.statusMessage = msg
         }
+        // #2：中断期间无 PCM 产出，暂停计时避免时长虚高；恢复时续上（仅当仍在 LIVE 且未手动暂停）。
+        session.onInterrupted = { [weak self] began in
+            guard let self else { return }
+            if began {
+                self.clockTask?.cancel()
+            } else if self.phase == .live, !self.isLivePaused {
+                self.startClock()
+            }
+        }
         recording = session
 
         do {
