@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import Combine
 import RecapModels
 import RecapASR
 import RecapLLM
@@ -35,6 +36,8 @@ public final class MeetingSession: ObservableObject {
     @Published public var summary: MeetingSummary
     @Published public var statusMessage: String = ""
     @Published public var isUsingMockAudio = false
+    /// LIVE 真实麦克风收音音量振幅 (0.0 ~ 1.0)。
+    @Published public var liveAudioPower: Float = 0.0
     /// LIVE 引擎启动失败；供 UI 显示重试 / DEBUG 演示入口。
     @Published public var liveStartFailed = false
     /// LIVE 已暂停（停麦、停表，仍为 phase=.live；可继续 / 完成 / 删除）。
@@ -45,6 +48,7 @@ public final class MeetingSession: ObservableObject {
     public let meeting: Meeting
 
     private var recording: RecordingSession?
+    private var powerCancellable: AnyCancellable?
     private var streamTask: Task<Void, Never>?
     private var clockTask: Task<Void, Never>?
     private var revealTask: Task<Void, Never>?
@@ -333,6 +337,11 @@ public final class MeetingSession: ObservableObject {
                 self.recording = nil
                 return
             }
+            powerCancellable = session.$currentAudioPower
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] power in
+                    self?.liveAudioPower = power
+                }
             isUsingMockAudio = false
             liveStartFailed = false
             isLivePaused = false
@@ -411,7 +420,7 @@ public final class MeetingSession: ObservableObject {
             persistTranscriptCheckpoint()
             checkpointSaver?()
             if labeled == 0 {
-                statusMessage = "检出 \(outcome.speakers.count) 位说话人，但未能标注逐字稿（可重试）"
+                statusMessage = "检出 \(outcome.speakers.count) 位说话人，但未能标注原稿（可重试）"
             } else {
                 statusMessage = "已标注 \(labeled)/\(outcome.segments.count) 段 · \(outcome.speakers.count) 位说话人"
             }
@@ -821,15 +830,15 @@ public final class MeetingSession: ObservableObject {
     private func performPolish() async {
         let thermal = ProcessInfo.processInfo.thermalState
         if ThermalGate.shouldDefer(thermalState: thermal) {
-            statusMessage = ThermalGate.warningText(thermalState: thermal) ?? "设备温度高，逐字稿优化已延后"
+            statusMessage = ThermalGate.warningText(thermalState: thermal) ?? "设备温度高，原稿优化已延后"
             return
         }
         let source = meeting.segments
         guard !source.isEmpty else {
-            statusMessage = "没有可优化的逐字稿"
+            statusMessage = "没有可优化的原稿"
             return
         }
-        statusMessage = "逐字稿优化中…"
+        statusMessage = "原稿优化中…"
         do {
             let provider = try await Task.detached(priority: .userInitiated) {
                 try LLMProviderFactory.makeDefaultDeepSeek()
@@ -843,7 +852,7 @@ public final class MeetingSession: ObservableObject {
             meeting.polishedModelId = LLMPresets.deepSeekFlash
             adoptSegmentsAsBlocks(source)   // 重新构造 blocks，这次 polished 有值 → 双行
             checkpointSaver?()
-            statusMessage = "逐字稿已优化"
+            statusMessage = "原稿已优化"
         } catch is CancellationError {
             statusMessage = "已取消"
         } catch {

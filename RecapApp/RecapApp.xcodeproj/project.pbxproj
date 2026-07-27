@@ -91,6 +91,7 @@
 		584792B7BD65A5E4F6B036E0 /* TranscriptBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA6573B50EFA942982E14E3B /* TranscriptBlock.swift */; };
 		58660E4C123AD4BEA222532C /* SkillNoteWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8A6F1BD4592C1939B1FB15 /* SkillNoteWriter.swift */; };
 		586AB74246103A8A706130CB /* RecapUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EFA412E68F18FA08117A7823 /* RecapUI.framework */; };
+		594564A61978913A8A2CA06C /* MindmapOutlineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B3BF9A1171469D6097D19B3 /* MindmapOutlineView.swift */; };
 		59FE0A379BA7C68639520627 /* RecapLLM.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0ACFB35153C43DF3373126A5 /* RecapLLM.swift */; };
 		5A0894ABBEBE5099DF6C8079 /* RecapModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CF62BF9F82D58956BA3798A /* RecapModels.swift */; };
 		5A3D56E4B118F14CD8A3C63B /* SearchBriefToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0F47C2D65ED6B5D7D35419 /* SearchBriefToolTests.swift */; };
@@ -238,6 +239,7 @@
 		EF5A1F945D5D9CCBCF253DAC /* PersonalizationSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3146D67EB4E8841656832BCE /* PersonalizationSettingsView.swift */; };
 		F094E6D5A05216375AE8924B /* ReadURLAgentTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13B8924624D3B734F0FA9D25 /* ReadURLAgentTool.swift */; };
 		F0D36F4863E76F7520387B1C /* RecapLLM.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = DB7369D18F62D9CAF8C93C21 /* RecapLLM.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		F0D93489E0E7CCF14F9837CA /* MindmapOutlineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 450B6312C8401F6347A17253 /* MindmapOutlineTests.swift */; };
 		F1341EE3871B6DD63B4BDEAC /* RecapPersistence.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D282C336A8508BE2B08334AE /* RecapPersistence.framework */; };
 		F1A4EADDB8DD70050C26AA08 /* RecapModels.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = AF7B805293BBDA92A90B79EE /* RecapModels.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		F251787C56CE445511EE05F9 /* LiveTranscriptMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 040B3A9C46E57405C51688C8 /* LiveTranscriptMergerTests.swift */; };
@@ -557,6 +559,7 @@
 		438A756503D7912305C859D1 /* SearchTranscriptAgentTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchTranscriptAgentTool.swift; sourceTree = "<group>"; };
 		444ED4BB50B964EE99B5D5D9 /* TranscriptAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptAnchor.swift; sourceTree = "<group>"; };
 		446C8B459A8E36423A76B276 /* BriefDocumentReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefDocumentReader.swift; sourceTree = "<group>"; };
+		450B6312C8401F6347A17253 /* MindmapOutlineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindmapOutlineTests.swift; sourceTree = "<group>"; };
 		45500ECA915E593779C64CC7 /* MeetingPhase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingPhase.swift; sourceTree = "<group>"; };
 		45B88A807ACD50A9314404AD /* Moment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Moment.swift; sourceTree = "<group>"; };
 		45C82A5D693638D96CEFE667 /* AgentSkillCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSkillCatalog.swift; sourceTree = "<group>"; };
@@ -588,6 +591,7 @@
 		62D24EC076AD9933768B0BA3 /* CreateRemindersArgsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreateRemindersArgsTests.swift; sourceTree = "<group>"; };
 		663426CD92FC0AC50D421269 /* MeetingMediaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingMediaStore.swift; sourceTree = "<group>"; };
 		68C6B977A49AD1061506038B /* AgentTranscriptCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTranscriptCodec.swift; sourceTree = "<group>"; };
+		6B3BF9A1171469D6097D19B3 /* MindmapOutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MindmapOutlineView.swift; sourceTree = "<group>"; };
 		6B7C48F74F2D9497C243E83D /* TranscriptChunkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptChunkerTests.swift; sourceTree = "<group>"; };
 		6BCDFBC85FFE33517DCE8E91 /* SpeakerTimelineSegment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakerTimelineSegment.swift; sourceTree = "<group>"; };
 		6D27F2A1694A1FF316C573B7 /* RecapAppApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecapAppApp.swift; sourceTree = "<group>"; };
@@ -828,6 +832,7 @@
 			children = (
 				D07CFDCC58EC66D21D115590 /* AskMarkdownRendererTests.swift */,
 				B91DC36AF6BAD61EB5B9D8F6 /* AskSuggestionTipsTests.swift */,
+				450B6312C8401F6347A17253 /* MindmapOutlineTests.swift */,
 			);
 			path = RecapUITests;
 			sourceTree = "<group>";
@@ -1091,6 +1096,7 @@
 				6E815A4B00DA9A25EC3CBD1B /* MeetingListView.swift */,
 				511AB9E5A77382E781FAF76A /* MeetingNoteView.swift */,
 				EB73B57CC0C476E18B65B80E /* MeetingSession.swift */,
+				6B3BF9A1171469D6097D19B3 /* MindmapOutlineView.swift */,
 				5E84439D71D297A45F96E485 /* MinutesDiffSheet.swift */,
 				057BE4AAEA4AF77047A7C9F1 /* MinutesVersionsSheet.swift */,
 				1ECBAE0028E6F130F1074044 /* MomentCaptureOverlay.swift */,
@@ -1563,6 +1569,7 @@
 			files = (
 				E0827CD7F6B1E5B2B9FFF9D9 /* AskMarkdownRendererTests.swift in Sources */,
 				7597F9B949E2938048506EB2 /* AskSuggestionTipsTests.swift in Sources */,
+				F0D93489E0E7CCF14F9837CA /* MindmapOutlineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1757,6 +1764,7 @@
 				0A6C11C6D3C147CA68757F20 /* MeetingSession.swift in Sources */,
 				3C39F98405CECFA9E3FDD220 /* MembershipSettingsView.swift in Sources */,
 				F5A0B076DA7EC5143731FF11 /* MembershipStore.swift in Sources */,
+				594564A61978913A8A2CA06C /* MindmapOutlineView.swift in Sources */,
 				610C36BD33DFBF2AFD748250 /* MinutesDiffSheet.swift in Sources */,
 				9D10A2596EB03F6D990C90F3 /* MinutesVersionsSheet.swift in Sources */,
 				1F6112E5BA8DA4BA6DD0675E /* MomentCaptureOverlay.swift in Sources */,

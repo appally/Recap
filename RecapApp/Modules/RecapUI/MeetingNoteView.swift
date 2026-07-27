@@ -474,9 +474,12 @@ public struct MeetingNoteView: View {
                         }
 
                         if session.blocks.isEmpty && !session.liveStartFailed {
-                            PlaudLiveWaveformVisualizer(isPaused: session.isLivePaused)
-                                .padding(.horizontal, Spacing.xl)
-                                .padding(.bottom, Spacing.lg)
+                            PlaudLiveWaveformVisualizer(
+                                isPaused: session.isLivePaused,
+                                audioPower: session.liveAudioPower
+                            )
+                            .padding(.horizontal, Spacing.xl)
+                            .padding(.bottom, Spacing.lg)
                         }
 
                         ForEach(session.blocks) { block in
@@ -920,7 +923,11 @@ public struct MeetingNoteView: View {
                 Text(payload.title)
                     .font(.system(size: 24, weight: .bold))
                     .foregroundStyle(Color.recapInk)
-                AskMarkdownText(source: payload.body, isStreaming: false)
+                if payload.skillId == "mindmap" {
+                    MindmapOutlineView(source: payload.body)
+                } else {
+                    AskMarkdownText(source: payload.body, isStreaming: false)
+                }
             }
         } else {
             // 笔记被删除等异常情况，回退总结
@@ -1544,25 +1551,23 @@ public struct MeetingNoteView: View {
     /// LIVE 统一底栏：左 辅助功能（记录此刻/完成）· 中 主控 · 右 问 Recap（AI 锚点）。
     /// 无论 LIVE（录音中/暂停）还是 REVIEW（会后），Ask Recap 均统一固定在右下角，符合单手人体工学与一致的 UI/UX 心理模型。
     private var liveStageBottom: some View {
-        GlassEffectContainer(spacing: Spacing.md) {
-            HStack(alignment: .center, spacing: 0) {
-                liveLeftSlot
-                    .frame(
-                        width: (session.isLivePaused && session.hasStartedRecording) ? nil : liveBottomSideSlot,
-                        height: liveBottomSideSlot
-                    )
+        HStack(alignment: .center, spacing: 0) {
+            liveLeftSlot
+                .frame(
+                    width: (session.isLivePaused && session.hasStartedRecording) ? nil : liveBottomSideSlot,
+                    height: liveBottomSideSlot
+                )
 
-                Spacer(minLength: Spacing.md)
+            Spacer(minLength: Spacing.md)
 
-                liveCenterControl
+            liveCenterControl
 
-                Spacer(minLength: Spacing.md)
+            Spacer(minLength: Spacing.md)
 
-                askLiveBottomButton
-                    .frame(width: liveBottomSideSlot, height: liveBottomSideSlot)
-            }
+            askLiveBottomButton
+                .frame(width: liveBottomSideSlot, height: liveBottomSideSlot)
         }
-        .padding(.horizontal, Spacing.xxl)
+        .padding(.horizontal, Spacing.xl)
         .padding(.top, Spacing.md)
         .padding(.bottom, Spacing.lg)
         .contentShape(Rectangle())
@@ -1597,35 +1602,34 @@ public struct MeetingNoteView: View {
                 accessibilityHint: session.hasStartedRecording ? "恢复收音" : "开始本场录音与转写"
             )
         } else {
-            // 时长叠在暂停钮上方（不拉高整列），左右 Ask/占位仍与圆钮光学对齐
             Button {
                 Haptics.impact(.light)
                 session.pauseLive()
             } label: {
-                Circle()
-                    .fill(Color(light: 0xFFFFFF, dark: 0x1F2329))
-                    .frame(width: 68, height: 68)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.recapCinnabar.opacity(0.4), lineWidth: 2)
-                    )
-                    .overlay(
-                        Image(systemName: RecapSymbol.pause)
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundStyle(Color.recapCinnabar)
-                    )
+                ZStack {
+                    Circle()
+                        .fill(Color.recapCinnabar.opacity(0.15))
+                        .frame(width: 72, height: 72)
+
+                    Circle()
+                        .fill(Color.recapCinnabar)
+                        .frame(width: 56, height: 56)
+
+                    Image(systemName: "pause.fill")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.white)
+                }
             }
             .buttonStyle(RecapPressStyle())
-            .shadow(color: Color.black.opacity(0.06), radius: 6, x: 0, y: 3)
             .accessibilityLabel("暂停录音")
             .accessibilityHint("停止收音，可继续或完成整理")
             .overlay(alignment: .top) {
                 Text(elapsedText(session.elapsed))
-                    .font(.recapTimestamp)
-                    .tracking(0.2)
-                    .foregroundStyle(Color.recapTea.opacity(0.9))
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .tracking(0.5)
+                    .foregroundStyle(Color.recapInk.opacity(0.85))
                     .monospacedDigit()
-                    .offset(y: -18)
+                    .offset(y: -22)
                     .accessibilityLabel("已录制 \(elapsedText(session.elapsed))")
             }
         }
@@ -1786,7 +1790,7 @@ public struct MeetingNoteView: View {
                 Button {
                     session.polishTranscript()
                 } label: {
-                    Label("优化逐字稿（补标点·纠错）", systemImage: "wand.and.stars")
+                    Label("优化原稿（补标点·纠错）", systemImage: "wand.and.stars")
                 }
             }
             // 端侧高保真重转（仅 REVIEW + feature flag 开 + 有本地录音时显示）
@@ -2369,14 +2373,14 @@ private struct PlaudAudioWaveformView: View {
     }
 }
 
-/// Plaud AI 实时收音动态声波场
+/// Plaud AI 真实麦克风收音动态声波场
 private struct PlaudLiveWaveformVisualizer: View {
     let isPaused: Bool
-    @State private var phase: Double = 0.0
+    let audioPower: Float
 
     var body: some View {
         VStack(spacing: Spacing.md) {
-            HStack(alignment: .center, spacing: 3) {
+            HStack(alignment: .center, spacing: 3.5) {
                 ForEach(0..<36, id: \.self) { i in
                     let height = barHeight(for: i)
                     RoundedRectangle(cornerRadius: 1.5)
@@ -2384,20 +2388,19 @@ private struct PlaudLiveWaveformVisualizer: View {
                             isPaused
                                 ? AnyShapeStyle(Color.recapTea.opacity(0.25))
                                 : AnyShapeStyle(LinearGradient(
-                                    colors: [Color.recapCinnabar, Color.recapOchre],
+                                    colors: [
+                                        Color.recapCinnabar,
+                                        Color(hex: 0xE25347)
+                                    ],
                                     startPoint: .top,
                                     endPoint: .bottom
                                 ))
                         )
                         .frame(width: 3, height: height)
+                        .animation(.smooth(duration: 0.12), value: height)
                 }
             }
             .frame(height: 52)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
-                    phase = .pi * 2
-                }
-            }
 
             Text(isPaused ? "录音已暂停 · 点击下方「完成」生成纪要" : "正在倾听中 · 开始讲话字幕实时呈现")
                 .font(.system(size: 13, weight: .medium))
@@ -2408,10 +2411,12 @@ private struct PlaudLiveWaveformVisualizer: View {
     }
 
     private func barHeight(for index: Int) -> CGFloat {
-        if isPaused { return 6 }
-        let base = sin(Double(index) * 0.4 + phase)
-        let normalized = (abs(base) * 0.75) + 0.25
-        return CGFloat(normalized * 40 + 8)
+        if isPaused { return 4 }
+        let centerDist = abs(Double(index) - 17.5) / 17.5
+        let bellFactor = cos(centerDist * .pi * 0.42)
+        let powerVal = CGFloat(max(0.05, audioPower))
+        let dynamicHeight = (powerVal * bellFactor * 44.0) + 4.0
+        return min(48.0, max(4.0, dynamicHeight))
     }
 }
 

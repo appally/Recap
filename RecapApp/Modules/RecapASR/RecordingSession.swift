@@ -8,6 +8,7 @@ public final class RecordingSession: ObservableObject {
     @Published public private(set) var engineKind: AsrEngineKind?
     @Published public private(set) var statusText: String = ""
     @Published public var lastError: String?
+    @Published public private(set) var currentAudioPower: Float = 0.0
 
     public var onPartial: ((String) -> Void)?
     public var onSegment: ((TranscriptSegment) -> Void)?
@@ -26,6 +27,11 @@ public final class RecordingSession: ObservableObject {
         if isRunning { _ = try? await stop() }
         lastError = nil
         statusText = "正在准备引擎…"
+        await recorder.setOnAudioPower { [weak self] power in
+            Task { @MainActor in
+                self?.currentAudioPower = power
+            }
+        }
         await Task.yield()
 
         // 引擎解析放到非主线程，避免 Speech/Keychain 探测卡住首帧

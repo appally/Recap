@@ -17,18 +17,10 @@ public struct ResearchDraftSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
-                    Text("⚠︎ AI 生成的调研草稿，请核实来源后使用")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.recapOchre)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Spacing.sm)
-                        .background(Color.recapOchre.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-
-                    if !draft.hasCitations {
-                        Text("⚠︎ 本次调研未取得可核实来源")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.recapCinnabar)
-                    }
+                    AIDisclaimerBanner(
+                        message: "⚠︎ AI 生成的调研草稿，请核实来源后使用",
+                        severeWarning: draft.hasCitations ? nil : "⚠︎ 本次调研未取得可核实来源"
+                    )
 
                     if draft.isPartial {
                         Text("（部分完成）")

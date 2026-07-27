@@ -32,11 +32,14 @@ public actor AudioRecorder {
 
     /// true = 中断开始；false = 中断结束并已尝试恢复。
     private var onInterrupted: (@Sendable (Bool) -> Void)?
-
-    public init() {}
+    private var onAudioPower: (@Sendable (Float) -> Void)?
 
     public func setOnInterrupted(_ handler: (@Sendable (Bool) -> Void)?) {
         onInterrupted = handler
+    }
+
+    public func setOnAudioPower(_ handler: (@Sendable (Float) -> Void)?) {
+        onAudioPower = handler
     }
 
     /// - Parameter fileURL: 若非 nil，将 16k mono Float32 PCM 追加写入该路径（与喂 ASR 同一缓冲）。
@@ -184,6 +187,17 @@ public actor AudioRecorder {
 
     private func handle(samples: [Float]) {
         handleCount += 1
+
+        if !samples.isEmpty {
+            var sum: Float = 0
+            for s in samples {
+                sum += s * s
+            }
+            let rms = sqrt(sum / Float(samples.count))
+            let power = min(1.0, max(0.0, rms * 6.0))
+            onAudioPower?(power)
+        }
+
         guard let continuation else { return }
         let out = resample(samples, from: inSampleRate, to: outSampleRate)
         guard !out.isEmpty else { return }
