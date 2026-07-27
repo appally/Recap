@@ -56,6 +56,8 @@ public final class MeetingSession: ObservableObject {
     private var postMeetingTask: Task<Void, Never>?
     /// 会后 LLM 润色任务（独立于 CoreML 的 postMeetingTask，二者可并发）。
     private var polishTask: Task<Void, Never>?
+    /// #6b：会后 LLM 纪要管线的后台名额；用户完成即切后台时争取时间让管线跑完。
+    private var minutesBgTaskID: UIBackgroundTaskIdentifier = .invalid
     private var endingLive = false
     /// 全新会进会已自动发起开麦（防 onAppear 重入）；session 是按 meeting 创建的 @StateObject，标志位天然按会议隔离。
     private var didAutoStartLive = false
@@ -714,6 +716,9 @@ public final class MeetingSession: ObservableObject {
         // 注意：不要覆盖仍在跑的 endLive 收尾 task；用独立 task 承接管线
         let pipelineTask = Task { [weak self] in
             guard let self else { return }
+            // #6b：争取后台时间让纪要管线跑完；管线结束（完成/失败/取消）即释放名额
+            self.beginMinutesBackgroundTask()
+            defer { self.endMinutesBackgroundTask() }
             var summaryText = ""
             var didCommitSummary = false
             do {
@@ -847,6 +852,30 @@ public final class MeetingSession: ObservableObject {
         postMeetingTask = nil
         polishTask?.cancel()
         polishTask = nil
+    }
+
+    /// #6a：回前台重排被后台取消的会后任务（幂等：已完成/在跑均跳过）。
+    public func reschedulePostMeetingCompute() {
+        guard phase == .review else { return }
+        scheduleDiarizationIfNeeded()
+        schedulePolishIfNeeded()
+    }
+
+    // MARK: - #6b Minutes pipeline background grace
+
+    /// 争取后台时间让 LLM 纪要管线跑完（用户点完成即切后台的常见路径）。
+    private func beginMinutesBackgroundTask() {
+        guard minutesBgTaskID == .invalid else { return }
+        minutesBgTaskID = UIApplication.shared.beginBackgroundTask(withName: "RecapMinutes") { [weak self] in
+            // 系统即将挂起：释放名额；管线若未完成会被中断，下次进页/重排可补救
+            Task { @MainActor in self?.endMinutesBackgroundTask() }
+        }
+    }
+
+    private func endMinutesBackgroundTask() {
+        guard minutesBgTaskID != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(minutesBgTaskID)
+        minutesBgTaskID = .invalid
     }
 
     /// REVIEW：触发逐字稿 LLM 润色（补标点 / 纠错别字 / 最小书面化），保段写回 polished。

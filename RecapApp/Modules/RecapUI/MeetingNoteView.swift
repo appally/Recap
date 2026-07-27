@@ -307,6 +307,16 @@ public struct MeetingNoteView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             researchRunner.handleScenePhase(phase)
+            switch phase {
+            case .background:
+                // #6a：后台取消会后 CoreML 重负载（ANE 后台可能被系统拒）；LLM 纪要管线由自身 bg task 保护
+                session.cancelPostMeetingCompute()
+            case .active:
+                // #6a：回前台重排被后台取消的会后任务（幂等：已完成/在跑均跳过）
+                session.reschedulePostMeetingCompute()
+            default:
+                break
+            }
         }
         .onDisappear {
             session.pauseOrTeardownForDisappear()
