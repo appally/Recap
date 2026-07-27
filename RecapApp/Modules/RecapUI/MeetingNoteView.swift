@@ -342,16 +342,6 @@ public struct MeetingNoteView: View {
             : "去设置配置模型后可生成纪要"
     }
 
-    /// 顶栏标题：Review 再回正文（LIVE 阶段统一由 LiveSonicCapsule 呈现，不展示文字标题）。
-    private var showsStageTitleInTopBar: Bool {
-        if isSettling { return false }
-        switch session.phase {
-        case .live: return false
-        case .processing: return false
-        case .review: return false // 标题在正文 H1
-        }
-    }
-
     private var hasLocalAudio: Bool {
         guard let path = meeting.audioPath else { return false }
         return MeetingAudioStore.fileExists(storedPath: path)
@@ -413,28 +403,15 @@ public struct MeetingNoteView: View {
                 .onTapGesture {
                     dismissFromTopBar()
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(capsuleAccessibilityLabel)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { dismissFromTopBar() }
             } else if session.phase == .review {
                 HStack(spacing: 24) {
                     segHeaderButton("来源", .source)
                     segHeaderButton("笔记", .notes)
                 }
-            } else if showsStageTitleInTopBar {
-                VStack(spacing: 1) {
-                    Text(meeting.title)
-                        .font(.system(size: 15, weight: .semibold, design: .default))
-                        .tracking(0.1)
-                        .foregroundStyle(Color.recapInk)
-                        .lineLimit(1)
-                    if let meta = liveTopMetaText {
-                        Text(meta)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .monospacedDigit()
-                            .tracking(0.2)
-                            .foregroundStyle(Color.recapOchre)
-                    }
-                }
-                .padding(.horizontal, 100)
-                .allowsHitTesting(false)
             }
         }
     }
@@ -644,18 +621,15 @@ public struct MeetingNoteView: View {
         return "开始讲话，字幕会出现在这里"
     }
 
-    /// 录音中显示时长；暂停后给「已暂停 · 时长」。
-    private var liveTopMetaText: String? {
-        if session.isLivePaused {
-            guard session.hasStartedRecording else { return nil }
-            return "已暂停 · \(elapsedText(session.elapsed))"
-        }
-        return elapsedText(session.elapsed)
-    }
-
     private var topBarDismissAccessibilityLabel: String {
         if session.phase == .live && !isSettling { return "暂停并收起" }
         return "返回"
+    }
+
+    /// #M6：声波时间胶囊的 VoiceOver 标签（含状态与时长），点按 = 暂停并收起。
+    private var capsuleAccessibilityLabel: String {
+        let time = elapsedText(session.elapsed)
+        return session.isLivePaused ? "已暂停，已录制 \(time)" : "录音中，已录制 \(time)"
     }
 
     /// 异常 / 暂停 / 演示才出字；正常收音不写「正在收音」。
