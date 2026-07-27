@@ -662,10 +662,9 @@ public struct MeetingNoteView: View {
     private var liveStatusLabel: String {
         if session.isUsingMockAudio { return "演示字幕" }
         if session.isLivePaused {
-            // 启动台无流末状态字；暂停后默认「已暂停」
+            // 暂停态始终显「已暂停」，不被迟到/陈旧 statusMessage 盖住（pauseLive 已摘除回调）
             guard session.hasStartedRecording else { return "" }
-            let msg = session.statusMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-            return msg.isEmpty ? "已暂停" : msg
+            return "已暂停"
         }
         if session.liveStartFailed {
             return session.statusMessage.isEmpty ? "转写引擎启动失败" : session.statusMessage
@@ -913,10 +912,12 @@ public struct MeetingNoteView: View {
 
     // MARK: Notes tab（笔记层）
 
-    /// 笔记 Tab：模板切换器 + 当前笔记（按 `selectedNote` 分发 inline 渲染）。
+    /// 笔记 Tab：模板切换器 + 当前笔记（整理态极简全空，避免无关干扰）。
     private var notesBody: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            noteSwitcherBar
+            if session.revealStep >= 1 || session.phase == .review {
+                noteSwitcherBar
+            }
             currentNoteView
         }
     }
@@ -931,22 +932,24 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// 总结笔记：复用既有 disclaimer + Plaud H1 + `summaryBody`（结构化交互保留）。
+    /// 总结笔记：整理态时隐藏 H1 标题、TAB 与 AI 声明，保持纯净高级舞台；完成降落后再展开纪要头部。
     private var summaryNoteView: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
-            Text("内容由 AI 生成，仅供参考")
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.recapTea.opacity(0.65))
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 2)
+            if session.revealStep >= 1 || session.phase == .review {
+                Text("内容由 AI 生成，仅供参考")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.recapTea.opacity(0.65))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 2)
 
-            // Plaud AI 风格 H1 页面大标题（大字号粗体）
-            Text(meeting.title)
-                .font(.system(size: 30, weight: .bold))
-                .foregroundStyle(Color.recapInk)
-                .lineSpacing(4)
-                .padding(.top, Spacing.xs)
-                .padding(.bottom, Spacing.xs)
+                // Plaud AI 风格 H1 页面大标题（大字号粗体）
+                Text(meeting.title)
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(Color.recapInk)
+                    .lineSpacing(4)
+                    .padding(.top, Spacing.xs)
+                    .padding(.bottom, Spacing.xs)
+            }
 
             summaryBody
         }
@@ -1689,7 +1692,8 @@ public struct MeetingNoteView: View {
         if session.isLivePaused && session.hasStartedRecording {
             liveFinishButton
                 .transition(.scale.combined(with: .opacity))
-        } else {
+        } else if !session.liveStartFailed {
+            // 失败态不挂相机（无录音可锚定）；失败操作在正文 liveFailureActions
             cameraLiveBottomButton
                 .transition(.scale.combined(with: .opacity))
         }
@@ -1931,7 +1935,11 @@ private struct ProcessStageCanvas: View {
     }
 
     private func stageStack(t: Double) -> some View {
-        VStack(spacing: 0) {
+        ZStack(alignment: .bottom) {
+            // 全宽 Google Gemini 风格底部流光池背景
+            GeminiFluidGlowView(reduceMotion: reduceMotion)
+                .opacity(appeared ? 1 : 0)
+
             ZStack {
                 atmosphere(t: t)
                 if showGhost, !ghostBlocks.isEmpty {
@@ -1940,15 +1948,7 @@ private struct ProcessStageCanvas: View {
                 }
                 signalCore(t: t)
             }
-            .frame(maxHeight: .infinity)
-
-            // 底部 Google Gemini 风格流光 Bar
-            VStack(spacing: Spacing.md) {
-                GeminiFluidGlowView(height: 5, reduceMotion: reduceMotion)
-                    .padding(.horizontal, Spacing.xxl)
-                    .opacity(appeared ? 1 : 0)
-            }
-            .padding(.bottom, Spacing.xl)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
