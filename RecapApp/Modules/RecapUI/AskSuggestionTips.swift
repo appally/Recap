@@ -1,26 +1,41 @@
 import Foundation
 import RecapModels
 
-/// 按会中/会后上下文生成「可能想问」的 tips（短、可点、不编造会外事实）。
+/// 「可能想问」chips 的 L1 规则层：按 `AskStage` 五态生成短、可点、不编造会外事实的提示问题。
+///
+/// 瞬时、纯函数、零成本，作为 `AgentInvokeSheet` 打开时的打底 chips；
+/// L2 LLM 动态层（`SuggestedQuestionsGenerator`）异步返回更高定制的问题后，
+/// 由调用方决定是否替换。本层永远保证每态都有合理问题，即使 L2 失败也不空白。
 public enum AskSuggestionTips {
 
     public static func make(
-        phase: MeetingPhase,
+        stage: AskStage,
         summary: MeetingSummary?,
         actionItems: [ActionItem],
+        agendaTitles: [String] = [],
         briefOpenItems: [String] = [],
+        linkedMeetingTitle: String? = nil,
         recentTranscript: String = "",
         hasBrief: Bool = false
     ) -> [String] {
         var tips: [String] = []
-        switch phase {
-        case .live, .processing:
-            tips.append(contentsOf: liveTips(
-                briefOpenItems: briefOpenItems,
-                recentTranscript: recentTranscript,
-                hasBrief: hasBrief,
-                processing: phase == .processing
+        switch stage {
+        case .preMeeting:
+            tips.append(contentsOf: preMeetingTips(
+                agendaTitles: agendaTitles,
+                linkedTitle: linkedMeetingTitle,
+                hasBrief: hasBrief
             ))
+        case .liveRecording:
+            tips.append(contentsOf: liveRecordingTips(
+                briefOpenItems: briefOpenItems,
+                transcript: recentTranscript,
+                hasBrief: hasBrief
+            ))
+        case .livePaused:
+            tips.append(contentsOf: livePausedTips(briefOpenItems: briefOpenItems))
+        case .processing:
+            tips.append(contentsOf: ["还要多久", "先给我要点", "有看到待办吗"])
         case .review:
             tips.append(contentsOf: reviewTips(
                 summary: summary,
@@ -31,17 +46,33 @@ public enum AskSuggestionTips {
         return dedupe(tips, limit: 5)
     }
 
-    // MARK: - Live
+    // MARK: - Pre-meeting（准备向，会议前·启动台）
 
-    private static func liveTips(
-        briefOpenItems: [String],
-        recentTranscript: String,
-        hasBrief: Bool,
-        processing: Bool
+    private static func preMeetingTips(
+        agendaTitles: [String],
+        linkedTitle: String?,
+        hasBrief: Bool
     ) -> [String] {
-        if processing {
-            return ["还要多久", "先给我要点"]
+        var tips: [String] = ["这场想达成什么", "先过一下议程"]
+        if let first = agendaTitles.first(where: { !$0.isEmpty }) {
+            tips.append("「\(clip(first, max: 12))」要准备啥")
         }
+        if let linkedTitle {
+            tips.append("「\(clip(linkedTitle, max: 10))」遗留对接")
+        }
+        if hasBrief {
+            tips.append("资料里有几个要点")
+        }
+        return tips
+    }
+
+    // MARK: - Live recording（补课向，会议中·录音中）
+
+    private static func liveRecordingTips(
+        briefOpenItems: [String],
+        transcript: String,
+        hasBrief: Bool
+    ) -> [String] {
         var tips: [String] = ["总结到此刻"]
         if hasBrief {
             tips.append("第三项议程讲了啥")
@@ -51,7 +82,7 @@ public enum AskSuggestionTips {
             guard !short.isEmpty else { continue }
             tips.append("「\(short)」有结论吗")
         }
-        if let snippet = recentSnippet(from: recentTranscript) {
+        if let snippet = recentSnippet(from: transcript) {
             tips.append("「\(snippet)」是什么意思")
         }
         tips.append("刚才拍板了什么")
@@ -59,7 +90,18 @@ public enum AskSuggestionTips {
         return tips
     }
 
-    // MARK: - Review
+    // MARK: - Live paused（拍板向，会议中·暂停/决策台）
+
+    private static func livePausedTips(briefOpenItems: [String]) -> [String] {
+        var tips: [String] = ["到目前为止的要点", "刚才拍板了什么"]
+        if let first = briefOpenItems.first(where: { !$0.isEmpty }) {
+            tips.append("「\(clip(first, max: 14))」定了吗")
+        }
+        tips.append("下一步待办")
+        return tips
+    }
+
+    // MARK: - Review（行动/分析向，会后）
 
     private static func reviewTips(
         summary: MeetingSummary?,

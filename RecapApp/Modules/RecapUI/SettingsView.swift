@@ -37,17 +37,19 @@ public struct SettingsView: View {
     public var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: Spacing.xxl) {
-                    accountSection
-                    intelligenceSection
-                    privacySection
-                    aboutSection
+                VStack(alignment: .center, spacing: Spacing.xl) {
+                    usageDashboardSection
+
+                    VStack(alignment: .leading, spacing: Spacing.md) {
+                        plaudNavigationList
 #if DEBUG
-                    debugSection
+                        debugSection
 #endif
+                    }
+                    .padding(.top, Spacing.sm)
                 }
                 .padding(.horizontal, Spacing.xl)
-                .padding(.top, Spacing.sm)
+                .padding(.top, Spacing.md)
                 .padding(.bottom, Spacing.xxxl)
             }
             .scrollIndicators(.hidden)
@@ -58,7 +60,7 @@ public struct SettingsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
                         .fontWeight(.semibold)
-                        .foregroundStyle(Color.recapCeladon)
+                        .foregroundStyle(Color.recapInk)
                 }
             }
             .sheet(isPresented: $showDebug) {
@@ -71,179 +73,60 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Account
+    // MARK: - Plaud AI Style 4 Top-Level Entry List
 
-    /// 身份与权益是一组：会员不属于「智能服务」，同一张卡里读完更省一次跳转。
-    private var accountSection: some View {
-        SettingsSection(title: "账户") {
+    private var plaudNavigationList: some View {
+        VStack(spacing: 0) {
+            // 1. 个性化设置
+            NavigationLink {
+                PersonalizationSettingsView()
+            } label: {
+                SettingsNavRow(
+                    icon: "slider.horizontal.3",
+                    iconTint: .recapInk,
+                    title: "个性化设置"
+                )
+            }
+            .buttonStyle(SettingsPressStyle())
+
+            SettingsDivider()
+
+            // 2. 偏好设置
+            NavigationLink {
+                PreferencesSettingsView()
+                    .onDisappear { refreshToken += 1 }
+            } label: {
+                SettingsNavRow(
+                    icon: "slider.horizontal.2.square",
+                    iconTint: .recapInk,
+                    title: "偏好设置"
+                )
+            }
+            .buttonStyle(SettingsPressStyle())
+
+            SettingsDivider()
+
+            // 3. 账号
             NavigationLink {
                 AccountSettingsView()
                     .onDisappear { refreshToken += 1 }
             } label: {
-                accountRow
-            }
-            .buttonStyle(SettingsPressStyle())
-
-            SettingsDivider(inset: Spacing.lg + Self.avatarSize + Spacing.md)
-
-            NavigationLink {
-                MembershipSettingsView()
-                    .onDisappear { refreshToken += 1 }
-            } label: {
                 SettingsNavRow(
-                    icon: "crown.fill",
-                    iconTint: .recapOchre,
-                    title: "会员与订阅",
-                    value: membership.isPro ? "Pro" : "免费"
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-        }
-    }
-
-    private static let avatarSize: CGFloat = 48
-
-    private var accountRow: some View {
-        HStack(spacing: Spacing.md) {
-            SettingsAvatar(account: account, size: Self.avatarSize)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(account.isSignedIn ? account.displayName : "登录 Recap")
-                    .font(.system(size: 17, weight: .semibold, design: .default))
-                    .foregroundStyle(Color.recapInk)
-                Text(accountSubtitle)
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.recapTea)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: Spacing.sm)
-
-            SettingsChevron()
-        }
-        .padding(Spacing.lg)
-        .contentShape(Rectangle())
-    }
-
-    /// 权益已在下一行独立成条，这里不再复述档位，改说身份来源。
-    private var accountSubtitle: String {
-        guard account.isSignedIn else { return "绑定订阅，或继续以访客使用" }
-        if let email = account.email, !email.isEmpty { return email }
-        switch account.provider {
-        case .apple: return "已通过 Apple 登录"
-        case .local, .none: return "本机资料"
-        }
-    }
-
-    // MARK: - Intelligence
-
-    private var intelligenceSection: some View {
-        SettingsSection(
-            title: "智能服务",
-            footnote: "大模型与转写均可切换来源：会员云端免配 Key，或自备各厂商密钥。"
-        ) {
-            NavigationLink {
-                LLMSettingsView()
-                    .onDisappear { refreshToken += 1 }
-            } label: {
-                SettingsNavRow(
-                    icon: "sparkles",
-                    iconTint: .recapCeladon,
-                    title: "大模型",
-                    value: llmValue
+                    icon: "person",
+                    iconTint: .recapInk,
+                    title: "账号",
+                    value: account.isSignedIn ? account.displayName : "未登录"
                 )
             }
             .buttonStyle(SettingsPressStyle())
 
             SettingsDivider()
 
-            NavigationLink {
-                ASRSettingsView()
-                    .onDisappear { refreshToken += 1 }
-            } label: {
-                SettingsNavRow(
-                    icon: "waveform",
-                    iconTint: .recapOchre,
-                    title: "转写引擎",
-                    value: asrPreference.title
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-        }
-    }
-
-    private var llmValue: String {
-        switch serviceMode {
-        case .recapCloud: return "Recap 云端"
-        case .byok: return llmTemplate.displayName
-        }
-    }
-
-    // MARK: - Privacy
-
-    private var privacySection: some View {
-        SettingsSection(title: "数据与隐私") {
-            NavigationLink {
-                DataPrivacySettingsView()
-            } label: {
-                SettingsNavRow(
-                    icon: "externaldrive.fill",
-                    iconTint: .recapTea,
-                    title: "本机数据"
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-
-            SettingsDivider()
-
-            NavigationLink {
-                LegalDocumentView(kind: .privacy)
-            } label: {
-                SettingsNavRow(
-                    icon: "hand.raised.fill",
-                    iconTint: .recapCeladon,
-                    title: "隐私政策"
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-
-            SettingsDivider()
-
-            NavigationLink {
-                LegalDocumentView(kind: .terms)
-            } label: {
-                SettingsNavRow(
-                    icon: "doc.text.fill",
-                    iconTint: .recapOchre,
-                    title: "用户协议"
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-        }
-    }
-
-    // MARK: - About
-
-    private var aboutSection: some View {
-        SettingsSection(title: "关于") {
-            NavigationLink {
-                AboutRecapView()
-            } label: {
-                SettingsNavRow(
-                    icon: "info.circle.fill",
-                    iconTint: .recapCeladon,
-                    title: "关于 Recap",
-                    value: shortVersion
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-
-            SettingsDivider()
-
+            // 4. 帮助与支持
             Link(destination: RecapLegal.supportURL) {
                 SettingsNavRow(
-                    icon: "questionmark.circle.fill",
-                    iconTint: .recapTea,
+                    icon: "questionmark.square",
+                    iconTint: .recapInk,
                     title: "帮助与支持"
                 )
             }
@@ -269,5 +152,91 @@ public struct SettingsView: View {
 
     private var shortVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+    }
+
+    // MARK: - Plaud AI Style Usage Dashboard & Activity Heatmap
+
+    private var usageDashboardSection: some View {
+        VStack(spacing: Spacing.lg) {
+            // Top circular badge / ID
+            VStack(spacing: Spacing.xs) {
+                ZStack {
+                    Circle()
+                        .fill(Color(light: 0xECEEEF, dark: 0x1E2228))
+                        .frame(width: 84, height: 84)
+                    Text("0")
+                        .font(.system(size: 38, weight: .regular, design: .default))
+                        .foregroundStyle(Color.recapInk)
+                }
+
+                Text("RECAP - 0420")
+                    .font(.system(size: 14, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.recapTea)
+                    .padding(.top, 2)
+            }
+            .padding(.top, Spacing.sm)
+
+            // Core 3 Metrics
+            HStack(spacing: 0) {
+                metricColumn(label: "使用天数", value: "1", unit: "")
+                Spacer()
+                metricColumn(label: "录音总数", value: "6", unit: "")
+                Spacer()
+                metricColumn(label: "总使用时长", value: "0.8", unit: "小时")
+            }
+            .padding(.horizontal, Spacing.lg)
+            .padding(.vertical, Spacing.xs)
+
+            // GitHub style Activity Heatmap Grid
+            ActivityHeatmapGrid()
+                .padding(.top, Spacing.xs)
+        }
+        .padding(.vertical, Spacing.md)
+    }
+
+    private func metricColumn(label: String, value: String, unit: String) -> some View {
+        VStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.recapTea)
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(value)
+                    .font(.system(size: 26, weight: .medium, design: .default))
+                    .foregroundStyle(Color.recapInk)
+                if !unit.isEmpty {
+                    Text(unit)
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Color.recapTea)
+                }
+            }
+        }
+        .frame(minWidth: 80)
+    }
+}
+
+/// Plaud AI / GitHub 风格打卡热力图网格（7行 x 22列）
+private struct ActivityHeatmapGrid: View {
+    private let rowIndices = Array(0..<7)
+    private let columnIndices = Array(0..<22)
+    private let activeIndex = (row: 1, col: 21) // 当前活跃卡点
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ForEach(rowIndices, id: \.self) { row in
+                HStack(spacing: 3) {
+                    ForEach(columnIndices, id: \.self) { col in
+                        let isActive = (row == activeIndex.row && col == activeIndex.col)
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(
+                                isActive
+                                ? Color(hex: 0x38C5F2) // Plaud 经典天蓝色高亮
+                                : Color(light: 0xEAECEE, dark: 0x1F2329)
+                            )
+                            .frame(width: 10, height: 10)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, Spacing.xs)
     }
 }

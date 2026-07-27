@@ -72,29 +72,14 @@ struct MembershipSettingsView: View {
         }
         .padding(Spacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: Radius.stage, style: .continuous)
-                .fill(Color.recapPaper)
-                .overlay {
-                    RoundedRectangle(cornerRadius: Radius.stage, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.recapCeladon.opacity(0.10),
-                                    Color.clear,
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .allowsHitTesting(false)
-                }
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(light: 0xF6F7F8, dark: 0x16191D))
                 .overlay(
-                    RoundedRectangle(cornerRadius: Radius.stage, style: .continuous)
-                        .strokeBorder(Color.recapCeladon.opacity(0.22), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.recapTea.opacity(0.12), lineWidth: 0.5)
                 )
-                .shadow(color: .recapShadow, radius: 12, y: 5)
-        }
+        )
     }
 
     // MARK: - Offer

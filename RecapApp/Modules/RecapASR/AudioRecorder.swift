@@ -79,7 +79,10 @@ public actor AudioRecorder {
             throw RecorderError.invalidInputFormat
         }
 
-        let (stream, cont) = AsyncStream.makeStream(of: [Float].self)
+        // 有界安全网：约 400 chunk ≈ 34s @85ms/chunk。云端引擎解耦 sender 后 feed 近乎即时，
+        // 正常此缓冲恒接近空；仅 actor 饱和等极端情形才丢最旧 chunk（bufferingOldest 保序、
+        // 丢新），由 RecordingSession 节奏监测兜底告警。防长会议弱网无界堆积 OOM。
+        let (stream, cont) = AsyncStream.makeStream(of: [Float].self, bufferingPolicy: .bufferingOldest(400))
         continuation = cont
 
         installTap(format: inFormat)

@@ -21,6 +21,8 @@ struct RecapAppApp: App {
         if #available(iOS 26.0, *) {
             SpeechAnalyzerEngine.prefetchAssetsInBackground()
         }
+        // 后台预拉 SpeakerKit 说话人模型（~10.7MB），避免首次会后说话人分离卡在下载上
+        SpeakerKitDiarizer.prefetchInBackground()
     }
 
     var body: some Scene {

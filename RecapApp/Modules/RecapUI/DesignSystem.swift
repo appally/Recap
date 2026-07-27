@@ -3,7 +3,7 @@ import UIKit
 
 // MARK: - 动态颜色（light / dark 自适应）
 
-private extension Color {
+public extension Color {
     init(light: UInt32, lightAlpha: Double = 1, dark: UInt32, darkAlpha: Double = 1) {
         self.init(uiColor: UIColor(dynamicProvider: { trait in
             trait.userInterfaceStyle == .dark
@@ -58,6 +58,9 @@ public extension Color {
 }
 
 public extension Font {
+    /// Plaud 杂志风格大标题（全部文件 ∨ 等）
+    static let recapHeroTitle = Font.system(size: 32, weight: .bold, design: .default)
+        .leading(.tight)
     /// 首页品牌英雄字。
     static let recapHomeBrand = Font.system(size: 32, weight: .bold, design: .default)
     /// 眉题 / 小徽记。
@@ -82,6 +85,8 @@ public extension Font {
 
     static let recapSection = Font.system(size: 12, weight: .semibold, design: .default)
     static let recapMeta = Font.system(size: 13, weight: .regular, design: .default)
+    /// 极简内联元数据（19:43 | 16分钟）
+    static let recapSubMeta = Font.system(size: 13, weight: .regular, design: .default)
 
     static let recapTimestamp = Font.system(size: 12, weight: .regular, design: .monospaced)
         .monospacedDigit()

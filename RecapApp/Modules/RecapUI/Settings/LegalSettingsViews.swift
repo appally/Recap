@@ -42,13 +42,9 @@ struct LegalDocumentView: View {
                 Link(destination: kind.url) {
                     SettingsNavRow(
                         icon: "safari",
-                        iconTint: .recapCeladon,
+                        iconTint: .recapInk,
                         title: "在浏览器中打开完整版",
                         showChevron: true
-                    )
-                    .background(
-                        Color.recapPaper,
-                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     )
                 }
             }
@@ -82,7 +78,7 @@ struct DataPrivacySettingsView: View {
                     } label: {
                         SettingsNavRow(
                             icon: "square.and.arrow.up",
-                            iconTint: .recapCeladon,
+                            iconTint: .recapInk,
                             title: "导出会议数据",
                             value: "即将推出"
                         )
@@ -95,7 +91,7 @@ struct DataPrivacySettingsView: View {
                         showClearConfirm = true
                     } label: {
                         SettingsNavRow(
-                            icon: "trash.fill",
+                            icon: "trash",
                             iconTint: .recapCinnabar,
                             title: "清除全部会议数据",
                             showChevron: false
@@ -103,15 +99,11 @@ struct DataPrivacySettingsView: View {
                     }
                     .buttonStyle(SettingsPressStyle())
                 }
-                .background(
-                    Color.recapPaper,
-                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                )
 
-                Text("清除不会删除 Keychain 中的 API Key。如需一并清除，请到大模型 / 转写设置中手动移除。")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.recapTea.opacity(0.9))
-                    .lineSpacing(2)
+                Text("清除不会删除 Keychain 中的 API Key。如需一并清除，请到偏好设置中手动移除。")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.recapTea.opacity(0.85))
+                    .lineSpacing(3)
 
                 if !status.isEmpty {
                     Text(status)
@@ -153,12 +145,8 @@ struct DataPrivacySettingsView: View {
                 .foregroundStyle(Color.recapTea)
                 .lineSpacing(3)
         }
-        .padding(Spacing.lg)
+        .padding(.vertical, Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color.recapPaper,
-            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-        )
     }
 
     private func clearAllMeetings() {

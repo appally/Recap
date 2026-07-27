@@ -14,7 +14,8 @@ public enum ASRFeatureFlags {
         set { UserDefaults.standard.set(newValue, forKey: fluidRetranscribeKey) }
     }
 
-    /// LIVE 静音门控（CPU 能量 VAD），减少 SpeechAnalyzer 静音幻听。低风险，POC 后可默认开。
+    /// （已弃用 LIVE 喂帧门控——丢帧会饿死流式 SpeechAnalyzer 并压缩其音频时间轴，曾导致「开
+    ///   启后录音无字幕」。flag 保留供未来「结果层去幻听」重构复用；当前无 LIVE 代码读它。）
     public static var vadGateEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: vadGateKey) }
         set { UserDefaults.standard.set(newValue, forKey: vadGateKey) }

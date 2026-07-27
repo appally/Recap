@@ -17,8 +17,6 @@ public final class RecordingSession: ObservableObject {
     private var engine: (any AsrEngine)?
     private var audioTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
-    /// LIVE VAD 门控（CPU 能量门限）；flag 关时为 nil → 恒喂 ASR（回归原行为）。
-    private var vad: EnergyVAD?
 
     public init() {}
 
@@ -88,15 +86,25 @@ public final class RecordingSession: ObservableObject {
             }
 
             let audioStream = try await recorder.start(targetSampleRate: sampleRate, fileURL: audioFileURL)
-            vad = ASRFeatureFlags.vadGateEnabled ? EnergyVAD() : nil
             isRunning = true
             statusText = "录音中"
 
             audioTask = Task { [weak self] in
+                // 节奏监测：墙钟/音频 > 1.8（处理持续慢于实时）→ 诚实告警「录音处理滞后」；
+                //   < 1.2 恢复则清除。云端 sender 解耦后正常永不触发；仅极端反压时让用户可见
+                //   （盘上 PCM 完整，建议结束后重转）。复用 onError → statusMessage 通路。
+                var lagWarned = false
+                var windowStart = Date()
+                var audioAccum: Double = 0
+                let rate = sampleRate
                 for await chunk in audioStream {
                     guard let self, !Task.isCancelled else { break }
-                    // VAD 门控：静音帧不喂 ASR（落盘 PCM / elapsed 时间轴不受影响，仅省 ASR 算力 + 去幻听）
-                    if !self.vadShouldFeed(chunk) { continue }
+                    // ⚠️ 必须「每帧都喂」SpeechAnalyzer——流式转写依赖连续音频流，丢帧会：
+                    //   ① 饿死转写器（首条 partial 需累积数百 ms 连续音频才吐字）→ 字幕不出现；
+                    //   ② 压缩其内部音频时间轴（result.range.seconds 按「已喂采样」累计，非墙钟），
+                    //      破坏 start/end 与落盘 PCM 的对齐 → 会后说话人分离错位。
+                    //   故「去静音幻听」不在此层做；若要做，应改在结果层（仅抑制 partial、永不
+                    //   抑制 final，最坏只是「不够实时」而非「无字幕」）。见 EnergyVAD 头注释。
                     do {
                         try await self.engine?.feed(chunk)
                     } catch {
@@ -104,6 +112,19 @@ public final class RecordingSession: ObservableObject {
                         let msg = error.localizedDescription
                         self.lastError = msg
                         self.onError?(msg)
+                    }
+                    audioAccum += Double(chunk.count) / rate
+                    if audioAccum >= 5.0 {
+                        let ratio = Date().timeIntervalSince(windowStart) / audioAccum
+                        if ratio > 1.8, !lagWarned {
+                            self.onError?("录音处理滞后，字幕可能不准，建议结束后重转")
+                            lagWarned = true
+                        } else if ratio < 1.2, lagWarned {
+                            self.onError?("")
+                            lagWarned = false
+                        }
+                        windowStart = Date()
+                        audioAccum = 0
                     }
                 }
             }
@@ -145,11 +166,6 @@ public final class RecordingSession: ObservableObject {
         isRunning = false
         statusText = "已停止"
         return result
-    }
-
-    /// VAD 门控判定：flag 关 / `vad` 为 nil → 恒喂（回归原行为）；否则走能量+过零率状态机。
-    private func vadShouldFeed(_ chunk: [Float]) -> Bool {
-        vad?.shouldFeed(chunk) ?? true
     }
 
     private static func withTimeout<T: Sendable>(

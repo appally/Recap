@@ -25,12 +25,14 @@ public struct MeetingListView: View {
     @State private var path = NavigationPath()
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
-    /// 冷启动入场门控：本视图生命周期内只播一次，pop 回首页不重播。
+    @State private var searchText = ""
+    @State private var showSearchField = false
+    /// 冷启动入场门控：仅驱动位移（offset），不用 opacity——opacity 从 0 起的淡入会产生
+    /// 至少一帧空白（onAppear 晚于首帧 commit），曾被感知为「列表先出、标题后出」的卡顿。
+    /// 本视图生命周期内只播一次，pop 回首页不重播。
     @State private var appeared = false
     @State private var pendingDelete: PendingMeetingDelete?
     @State private var swipedMeetingID: UUID?
-    @State private var briefMeetingID: UUID?
-    @State private var showBriefSheet = false
 
     public init() {}
 
@@ -39,18 +41,29 @@ public struct MeetingListView: View {
         reduceMotion ? 0 : points
     }
 
+    private var filteredMeetings: [Meeting] {
+        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return meetings }
+        let q = trimmed.lowercased()
+        return meetings.filter {
+            $0.title.lowercased().contains(q) ||
+            ($0.tldrPreview?.lowercased().contains(q) ?? false) ||
+            ($0.locationDisplay?.lowercased().contains(q) ?? false)
+        }
+    }
+
     private var liveMeetings: [Meeting] {
-        meetings.filter { $0.phase == .live }
+        filteredMeetings.filter { $0.phase == .live }
     }
 
     private var todayMeetings: [Meeting] {
-        meetings.filter {
+        filteredMeetings.filter {
             Calendar.current.isDateInToday($0.startedAt) && $0.phase != .live
         }
     }
 
     private var earlierMeetings: [Meeting] {
-        meetings.filter {
+        filteredMeetings.filter {
             !Calendar.current.isDateInToday($0.startedAt) && $0.phase != .live
         }
     }
@@ -86,19 +99,16 @@ public struct MeetingListView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         header
                             .padding(.bottom, Spacing.xxxl)
-                            .opacity(appeared ? 1 : 0)
                             .offset(y: appeared ? 0 : enterOffset(8))
 
                         if meetings.isEmpty {
                             emptyState
                                 .padding(.top, Spacing.xl)
-                                .opacity(appeared ? 1 : 0)
                                 .offset(y: appeared ? 0 : enterOffset(10))
                         } else {
                             if !liveMeetings.isEmpty {
                                 liveStage
                                     .padding(.bottom, Spacing.xxxl)
-                                    .opacity(appeared ? 1 : 0)
                                     .offset(y: appeared ? 0 : enterOffset(10))
                             }
 
@@ -133,13 +143,15 @@ public struct MeetingListView: View {
                     startLiveMeeting()
                 }
                 .padding(.bottom, Spacing.xxl)
-                .opacity(appeared ? 1 : 0)
                 .offset(y: appeared ? 0 : enterOffset(12))
             }
             .navigationDestination(for: MeetingRoute.self) { route in
                 destination(for: route)
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    searchButton
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     accountButton
                 }
@@ -150,12 +162,6 @@ public struct MeetingListView: View {
             .sheet(isPresented: $showSettings) {
                 SettingsView()
                     .environment(MembershipStore.shared)
-            }
-            .sheet(isPresented: $showBriefSheet, onDismiss: { briefMeetingID = nil }) {
-                if let id = briefMeetingID,
-                   let meeting = meetings.first(where: { $0.id == id }) {
-                    BriefSheet(meeting: meeting, isPresented: $showBriefSheet)
-                }
             }
             // 用 alert 而非 confirmationDialog：iOS 26 GlassPopover + Alert 内部约束易冲突，确认钮可能点不到
             .alert(
@@ -220,27 +226,33 @@ public struct MeetingListView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Recap")
-                .font(.recapHomeBrand)
-                .tracking(-0.6)
-                .foregroundStyle(Color.recapInk)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("全部文件")
+                    .font(.recapHeroTitle)
+                    .tracking(-0.5)
+                    .foregroundStyle(Color.recapInk)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.recapInk)
+            }
 
             if !meetings.isEmpty {
                 Text(statsLine)
-                    .font(.system(size: 13, weight: .medium, design: .default))
+                    .font(.system(size: 13, weight: .regular, design: .default))
                     .foregroundStyle(Color.recapTea)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, Spacing.md)
+        .padding(.top, Spacing.lg)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(meetings.isEmpty ? "Recap" : "Recap，\(statsLine)")
+        .accessibilityLabel(meetings.isEmpty ? "全部文件" : "全部文件，\(statsLine)")
     }
 
     private var statsLine: String {
         var parts: [String] = []
         if !liveMeetings.isEmpty {
-            parts.append("\(liveMeetings.count) 场未结束")
+            parts.append("\(liveMeetings.count) 份草稿")
         }
         let archived = todayMeetings.count + earlierMeetings.count
         if archived > 0 {
@@ -256,18 +268,28 @@ public struct MeetingListView: View {
 
     private var liveStage: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            // 列表上的 live 会议 = 已离开录音页，语义为「未结束 / 已暂停」
-            sectionEyebrow("未结束", live: true)
+            // 列表上的 live 会议 = 已离开录音页，语义为「草稿 / 已暂停」
+            sectionEyebrow("草稿", live: true)
 
             VStack(spacing: Spacing.sm) {
                 ForEach(liveMeetings) { m in
-                    Button {
-                        path.append(MeetingRoute.live(m.id))
-                    } label: {
+                    SwipeableMeetingRow(
+                        isOpen: swipedMeetingID == m.id,
+                        onOpen: { swipedMeetingID = m.id },
+                        onClose: { if swipedMeetingID == m.id { swipedMeetingID = nil } },
+                        onDelete: { requestDelete(m) },
+                        onTap: {
+                            if swipedMeetingID == m.id {
+                                withAnimation(.recapSwipeClose) {
+                                    swipedMeetingID = nil
+                                }
+                            } else {
+                                path.append(MeetingRoute.live(m.id))
+                            }
+                        }
+                    ) {
                         LiveMeetingCard(meeting: m)
                     }
-                    .buttonStyle(RecapPressStyle())
-                    .accessibilityLabel("接上会议，\(m.title)，已暂停")
                 }
             }
         }
@@ -286,12 +308,7 @@ public struct MeetingListView: View {
             }
         }
         .padding(.bottom, Spacing.xxxl)
-        .opacity(appeared ? 1 : 0)
         .offset(y: appeared ? 0 : enterOffset(8))
-        .animation(
-            reduceMotion ? nil : .recapHomeEnter.delay(0.04),
-            value: appeared
-        )
     }
 
     // MARK: - Day groups (non-today)
@@ -311,12 +328,7 @@ public struct MeetingListView: View {
             }
         }
         .padding(.bottom, Spacing.xxxl)
-        .opacity(appeared ? 1 : 0)
         .offset(y: appeared ? 0 : enterOffset(8))
-        .animation(
-            reduceMotion ? nil : .recapHomeEnter.delay(0.07),
-            value: appeared
-        )
     }
 
     private func meetingButton(_ m: Meeting, emphasizeTimeOnly: Bool = false) -> some View {
@@ -341,11 +353,6 @@ public struct MeetingListView: View {
                 whenText: emphasizeTimeOnly ? m.timeText : m.listWhenText
             )
             .contextMenu {
-                Button {
-                    openBrief(for: m)
-                } label: {
-                    Label(MeetingMaterialsChrome.accessibilityName, systemImage: MeetingMaterialsChrome.symbolName)
-                }
                 Button(role: .destructive) {
                     requestDelete(m)
                 } label: {
@@ -395,24 +402,17 @@ public struct MeetingListView: View {
         }
     }
 
-    private func openBrief(for meeting: Meeting) {
-        swipedMeetingID = nil
-        briefMeetingID = meeting.id
-        showBriefSheet = true
-    }
-
     private func sectionEyebrow(_ title: String, live: Bool) -> some View {
         HStack(spacing: Spacing.sm) {
             if live {
                 Circle()
-                    .fill(Color.recapCinnabar)
+                    .fill(Color.recapTea)
                     .frame(width: 6, height: 6)
-                    .modifier(BreathingModifier())
             }
             Text(title)
                 .font(.recapSection)
                 .tracking(1.4)
-                .foregroundStyle(live ? Color.recapCinnabar : Color.recapTea)
+                .foregroundStyle(Color.recapTea)
             Spacer(minLength: 0)
         }
     }
@@ -420,23 +420,34 @@ public struct MeetingListView: View {
     // MARK: - Empty
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("把一场对话\n收成可行动的纪要")
-                .font(.system(size: 28, weight: .semibold, design: .default))
-                .tracking(-0.6)
-                .foregroundStyle(Color.recapInk)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            ZStack {
+                Circle()
+                    .fill(Color.recapCinnabar.opacity(0.06))
+                    .frame(width: 52, height: 52)
+                Image(systemName: "waveform")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(Color.recapCinnabar)
+            }
 
-            Text("转写、整理、待办，在同一条时间线里长出来。")
-                .font(.system(size: 15, weight: .regular, design: .default))
-                .foregroundStyle(Color.recapTea)
-                .lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: 300, alignment: .leading)
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("把一场对话\n收成可行动的纪要")
+                    .font(.system(size: 28, weight: .semibold, design: .default))
+                    .tracking(-0.6)
+                    .foregroundStyle(Color.recapInk)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("转写、整理、待办，在同一条时间线里长出来。")
+                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .foregroundStyle(Color.recapTea)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 300, alignment: .leading)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, Spacing.xxl)
+        .padding(.top, Spacing.xl)
         .padding(.bottom, Spacing.xxxl)
         .accessibilityHint("点下方红色按钮进入新会议")
     }
@@ -483,9 +494,9 @@ public struct MeetingListView: View {
     }
 }
 
-// MARK: - Unfinished resume tile
+// MARK: - Draft resume tile
 
-/// 未结束会议卡：去除粗重红线与沉重染底，采用轻量呼吸胶囊标与精致白瓷浅框外壳。
+/// 草稿会议卡：静态茶灰胶囊标 + 纸白外壳（由 SwipeableMeetingRow 提供统一卡片外壳与左滑删除）。
 private struct LiveMeetingCard: View {
     let meeting: Meeting
 
@@ -493,19 +504,18 @@ private struct LiveMeetingCard: View {
         HStack(alignment: .center, spacing: Spacing.md) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    // 软状态胶囊标（替换沉重的 4pt 粗红条与全卡红色染色）
+                    // 草稿胶囊标：静态茶灰，无呼吸（降权，避免告警感）
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(Color.recapCinnabar)
+                            .fill(Color.recapTea)
                             .frame(width: 5, height: 5)
-                            .modifier(BreathingModifier())
-                        Text("未结束")
+                        Text("草稿")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.recapCinnabar)
+                            .foregroundStyle(Color.recapTea)
                     }
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2.5)
-                    .background(Color.recapCinnabar.opacity(0.08), in: Capsule())
+                    .background(Color.recapTea.opacity(0.10), in: Capsule())
 
                     if meeting.durationSeconds > 0 {
                         Text(meeting.durationText)
@@ -537,26 +547,16 @@ private struct LiveMeetingCard: View {
                 Image(systemName: "arrow.right")
                     .font(.system(size: 11, weight: .bold))
             }
-            .foregroundStyle(Color.recapCinnabar)
+            .foregroundStyle(Color.recapTea)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Color.recapCinnabar.opacity(0.08), in: Capsule())
+            .background(Color.recapTea.opacity(0.10), in: Capsule())
             .accessibilityHidden(true)
         }
         .padding(.horizontal, Spacing.lg)
         .padding(.vertical, Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background { cardBackground }
-        .contentShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-    }
-
-    /// 卡片外壳：纯净瓷白 + 微弱朱砂强调边框 + 全站轻量投影。
-    private var cardBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-        return shape
-            .fill(Color.recapPaper)
-            .overlay(shape.stroke(Color.recapCinnabar.opacity(0.18), lineWidth: 0.8))
-            .recapCardShadow()
+        .contentShape(Rectangle())
     }
 }
 

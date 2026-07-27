@@ -22,6 +22,13 @@ public actor VolcASREngine: AsrEngine {
     // Streaming state
     private var wsBox: WSTaskBox?
     private var recvTask: Task<Void, Never>?
+    /// 后台发送 Task：把 `feed` 与 WebSocket `send` 的网络反压解耦——`feed` 只入队 + 唤醒，
+    /// 真正的 `box.task.send` 在此 Task 串行执行，避免长会议弱网下 feed 挂起导致上游
+    /// AsyncStream 无界堆积 OOM。
+    private var sendTask: Task<Void, Never>?
+    private var wakeCont: AsyncStream<Void>.Continuation?
+    /// sender 命中发送错误（WS 断）→ feed/stop 据此抛错，让 RecordingSession 走 onError 可见。
+    private var sendError: Error?
     private var eventContinuation: AsyncStream<AsrStreamEvent>.Continuation?
     private var pcmBuffer = PCMConsumeBuffer()
     private var sampleRate: Double = 16000
@@ -65,6 +72,7 @@ public actor VolcASREngine: AsrEngine {
         firstTokenMs = nil
         streamStartedAt = Date()
         isStreaming = true
+        sendError = nil
 
         let (stream, continuation) = AsyncStream.makeStream(of: AsrStreamEvent.self)
         eventContinuation = continuation
@@ -82,23 +90,64 @@ public actor VolcASREngine: AsrEngine {
             }
         }
 
+        // 3) 后台发送器：feed 入队后唤醒，串行排空整包（200ms/包）。bufferingNewest(1) 合并多次唤醒。
+        startSender(box: box)
+
         return stream
     }
 
+    /// 启动后台发送 Task（与 recvTask 对称：收发分离，互不阻塞 actor）。
+    private func startSender(box: WSTaskBox) {
+        let (wakeStream, wakeC) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        wakeCont = wakeC
+        sendTask = Task { [weak self] in
+            for await _ in wakeStream {
+                guard let self else { return }
+                // drainSender 在 actor 内串行 popFirst + await send；await 期间 feed 可继续入队
+                let keepGoing = await self.drainSender(box: box)
+                if !keepGoing { return }
+            }
+        }
+    }
+
+    /// 排空 pcmBuffer 中所有就绪的整包（isLast 恒 false——尾部 isLast 由 stopStreaming 发）。
+    /// 命中发送错误则记录到 sendError 并停止 sender。
+    private func drainSender(box: WSTaskBox) async -> Bool {
+        let frames = max(1, Int(sampleRate * 0.2)) // 200ms
+        while isStreaming, pcmBuffer.count >= frames {
+            let chunk = pcmBuffer.popFirst(frames)
+            do {
+                try await sendAudioPacket(box: box, int16: chunk, isLast: false)
+            } catch {
+                sendError = error
+                return false
+            }
+        }
+        return isStreaming
+    }
+
     public func feed(_ samples: [Float]) async throws {
-        guard isStreaming, let box = wsBox else { throw VolcASRError.notStreaming }
+        guard isStreaming, wsBox != nil else { throw VolcASRError.notStreaming }
         guard !samples.isEmpty else { return }
+        // sender 已检测到 WS 断 → 让 feed 抛错，走 RecordingSession 的 onError 通路（可见而非静默）
+        if let sendError { throw VolcASRError.sendFailed("\(sendError.localizedDescription)") }
 
         let int16 = samples.map { Int16(max(-32768, min(32767, Double($0) * 32767))) }
         pcmBuffer.append(int16)
-        try await flushPCM(box: box, forceLast: false)
+        wakeCont?.yield(())   // 唤醒后台 sender 排空整包；feed 本身永不 await 网络
     }
 
     public func stopStreaming() async throws -> TranscribeResult {
         guard isStreaming, let box = wsBox else { throw VolcASRError.notStreaming }
 
-        // 冲刷尾包（即使 pcmBuffer 空也发 isLast，告知服务端结束）
-        try await flushPCM(box: box, forceLast: true)
+        // 1) 停后台 sender，等它排空已就绪的整包（feed 此时不再被调用——recorder 已先 stop）
+        wakeCont?.finish()
+        if let t = sendTask { self.sendTask = nil; await t.value }
+
+        // 2) 发送尾部 + isLast（WS 已断则 try? 容错，仍保证 teardown，绝不挂死结束流程）
+        if sendError == nil {
+            try? await flushPCM(box: box, forceLast: true)
+        }
 
         // 等最终帧；超时则取消接收循环
         if let recvTask {
@@ -171,6 +220,11 @@ public actor VolcASREngine: AsrEngine {
         eventContinuation = nil
         recvTask?.cancel()
         recvTask = nil
+        wakeCont?.finish()
+        wakeCont = nil
+        sendTask?.cancel()
+        sendTask = nil
+        sendError = nil
         if cancelWS {
             wsBox?.task.cancel(with: .goingAway, reason: nil)
         }
@@ -258,6 +312,7 @@ enum VolcConfig {
 
 public enum VolcASRError: Error, LocalizedError, Sendable {
     case missingCredentials, notPrepared, notStreaming, badSampleRate(Double)
+    case sendFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -269,6 +324,8 @@ public enum VolcASRError: Error, LocalizedError, Sendable {
             return "未处于流式会话中"
         case .badSampleRate(let r):
             return "火山要求 16k mono，收到 \(r) Hz"
+        case .sendFailed(let m):
+            return "火山音频上传失败（\(m)）"
         }
     }
 }

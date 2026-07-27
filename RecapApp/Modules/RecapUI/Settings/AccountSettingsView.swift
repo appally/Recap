@@ -75,8 +75,7 @@ struct AccountSettingsView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(Spacing.lg)
-        .settingsCard()
+        .padding(.vertical, Spacing.md)
     }
 
     private var providerLabel: String {
@@ -88,13 +87,17 @@ struct AccountSettingsView: View {
     }
 
     private var signInPanel: some View {
-        AppleSignInSection(
-            onSignedIn: { reload() },
-            onMessage: { status = $0 }
-        )
-        .padding(Spacing.lg)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .settingsCard()
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("登录账号以同步云端数据与 Pro 权益")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.recapTea)
+
+            AppleSignInSection(
+                onSignedIn: { reload() },
+                onMessage: { status = $0 }
+            )
+        }
+        .padding(.vertical, Spacing.sm)
     }
 
     private var signedInActions: some View {
@@ -119,7 +122,7 @@ struct AccountSettingsView: View {
                 showDeleteConfirm = true
             } label: {
                 SettingsNavRow(
-                    icon: "trash.fill",
+                    icon: "trash",
                     iconTint: .recapCinnabar,
                     title: "删除账户",
                     titleTint: .recapCinnabar,
@@ -128,7 +131,6 @@ struct AccountSettingsView: View {
             }
             .buttonStyle(SettingsPressStyle())
         }
-        .settingsCard()
     }
 
     private func reload() {

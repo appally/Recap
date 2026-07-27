@@ -15,6 +15,25 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
         _ = try await ensureKit(modelFolder: nil)
     }
 
+    /// 后台预下载说话人模型（不加载进内存），供首次会后说话人分离即用。
+    /// 镜像 ``SpeechAnalyzerEngine.prefetchAssetsInBackground``：冷启动 detached 拉取资产、用时再加载。
+    /// - download-only（load:false）→ 不常驻模型内存；文件落到 SpeakerKit 默认缓存，
+    ///   后续 ``ensureKit``(download:true, load:true) 命中缓存、仅加载。
+    /// - 幂等：模型已在缓存则 `SpeakerKit.downloadModels` 内部跳过。
+    /// - 失败静默（try?）：网络/磁盘错误不抛出，最坏退化到「首次 diarization 现场下载」。
+    /// - 不触 ``shared`` actor 状态，与并发 ``ensureKit``/``diarize`` 无锁竞争。
+    nonisolated public static func prefetchInBackground() {
+        Task.detached(priority: .utility) {
+            let config = PyannoteConfig(
+                download: true,
+                modelEndpoint: FluidAudioBootstrap.mirrorBaseURL,
+                load: false,
+                verbose: false
+            )
+            _ = try? await SpeakerKit(config)
+        }
+    }
+
     public func unload() async {
         if let kit {
             await kit.unloadModels()
@@ -81,9 +100,11 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
                     verbose: false
                 )
             } else {
-                // 首次从 HuggingFace 拉取；国内可后续改 modelEndpoint / CDN
+                // 首次下载走国内镜像（HuggingFace 直连不稳）；SpeakerKit 无全局 registry，
+                // 故在 config 上显式传 modelEndpoint（与 FluidAudioBootstrap.mirrorBaseURL 同源）。
                 config = PyannoteConfig(
                     download: true,
+                    modelEndpoint: FluidAudioBootstrap.mirrorBaseURL,
                     load: true,
                     verbose: false
                 )

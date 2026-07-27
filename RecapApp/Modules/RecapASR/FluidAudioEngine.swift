@@ -11,7 +11,11 @@ import RecapModels
 //     无需手动配 MLModelConfiguration，顺势避开 SenseVoice fp16 在 CPU/GPU 的 NaN 坑。
 //   • 模型从 HuggingFace 下载（App 启动设 ModelRegistry.baseURL = hf-mirror 国内加速）。
 //   • manager 调用在本 actor 内串行；跨引擎的 CoreML 并发由 CoreMLInferenceGate 兜底（#661）。
-// 对照 FluidAudio v0.15.5：Sources/FluidAudio/ASR/{SenseVoice,Paraformer}/*Manager.swift
+//   • 长音频分块：FluidAudio 内部 ChunkProcessor 已用 ~15s 重叠窗 + token merge 处理任意长度，
+//     故外层只在**静音边界**切段（`AudioSilenceChunker`），不再固定 28s 硬切——避免跨段边界
+//     丢字/粘字（#758/#683）与前导静音整窗丢字（#758）。段内合并交 ChunkProcessor。
+// 对照 FluidAudio v0.15.5：Sources/FluidAudio/ASR/{SenseVoice,Paraformer}/*Manager.swift、
+//   Sources/FluidAudio/ASR/{AsrTranscription,ChunkProcessor}.swift
 // ─────────────────────────────────────────────────────────────────────────────
 
 public actor FluidAudioEngine: AsrEngine {
@@ -60,36 +64,35 @@ public actor FluidAudioEngine: AsrEngine {
             throw FluidAudioEngineError.badSampleRate(sampleRate)
         }
 
-        // 长音频单次上限：Paraformer ~30s、SenseVoice 类似。按 ~28s 切段喂入并拼接。
-        // ⚠️ 简单拼接在 chunk 边界可能丢字/粘字（FluidAudio #758/#683）；真实长会议丢字率
-        //    须在 POC 听校对验证。POC 短音频（<28s）只走一段，无此问题。
-        let chunkLen = Int(28.0 * sampleRate)
+        // 静音边界分块（见 AudioSilenceChunker 头注释）：在句间静音处切段，避免固定 28s 硬切
+        // 劈字（#758/#683）与前导静音整窗丢字（#758）。段内长音频合并由 FluidAudio ChunkProcessor 负责。
+        let rate = sampleRate
+        let ranges = AudioSilenceChunker.plan(samples: samples, sampleRate: rate)
 
         // CoreML 推理串行化（#661）：整场重转期间独占，与 SpeakerKit diarization 互斥。
         // engineRef 是值拷贝（含 public actor 引用，Sendable），闭包内不再触碰 self 隔离状态。
         return try await CoreMLInferenceGate.shared.exclusive {
             var segments: [TranscriptSegment] = []
-            var chunks = 0
-            var idx = 0
-            while idx < samples.count {
-                let end = min(idx + chunkLen, samples.count)
-                let chunk = Array(samples[idx..<end])
+            for range in ranges {
+                // 静音边界处无推理在飞 → 取消抛错后 defer release() 干净释放门，
+                // 不会与下一次推理并发触发 #661。被取消的重转写整体抛 CancellationError。
+                try Task.checkCancellation()
+                let chunk = Array(samples[range])
                 let text: String
                 switch engineRef {
                 case .senseVoice(let m): text = try await m.transcribe(audio: chunk)
                 case .paraformer(let m): text = try await m.transcribe(audio: chunk)
                 }
-                // 按采样偏移给每段近似时间戳（28s chunk 粒度，非句级；句级分段留给 LLM 润色层）
-                segments.append(TranscriptSegment(startSeconds: Double(idx) / sampleRate,
-                                                  endSeconds: Double(end) / sampleRate,
+                // 切片在 PCM 上的绝对偏移作时间戳 → 与落盘 PCM 同源，会后 diarization 重叠对齐不受影响；
+                // 跳过前导静音后 start 更贴近真实语音起点。句级分段留给 LLM 润色层。
+                segments.append(TranscriptSegment(startSeconds: Double(range.lowerBound) / rate,
+                                                  endSeconds: Double(range.upperBound) / rate,
                                                   text: text))
                 onPartial?(text)   // 批处理，只在每段完成时回调（非真流式）
-                chunks += 1
-                idx = end
             }
             return TranscribeResult(segments: segments,
                                     firstTokenLatencyMs: nil,
-                                    chunkCount: chunks)
+                                    chunkCount: ranges.count)
         }
     }
 
@@ -128,8 +131,27 @@ public enum FluidAudioEngineError: Error, LocalizedError, Sendable {
 
 /// FluidAudio 端侧模型下载源配置（封装 ModelRegistry，避免上层直接依赖 FluidAudio 模块）。
 public enum FluidAudioBootstrap {
-    /// 在 App 启动时调用一次：把模型下载源指向国内镜像（HuggingFace 直连不稳）。
+    /// HuggingFace 国内镜像（直连不稳）。FluidAudio（`ModelRegistry.baseURL`）与
+    /// SpeakerKit（`PyannoteConfig.modelEndpoint`）共用此源——两者都是 HF 托管、运行期下载的 CoreML 资产。
+    public static let mirrorBaseURL = "https://hf-mirror.com"
+
+    /// 在 App 启动时调用一次：把 FluidAudio 模型下载源指向国内镜像（HuggingFace 直连不稳）。
+    /// SpeakerKit 无全局 registry，改为在构造 `PyannoteConfig` 时直接传 `mirrorBaseURL`。
     public static func configureModelEndpoint() {
-        ModelRegistry.baseURL = "https://hf-mirror.com"
+        ModelRegistry.baseURL = mirrorBaseURL
+    }
+
+    /// 预下载并加载端侧 ASR 模型（SenseVoice + Paraformer），报告总进度。
+    /// - Parameter progress: `(fraction 0...1, 模型名)`；**在后台队列调用**，UI 更新需自行切主线程。
+    /// 模型文件落到 FluidAudio 缓存；后续 `FluidAudioEngine.prepare` 命中缓存，不再重新下载。
+    public static func preloadASRModels(
+        progress: @Sendable @escaping (Double, String) -> Void
+    ) async throws {
+        _ = try await SenseVoiceManager.load(precision: .fp16) { p in
+            progress(p.fractionCompleted * 0.5, "SenseVoice")
+        }
+        _ = try await ParaformerManager.load(precision: .fp16) { p in
+            progress(0.5 + p.fractionCompleted * 0.5, "Paraformer")
+        }
     }
 }

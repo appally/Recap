@@ -51,29 +51,33 @@ extension View {
 
 // MARK: - 分组
 
+// MARK: - 分组（Plaud 平面纸质风格，无浮雕卡片框）
+
 struct SettingsSection<Content: View>: View {
     let title: String
     var footnote: String? = nil
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold, design: .default))
-                .tracking(1.4)
-                .foregroundStyle(Color.recapTea)
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            if !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .default))
+                    .foregroundStyle(Color.recapTea)
+                    .padding(.horizontal, 4)
+            }
 
             VStack(spacing: 0) {
                 content()
             }
-            .settingsCard()
 
             if let footnote {
                 Text(footnote)
                     .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Color.recapTea.opacity(0.9))
-                    .lineSpacing(2)
-                    .padding(.horizontal, 2)
+                    .foregroundStyle(Color.recapTea.opacity(0.85))
+                    .lineSpacing(3)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 2)
             }
         }
     }
@@ -85,17 +89,18 @@ struct SettingsNavRow: View {
     let icon: String
     let iconTint: Color
     let title: String
-    /// 破坏性操作把标题一起染色，否则只有图标是红的，危险程度传达不足。
     var titleTint: Color = .recapInk
     var value: String? = nil
     var showChevron: Bool = true
 
     var body: some View {
         HStack(spacing: Spacing.md) {
-            SettingsIconBadge(systemName: icon, tint: iconTint)
+            if !icon.isEmpty {
+                SettingsIconBadge(systemName: icon, tint: iconTint)
+            }
 
             Text(title)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: 16, weight: .regular))
                 .foregroundStyle(titleTint)
 
             Spacer(minLength: Spacing.sm)
@@ -113,7 +118,7 @@ struct SettingsNavRow: View {
                 SettingsChevron()
             }
         }
-        .padding(.horizontal, Spacing.lg)
+        .padding(.horizontal, 4)
         .padding(.vertical, 14)
         .frame(minHeight: SettingsMetrics.minRowHeight)
         .contentShape(Rectangle())
@@ -123,35 +128,31 @@ struct SettingsNavRow: View {
 struct SettingsChevron: View {
     var body: some View {
         Image(systemName: "chevron.right")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(SettingsMetrics.chevron)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.recapTea.opacity(0.45))
     }
 }
 
+/// Plaud 极简 1.5px 单色 Outline 图标（非彩色背景小方块）
 struct SettingsIconBadge: View {
     let systemName: String
     let tint: Color
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.opacity(0.14))
-                .frame(width: SettingsMetrics.iconBadge, height: SettingsMetrics.iconBadge)
-            Image(systemName: systemName)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(tint)
-        }
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .regular))
+            .foregroundStyle(Color.recapInk)
+            .frame(width: 24, height: 24, alignment: .center)
     }
 }
 
 struct SettingsDivider: View {
-    /// 分隔线与它上方那行的内容起点对齐，因此头像行需要单独给缩进。
-    var inset: CGFloat = SettingsMetrics.separatorInset
+    var inset: CGFloat = 0
 
     var body: some View {
         Rectangle()
-            .fill(SettingsMetrics.separator)
-            .frame(height: 1)
+            .fill(Color.recapTea.opacity(0.12))
+            .frame(height: 0.5)
             .padding(.leading, inset)
     }
 }

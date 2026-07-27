@@ -21,6 +21,12 @@ public actor FunASREngine: AsrEngine {
 
     private var wsBox: WSTaskBox?
     private var recvTask: Task<Void, Never>?
+    /// 后台发送 Task：feed 只入队 + 唤醒，WebSocket send 在此串行执行，避免弱网下 feed 挂起
+    /// 致上游 AsyncStream 无界堆积 OOM。仅 task-started 后才发音频。
+    private var sendTask: Task<Void, Never>?
+    private var wakeCont: AsyncStream<Void>.Continuation?
+    /// sender 命中发送错误（WS 断）→ feed 据此抛错，走 RecordingSession onError 可见。
+    private var sendError: Error?
     private var eventContinuation: AsyncStream<AsrStreamEvent>.Continuation?
     private var pcmBuffer = PCMConsumeBuffer()
     private var pendingBeforeStart: [Int16] = []
@@ -68,6 +74,7 @@ public actor FunASREngine: AsrEngine {
         taskStarted = false
         taskFinished = false
         taskFailedMessage = nil
+        sendError = nil
         pcmBuffer.removeAll(keepingCapacity: true)
         pendingBeforeStart.removeAll(keepingCapacity: true)
         finalizedSegments.removeAll(keepingCapacity: true)
@@ -111,36 +118,72 @@ public actor FunASREngine: AsrEngine {
             throw FunASRError.taskStartTimeout
         }
 
-        // 冲刷 task-started 前缓存的音频
+        // 冲刷 task-started 前缓存的音频到 pcmBuffer
         if !pendingBeforeStart.isEmpty {
             pcmBuffer.append(pendingBeforeStart)
             pendingBeforeStart.removeAll(keepingCapacity: true)
-            try await flushPCM(box: box, forceLast: false)
         }
 
+        // 启动后台发送器（音频仅在 task-started 后可发）
+        startSender(box: box)
+        if !pcmBuffer.isEmpty { wakeCont?.yield(()) }
+
         return stream
+    }
+
+    /// 启动后台发送 Task：与 recvTask 对称，收发分离互不阻塞 actor。
+    private func startSender(box: WSTaskBox) {
+        let (wakeStream, wakeC) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
+        wakeCont = wakeC
+        sendTask = Task { [weak self] in
+            for await _ in wakeStream {
+                guard let self else { return }
+                let keepGoing = await self.drainSender(box: box)
+                if !keepGoing { return }
+            }
+        }
+    }
+
+    /// 排空 pcmBuffer 中所有就绪的整包（100ms/包）。命中发送错误则记录并停 sender。
+    private func drainSender(box: WSTaskBox) async -> Bool {
+        let frames = max(1, Int(sampleRate * 0.1)) // 100ms
+        while isStreaming, taskStarted, pcmBuffer.count >= frames {
+            let chunk = pcmBuffer.popFirst(frames)
+            do {
+                try await sendAudio(box: box, int16: chunk)
+            } catch {
+                sendError = error
+                return false
+            }
+        }
+        return isStreaming
     }
 
     public func feed(_ samples: [Float]) async throws {
         guard isStreaming else { throw FunASRError.notStreaming }
         guard !samples.isEmpty else { return }
+        if let sendError { throw FunASRError.sendFailed("\(sendError.localizedDescription)") }
 
         let int16 = samples.map { Int16(max(-32768, min(32767, Double($0) * 32767))) }
         if !taskStarted {
             pendingBeforeStart.append(contentsOf: int16)
             return
         }
-        guard let box = wsBox else { throw FunASRError.notStreaming }
         pcmBuffer.append(int16)
-        try await flushPCM(box: box, forceLast: false)
+        wakeCont?.yield(())   // 唤醒后台 sender 排空整包；feed 永不 await 网络
     }
 
     public func stopStreaming() async throws -> TranscribeResult {
         guard isStreaming, let box = wsBox else { throw FunASRError.notStreaming }
 
-        if taskStarted {
-            try await flushPCM(box: box, forceLast: true)
-            try await sendJSON(FunASRProtocol.finishTask(taskId: String(taskId)), box: box)
+        // 1) 停后台 sender，等它排空已就绪的整包（feed 此时不再被调用——recorder 已先 stop）
+        wakeCont?.finish()
+        if let t = sendTask { self.sendTask = nil; await t.value }
+
+        if taskStarted, sendError == nil {
+            // 尾部 + finish-task：WS 已断则 try? 容错，仍保证 teardown，绝不挂死结束流程
+            try? await flushPCM(box: box, forceLast: true)
+            try? await sendJSON(FunASRProtocol.finishTask(taskId: String(taskId)), box: box)
         }
 
         if let recvTask {
@@ -335,6 +378,11 @@ public actor FunASREngine: AsrEngine {
         eventContinuation = nil
         recvTask?.cancel()
         recvTask = nil
+        wakeCont?.finish()
+        wakeCont = nil
+        sendTask?.cancel()
+        sendTask = nil
+        sendError = nil
         if cancelWS {
             wsBox?.task.cancel(with: .goingAway, reason: nil)
         }
@@ -390,7 +438,7 @@ enum FunASRProtocol {
 
 public enum FunASRError: Error, LocalizedError, Sendable {
     case missingCredentials, notPrepared, notStreaming, badSampleRate(Double)
-    case taskStartTimeout, taskFailed(String), encodeFailed
+    case taskStartTimeout, taskFailed(String), encodeFailed, sendFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -408,6 +456,8 @@ public enum FunASRError: Error, LocalizedError, Sendable {
             return "Fun-ASR 任务失败：\(msg)"
         case .encodeFailed:
             return "Fun-ASR 指令编码失败"
+        case .sendFailed(let m):
+            return "Fun-ASR 音频上传失败（\(m)）"
         }
     }
 }

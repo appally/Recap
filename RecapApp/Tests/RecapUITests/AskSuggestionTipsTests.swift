@@ -4,9 +4,26 @@ import XCTest
 
 final class AskSuggestionTipsTests: XCTestCase {
 
-    func testLiveIncludesSummaryAndRecentSnippet() {
+    func testPreMeetingExcludesLiveAndReviewPhrasing() {
+        // 关键回归：会议前不得出现"总结到此刻""刚才拍板了什么"等会中/会后措辞。
         let tips = AskSuggestionTips.make(
-            phase: .live,
+            stage: .preMeeting,
+            summary: nil,
+            actionItems: [],
+            agendaTitles: ["Q3 预算评审"],
+            linkedMeetingTitle: "上周产品周会",
+            hasBrief: true
+        )
+        XCTAssertFalse(tips.contains("总结到此刻"))
+        XCTAssertFalse(tips.contains("刚才拍板了什么"))
+        XCTAssertTrue(tips.contains("这场想达成什么"))
+        XCTAssertTrue(tips.contains { $0.contains("Q3 预算评审") })
+        XCTAssertLessThanOrEqual(tips.count, 5)
+    }
+
+    func testLiveRecordingIncludesSummaryAndRecentSnippet() {
+        let tips = AskSuggestionTips.make(
+            stage: .liveRecording,
             summary: nil,
             actionItems: [],
             briefOpenItems: ["报价口径"],
@@ -18,6 +35,18 @@ final class AskSuggestionTipsTests: XCTestCase {
         XCTAssertLessThanOrEqual(tips.count, 5)
     }
 
+    func testLivePausedFocusesDecisionRecap() {
+        let tips = AskSuggestionTips.make(
+            stage: .livePaused,
+            summary: nil,
+            actionItems: [],
+            briefOpenItems: ["是否纳入 iPad"]
+        )
+        XCTAssertTrue(tips.contains("刚才拍板了什么"))
+        XCTAssertTrue(tips.contains { $0.contains("是否纳入 iPad") })
+        XCTAssertFalse(tips.contains("总结到此刻"))
+    }
+
     func testReviewSurfacesOpenQuestionsAndTodos() {
         let summary = MeetingSummary(
             tldr: "短",
@@ -27,7 +56,7 @@ final class AskSuggestionTipsTests: XCTestCase {
         )
         let item = ActionItem(task: "出方案", status: .confirmed)
         let tips = AskSuggestionTips.make(
-            phase: .review,
+            stage: .review,
             summary: summary,
             actionItems: [item],
             hasBrief: false

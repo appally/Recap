@@ -60,10 +60,16 @@ FluidAudio 是早期项目（v0.15.x 几乎周发版），所有中文 CER/RTF/�
       观察 `CoreMLInferenceGate` 是否串行化、是否消除 `EXC_BAD_ACCESS`。
 - [ ] `CoreMLInferenceGateTests` 单测（模拟器已验证 maxConcurrent==1）。
 
-### 7. LIVE VAD 门控
-- [ ] 静音段（无人说话）是否不再产生幻听废话字幕。
-- [ ] 语音段是否被正确保留（无误切）。
-- [ ] 落盘 PCM 完整（会后重转仍用全量音频，VAD 只影响 LIVE feed）。
+### 7. LIVE VAD 门控 — 已从 LIVE 移除（弃用「丢帧」方案）
+
+> 原「丢静音帧」门控已从 `RecordingSession` 移除（2026-07-26）。根因：流式 SpeechAnalyzer
+> 依赖连续音频流，丢帧会饿死转写器（首 partial 需累积数百 ms 连续音频）→ **录音无字幕**
+> （用户复现的 BUG；3s safety-net 兜底也救不回，单帧 ≈85ms 太稀疏吐不出字）；且其
+> `result.range.seconds` 按「已喂采样」累计，丢帧压缩时间轴 → 会后说话人分离错位。
+> `EnergyVAD` + 单测保留，待**结果层**重做（仅抑制 partial、永不抑制 final）后再验。
+
+- [ ] （待重构后）静音段是否不再产生幻听废话 partial。
+- [ ] （待重构后）final 永远显示——VAD 误判时最坏只是「不够实时」而非「无字幕」。
 
 ### 8. 电池
 - [ ] 30 分钟 LIVE（VAD 开）耗电 % vs VAD 关。

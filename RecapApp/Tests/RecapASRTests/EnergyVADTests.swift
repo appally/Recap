@@ -58,4 +58,18 @@ final class EnergyVADTests: XCTestCase {
         // reset 后首帧静音不应喂
         XCTAssertFalse(vad.shouldFeed(silenceFrame()))
     }
+
+    /// safety net：长时间纯静音（VAD 误判场景）不应彻底切断字幕——每隔
+    /// `maxStarveFrames` 帧必须强制喂一帧。
+    func testSafetyNetForcesFeedDuringProlongedSilence() {
+        var vad = EnergyVAD(maxStarveSeconds: 0.4)   // maxStarveFrames = 5
+        let silence = silenceFrame()
+        var results: [Bool] = []
+        for _ in 0..<14 { results.append(vad.shouldFeed(silence)) }
+
+        let trueCount = results.filter { $0 }.count
+        XCTAssertGreaterThanOrEqual(trueCount, 2, "14 帧静音内，safety net 应至少强制喂 2 次（每 5 帧一次）")
+        // 且强制喂发生在大致 maxStarveFrames 间隔（第 5、10 帧附近），不是开头
+        XCTAssertFalse(results[0], "首帧静音不应立即喂")
+    }
 }

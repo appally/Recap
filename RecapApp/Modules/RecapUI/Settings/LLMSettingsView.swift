@@ -67,10 +67,12 @@ struct LLMSettingsView: View {
     // MARK: - Cloud
 
     private var cloudPanel: some View {
-        VStack(alignment: .leading, spacing: Spacing.lg) {
+        VStack(alignment: .leading, spacing: Spacing.md) {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 HStack(spacing: Spacing.md) {
-                    SettingsIconBadge(systemName: "crown.fill", tint: .recapOchre)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(Color.recapInk)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Recap 云端模型")
                             .font(.system(size: 17, weight: .semibold))
@@ -85,35 +87,25 @@ struct LLMSettingsView: View {
 
                 Text(
                     membership.isPro
-                        ? "已开通 Pro。云端网关上线后即可免 Key 使用；当前若调用失败请暂用「自备密钥」。"
-                        : "开通 Pro 后由 Recap 代付云端模型。也可随时改用「自备密钥」。"
+                        ? "已开通 Pro。云端网关服务可免 Key 直接使用。"
+                        : "开通 Pro 后由 Recap 提供云端模型支持。也可随时改用「自备密钥」。"
                 )
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.recapTea.opacity(0.95))
-                    .lineSpacing(2)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.recapTea.opacity(0.85))
+                    .lineSpacing(3)
             }
-            .padding(Spacing.lg)
-            .background(
-                Color.recapPaper,
-                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(Color.recapOchre.opacity(0.22), lineWidth: 1)
-            )
+            .padding(.vertical, Spacing.xs)
+
+            SettingsDivider()
 
             NavigationLink {
                 MembershipSettingsView()
             } label: {
                 SettingsNavRow(
-                    icon: "creditcard.fill",
-                    iconTint: .recapOchre,
+                    icon: "creditcard",
+                    iconTint: .recapInk,
                     title: "管理会员与订阅",
                     value: account.tier.title
-                )
-                .background(
-                    Color.recapPaper,
-                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 )
             }
             .buttonStyle(SettingsPressStyle())

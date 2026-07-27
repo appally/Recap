@@ -17,6 +17,11 @@ public struct AgentInvokeSheet: View {
     public let minutesSummary: MeetingSummary?
     public let briefSummary: String?
     public let briefSources: [BriefSource]
+    public let hasStartedRecording: Bool
+    public let isLivePaused: Bool
+    public let linkedMeetingTitle: String?
+    /// 五态上下文（init 时派生一次，sheet 寿命短不再漂移）。
+    public let stage: AskStage
     public var onJumpToTranscript: ((Double) -> Void)?
     public var onMinutesUpdated: ((MeetingSummary) -> Void)?
     public var initialInput: String
@@ -26,6 +31,9 @@ public struct AgentInvokeSheet: View {
     @State private var input: String = ""
     @State private var expandedSteps: Set<UUID> = []
     @State private var showSkills = false
+    /// chips：L1 规则层 init 即填；L2 LLM 异步返回（≥3 条）后替换。
+    @State private var suggestionChips: [String]
+    @State private var didLoadL2 = false
     @FocusState private var inputFocused: Bool
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -41,6 +49,9 @@ public struct AgentInvokeSheet: View {
         minutesSummary: MeetingSummary? = nil,
         briefSummary: String? = nil,
         briefSources: [BriefSource] = [],
+        hasStartedRecording: Bool = false,
+        isLivePaused: Bool = false,
+        linkedMeetingTitle: String? = nil,
         onJumpToTranscript: ((Double) -> Void)? = nil,
         onMinutesUpdated: ((MeetingSummary) -> Void)? = nil,
         initialInput: String = "",
@@ -56,6 +67,15 @@ public struct AgentInvokeSheet: View {
         self.minutesSummary = minutesSummary
         self.briefSummary = briefSummary
         self.briefSources = briefSources
+        self.hasStartedRecording = hasStartedRecording
+        self.isLivePaused = isLivePaused
+        self.linkedMeetingTitle = linkedMeetingTitle
+        let stage = AskStage.from(
+            phase: phase,
+            hasStartedRecording: hasStartedRecording,
+            isLivePaused: isLivePaused
+        )
+        self.stage = stage
         self.onJumpToTranscript = onJumpToTranscript
         self.onMinutesUpdated = onMinutesUpdated
         self.initialInput = initialInput
@@ -72,6 +92,47 @@ public struct AgentInvokeSheet: View {
             briefSources: briefSources
         ))
         self._input = State(initialValue: initialInput)
+        // L1 规则层瞬时打底（init 单次确定，不依赖 onAppear 多次触发）。
+        self._suggestionChips = State(initialValue: Self.computeL1(
+            stage: stage,
+            meeting: meeting,
+            minutesSummary: minutesSummary,
+            actionItems: actionItems,
+            briefSummary: briefSummary,
+            briefSources: briefSources,
+            linkedMeetingTitle: linkedMeetingTitle,
+            transcriptContext: transcriptContext
+        ))
+    }
+
+    /// L1 规则层 chips：把已传入上下文整理成 `AskSuggestionTips.make` 的入参。
+    private static func computeL1(
+        stage: AskStage,
+        meeting: Meeting?,
+        minutesSummary: MeetingSummary?,
+        actionItems: [ActionItem],
+        briefSummary: String?,
+        briefSources: [BriefSource],
+        linkedMeetingTitle: String?,
+        transcriptContext: String
+    ) -> [String] {
+        let openItems = (meeting?.brief?.openItems ?? [])
+            .filter { $0.resolution == "open" || $0.resolution.isEmpty }
+            .map(\.text)
+        let agendaTitles = (meeting?.brief?.agenda ?? [])
+            .map(\.title)
+            .filter { !$0.isEmpty }
+        let hasBrief = briefSummary != nil || !briefSources.isEmpty
+        return AskSuggestionTips.make(
+            stage: stage,
+            summary: minutesSummary ?? meeting?.latestSummary,
+            actionItems: actionItems,
+            agendaTitles: agendaTitles,
+            briefOpenItems: openItems,
+            linkedMeetingTitle: linkedMeetingTitle,
+            recentTranscript: transcriptContext,
+            hasBrief: hasBrief
+        )
     }
 
     private func syncLiveContext() {
@@ -88,29 +149,64 @@ public struct AgentInvokeSheet: View {
         )
     }
 
-    private var hasBrief: Bool {
-        briefSummary != nil || !briefSources.isEmpty
-    }
-
-    private var chips: [String] {
-        let openItems = (meeting?.brief?.openItems ?? [])
-            .filter { $0.resolution == "open" || $0.resolution.isEmpty }
-            .map(\.text)
-        return AskSuggestionTips.make(
-            phase: phase,
-            summary: minutesSummary ?? meeting?.latestSummary,
-            actionItems: actionItems,
-            briefOpenItems: openItems,
-            recentTranscript: transcriptContext,
-            hasBrief: hasBrief
-        )
+    /// L2 LLM 卷宗：按阶段组装当下真实拥有的数据，无可用内容则返回 nil（跳过 L2，保 L1）。
+    private func composeL2Dossier(stage: AskStage) -> String? {
+        var parts: [String] = []
+        switch stage {
+        case .preMeeting:
+            let agendaTitles = (meeting?.brief?.agenda ?? [])
+                .map(\.title)
+                .filter { !$0.isEmpty }
+            guard briefSummary != nil || !agendaTitles.isEmpty || linkedMeetingTitle != nil else {
+                return nil                       // 底稿全空 → 跳 L2（L1 已有通用准备向兜底）
+            }
+            if let b = briefSummary {
+                parts.append("【底稿摘要】\n\(String(b.prefix(600)))")
+            }
+            if !agendaTitles.isEmpty {
+                parts.append("【议程】\n" + agendaTitles.prefix(8).map { "- \($0)" }.joined(separator: "\n"))
+            }
+            if let linkedMeetingTitle {
+                parts.append("【关联上场】\(linkedMeetingTitle)")
+            }
+        case .liveRecording, .livePaused:
+            if !transcriptContext.isEmpty {
+                parts.append("【近段转写】\n\(String(transcriptContext.suffix(800)))")
+            }
+            if let b = briefSummary {
+                parts.append("【底稿】\n\(String(b.prefix(300)))")
+            }
+        case .processing:
+            if !transcriptContext.isEmpty {
+                parts.append("【转写片段】\n\(String(transcriptContext.suffix(400)))")
+            }
+        case .review:
+            if let block = AskMeetingDossier.minutesBlock(summary: minutesSummary ?? meeting?.latestSummary) {
+                parts.append(block)
+            }
+            let compact = actionItems.map {
+                AskMeetingDossier.ActionItemCompact(
+                    task: $0.task,
+                    owner: $0.owner,
+                    dueText: $0.dueText,
+                    status: $0.status
+                )
+            }
+            if let actions = AskMeetingDossier.actionItemsBlock(items: compact) {
+                parts.append("【待办】\n\(actions)")
+            }
+        }
+        let joined = parts.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
     }
 
     private var emptyHeadline: String {
-        switch phase {
-        case .live:       return "开会走神了？我帮你补课"
-        case .processing: return "纪要整理中，先问我要点"
-        case .review:     return "关于这场会议，想了解什么？"
+        switch stage {
+        case .preMeeting:    return "想先准备点什么？"
+        case .liveRecording: return "开会走神了？我帮你补课"
+        case .livePaused:    return "趁暂停，我帮你梳理一下"
+        case .processing:    return "纪要整理中，先问我要点"
+        case .review:        return "关于这场会议，想了解什么？"
         }
     }
 
@@ -149,6 +245,19 @@ public struct AgentInvokeSheet: View {
         .onChange(of: segments.count) { _, _ in syncLiveContext() }
         .onChange(of: phase) { _, _ in syncLiveContext() }
         .onDisappear { model.cancel() }
+        // L2 LLM 动态层：仅视图生命周期触发一次（不带 id），didLoadL2 幂等，
+        // 避免录音中 transcriptContext 每 ~5s 变化导致重算。
+        .task {
+            guard !didLoadL2 else { return }
+            didLoadL2 = true
+            guard MinutesPipelineSmoke.canRunMinutesPipeline else { return }   // 无密钥/未配 BYOK → 保 L1
+            guard let dossier = composeL2Dossier(stage: stage) else { return } // 无可用卷宗 → 保 L1
+            let l2 = await SuggestedQuestionsGenerator.generate(stage: stage, dossier: dossier)
+            if Task.isCancelled { return }
+            if let l2, l2.count >= 3 {
+                withAnimation(.recapSoft) { suggestionChips = l2 }
+            }
+        }
         .sheet(isPresented: $showSkills) {
             SkillsSheet(
                 isPresented: $showSkills,
@@ -207,19 +316,10 @@ public struct AgentInvokeSheet: View {
                     Text("问 Recap")
                         .font(.system(size: 17, weight: .semibold, design: .default))
                         .foregroundStyle(Color.recapInk)
-                    if model.webEnabled {
-                        Text("联网")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.recapCeladon)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.recapCeladon.opacity(0.12), in: Capsule())
-                            .accessibilityHidden(true)
-                    }
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel(model.webEnabled ? "问 Recap，联网已开" : "问 Recap")
+                .accessibilityLabel("问 Recap")
 
                 Spacer(minLength: 0)
 
@@ -352,7 +452,7 @@ public struct AgentInvokeSheet: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Spacing.sm) {
-                    ForEach(chips, id: \.self) { chip in
+                    ForEach(suggestionChips, id: \.self) { chip in
                         Button { ask(chip) } label: {
                             Text(chip)
                                 .font(.recapMeta)
@@ -405,14 +505,9 @@ public struct AgentInvokeSheet: View {
 
                 if !message.citations.isEmpty, !message.isStreaming {
                     citationRow(message.citations)
-                } else if let source = message.source, !source.isEmpty, !message.isStreaming {
-                    Text(source)
-                        .font(.system(size: 11, weight: .medium, design: .default))
-                        .foregroundStyle(Color.recapTea)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.trailing, 40)
         }
     }
 
@@ -581,10 +676,10 @@ public struct AgentInvokeSheet: View {
 
     private var bottomDock: some View {
         VStack(spacing: Spacing.sm) {
-            if !model.messages.isEmpty, !chips.isEmpty {
+            if !model.messages.isEmpty, !suggestionChips.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Spacing.sm) {
-                        ForEach(chips, id: \.self) { chip in
+                        ForEach(suggestionChips, id: \.self) { chip in
                             Button { ask(chip) } label: {
                                 Text(chip)
                                     .font(.recapMeta)
@@ -602,9 +697,6 @@ public struct AgentInvokeSheet: View {
             }
 
             HStack(alignment: .center, spacing: Spacing.sm) {
-                RecapAIAvatarImage(size: 18)
-                    .clipShape(Circle())
-
                 TextField(
                     phase == .live ? "问任何关于此刻的问题" : "问任何关于本会议的问题",
                     text: $input,

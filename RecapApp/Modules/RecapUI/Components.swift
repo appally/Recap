@@ -84,20 +84,13 @@ public struct SpeakerBlockView: View {
                 LiveDots()
                     .accessibilityHidden(true)
             } else if showsSpeakerIdentity {
-                HStack(spacing: 4) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.speaker(block.speaker.colorIndex).opacity(0.22))
-                            .frame(width: 15, height: 15)
-                        Text(String(block.speaker.name.prefix(1)))
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(Color.speaker(block.speaker.colorIndex))
-                    }
-                    Text(block.speaker.name)
-                        .font(.system(size: 12, weight: .semibold, design: .default))
-                        .tracking(0.15)
-                        .foregroundStyle(Color.recapTea)
-                }
+                Circle()
+                    .fill(Color.speaker(block.speaker.colorIndex))
+                    .frame(width: 6, height: 6)
+                Text(block.speaker.name)
+                    .font(.system(size: 12, weight: .medium, design: .default))
+                    .tracking(0.15)
+                    .foregroundStyle(Color.recapTea)
             }
             Spacer(minLength: 0)
         }
@@ -109,22 +102,18 @@ public struct SpeakerBlockView: View {
     private var timestampLabel: some View {
         if let onSeek {
             Button(action: onSeek) {
-                HStack(spacing: 3) {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 8, weight: .bold))
-                    Text(block.timestamp)
-                        .font(.recapTimestamp)
-                        .tracking(0.2)
-                }
-                .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea.opacity(0.9))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    (isListening ? Color.recapCeladon : Color.recapTea).opacity(0.10),
-                    in: Capsule()
-                )
+                Text(block.timestamp)
+                    .font(.recapTimestamp)
+                    .tracking(0.2)
+                    .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea.opacity(0.9))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        (isListening ? Color.recapCeladon : Color.recapTea).opacity(0.10),
+                        in: Capsule()
+                    )
             }
-            .buttonStyle(RecapPressStyle())
+            .buttonStyle(.plain)
             .accessibilityLabel("从 \(block.timestamp) 回听")
         } else {
             Text(block.timestamp)
@@ -178,85 +167,48 @@ public struct TldrCard: View {
     public let text: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var grown = false
-    @State private var copied = false
-
     public init(text: String) { self.text = text }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: Spacing.md) {
-            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                .fill(Color.recapCinnabar)
-                .frame(width: 3.5)
-                // 朱砂竖条自上而下生长（《完成到纪要过渡》幕④）；Reduce Motion 直接满高。
-                .scaleEffect(y: grown ? 1 : 0, anchor: .top)
+        VStack(alignment: .leading, spacing: Spacing.xs + 2) {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.recapCeladon)
+                Text("核心结论")
+                    .font(.system(size: 12, weight: .bold, design: .default))
+                    .tracking(0.5)
+                    .foregroundStyle(Color.recapCeladon)
+            }
 
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                HStack(alignment: .center) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(Color.recapCinnabar)
-                        Text("AI 核心摘要")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundStyle(Color.recapCinnabar)
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3.5)
-                    .background(Color.recapCinnabar.opacity(0.10), in: Capsule())
-
-                    Spacer(minLength: 0)
-
-                    Button {
-                        UIPasteboard.general.string = text
-                        Haptics.notify(.success)
-                        withAnimation(.recapNotice) { copied = true }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                            withAnimation(.recapNotice) { copied = false }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text(copied ? "已复制" : "复制")
-                                .font(.system(size: 11, weight: .semibold, design: .default))
-                        }
-                        .foregroundStyle(copied ? Color.recapCeladon : Color.recapTea)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 3.5)
-                        .background(
-                            copied ? Color.recapCeladon.opacity(0.12) : Color.recapTea.opacity(0.08),
-                            in: Capsule()
+            HStack(alignment: .top, spacing: Spacing.md) {
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.recapCeladon, Color.recapCeladon.opacity(0.4)],
+                            startPoint: .top,
+                            endPoint: .bottom
                         )
-                    }
-                    .buttonStyle(RecapPressStyle())
-                }
+                    )
+                    .frame(width: 3)
+                    .scaleEffect(y: grown ? 1 : 0, anchor: .top)
 
                 Text(text)
                     .font(.recapTldr)
                     .foregroundStyle(Color.recapInk)
                     .lineSpacing(5)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 2)
             }
         }
         .padding(Spacing.lg)
         .background {
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.recapCinnabar.opacity(0.04),
-                            Color.recapPaper
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: .recapShadow, radius: 12, x: 0, y: 4)
+                .fill(Color.recapPaper)
+                .shadow(color: Color.black.opacity(0.04), radius: 10, x: 0, y: 3)
         }
         .overlay(
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Color.recapCinnabar.opacity(0.10), lineWidth: 0.8)
+                .strokeBorder(Color.recapCeladon.opacity(0.12), lineWidth: 1)
         )
         .onAppear {
             guard !grown else { return }
@@ -479,13 +431,18 @@ public struct ActionItemCard: View {
 
     private var assigneeBadge: some View {
         let colorIndex = item.assigneeColorIndex(in: speakers)
-        return ZStack {
-            Circle().fill(Color.speaker(colorIndex).opacity(0.18))
-            Text(item.assigneeInitial)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.speaker(colorIndex))
+        let initial = item.assigneeInitial.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Group {
+            if !initial.isEmpty && initial != "?" {
+                ZStack {
+                    Circle().fill(Color.speaker(colorIndex).opacity(0.18))
+                    Text(initial)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.speaker(colorIndex))
+                }
+                .frame(width: 20, height: 20)
+            }
         }
-        .frame(width: 20, height: 20)
     }
 
     private var confirmButton: some View {
@@ -502,22 +459,26 @@ public struct ActionItemCard: View {
 
     @ViewBuilder
     private var sourcePill: some View {
-        let pill = HStack(spacing: 3) {
-            Image(systemName: "play.circle.fill")
-                .font(.system(size: 10, weight: .bold))
-            Text("↗ \(item.sourceTime)")
-                .font(.recapTimestamp)
-        }
-        .foregroundStyle(Color.recapCinnabar)
-        .padding(.horizontal, Spacing.sm)
-        .padding(.vertical, 3.5)
-        .background(Color.recapCinnabar.opacity(0.10), in: Capsule())
+        let time = item.sourceTime.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !time.isEmpty && time != "--:--" && !time.contains("--") {
+            let pill = HStack(spacing: 3) {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(time)
+                    .font(.recapTimestamp)
+            }
+            .foregroundStyle(Color.recapTea)
+            .padding(.horizontal, Spacing.sm)
+            .padding(.vertical, 3)
+            .background(Color.recapPaper.opacity(0.8), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.recapTea.opacity(0.25), lineWidth: 0.8))
 
-        if let start = item.startSeconds, let onJump = onJumpToSource {
-            Button { onJump(start) } label: { pill }
-                .buttonStyle(RecapPressStyle())
-        } else {
-            pill
+            if let start = item.startSeconds, let onJump = onJumpToSource {
+                Button { onJump(start) } label: { pill }
+                    .buttonStyle(RecapPressStyle())
+            } else {
+                pill
+            }
         }
     }
 
@@ -646,52 +607,6 @@ public struct HandDrawnArrow: Shape {
     }
 }
 
-/// 启动台手绘指引：包含手绘感弧形箭头 + 资料说明
-public struct HandDrawnMaterialsGuideView: View {
-    public let hasMaterials: Bool
-    public let action: () -> Void
-
-    public init(hasMaterials: Bool = false, action: @escaping () -> Void) {
-        self.hasMaterials = hasMaterials
-        self.action = action
-    }
-
-    public var body: some View {
-        Button(action: action) {
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(hasMaterials ? "已加入会议资料" : "可先添加会议资料")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.recapCinnabar.opacity(0.90))
-
-                    Text("议程 · 底稿 · 背景文档")
-                        .font(.system(size: 11, weight: .regular, design: .default))
-                        .foregroundStyle(Color.recapTea.opacity(0.80))
-                }
-
-                HandDrawnArrow()
-                    .stroke(
-                        Color.recapCinnabar.opacity(0.85),
-                        style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)
-                    )
-                    .frame(width: 24, height: 20)
-                    .padding(.top, 2)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.recapCinnabar.opacity(0.06))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.recapCinnabar.opacity(0.14), lineWidth: 0.8)
-                    )
-            )
-        }
-        .buttonStyle(RecapPressStyle())
-    }
-}
-
 // MARK: - 收音指示（波形条）
 
 public struct LiveDots: View {
@@ -724,6 +639,65 @@ public struct LiveDots: View {
         .accessibilityLabel("正在收音")
     }
 }
+
+// MARK: - 实时声波时间胶囊
+
+public struct LiveSonicCapsule: View {
+    public let isPaused: Bool
+    public let elapsedTimeText: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isBreathing = false
+
+    public init(isPaused: Bool, elapsedTimeText: String) {
+        self.isPaused = isPaused
+        self.elapsedTimeText = elapsedTimeText
+    }
+
+    public var body: some View {
+        HStack(spacing: Spacing.xs) {
+            if isPaused {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.recapOchre)
+            } else {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.recapCinnabar)
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(reduceMotion ? 1 : (isBreathing ? 1.25 : 0.85))
+                        .opacity(reduceMotion ? 1 : (isBreathing ? 1.0 : 0.45))
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
+                            value: isBreathing
+                        )
+                        .onAppear { isBreathing = true }
+
+                    LiveDots()
+                        .scaleEffect(0.85)
+                }
+            }
+
+            Text(isPaused ? "已暂停 · \(elapsedTimeText)" : elapsedTimeText)
+                .font(.system(size: 13, weight: .semibold, design: .default))
+                .monospacedDigit()
+                .foregroundStyle(isPaused ? Color.recapInk.opacity(0.65) : Color.recapInk)
+        }
+        .padding(.horizontal, Spacing.md)
+        .padding(.vertical, 6)
+        .background {
+            Capsule(style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.5)
+                )
+        }
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isPaused ? "已暂停，时长 \(elapsedTimeText)" : "正在录音，时长 \(elapsedTimeText)")
+    }
+}
+
 
 // MARK: - 参会人头像组
 
@@ -768,26 +742,20 @@ public struct RecordingButton: View {
         } label: {
             ZStack {
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.recapCinnabar, Color(hex: 0xDB4E44)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 60, height: 60)
+                    .fill(Color(light: 0x111614, dark: 0xF0F2EE))
+                    .frame(width: 62, height: 62)
                     .overlay(
                         Circle()
-                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            .stroke(Color(light: 0xFFFFFF, dark: 0x2C3036).opacity(0.2), lineWidth: 1)
                     )
 
-                Image(systemName: "waveform")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white)
+                Image(systemName: "sparkle")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(Color(light: 0xFFFFFF, dark: 0x111614))
             }
             .scaleEffect(reduceMotion || !allowsPulse ? 1 : (pulse ? 1.04 : 1.0))
-            .shadow(color: Color.recapCinnabar.opacity(0.28), radius: 14, x: 0, y: 6)
-            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
+            .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: 6)
+            .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
         }
         .buttonStyle(RecapPressStyle())
         .accessibilityLabel("新会议")

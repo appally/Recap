@@ -310,6 +310,9 @@ public struct AskMarkdownText: View {
     @State private var blocks: [MarkdownBlock] = []
     @State private var debounceTask: Task<Void, Never>?
 
+    /// 助手正文统一字号（略大于 recapRaw 的 15，长文更易读）。
+    private static let bodyFont: Font = .system(size: 16, weight: .regular, design: .default)
+
     public init(source: String, isStreaming: Bool = false) {
         self.source = source
         self.isStreaming = isStreaming
@@ -343,8 +346,8 @@ public struct AskMarkdownText: View {
         switch block {
         case .paragraph(let text):
             Text(AskMarkdownRenderer.attributed(text))
-                .font(.recapRaw)
-                .lineSpacing(4)
+                .font(Self.bodyFont)
+                .lineSpacing(5)
 
         case .heading(let level, let text):
             Text(AskMarkdownRenderer.attributedInline(text))
@@ -369,7 +372,7 @@ public struct AskMarkdownText: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, line in
                     Text(AskMarkdownRenderer.attributed(line))
-                        .font(.system(size: 14, weight: .regular, design: .default))
+                        .font(.system(size: 15, weight: .regular, design: .default))
                         .foregroundStyle(Color.recapTea)
                         .lineSpacing(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -384,7 +387,7 @@ public struct AskMarkdownText: View {
 
         case .codeBlock(_, let content):
             Text(content)
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
+                .font(.system(size: 14, weight: .regular, design: .monospaced))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Spacing.sm + 2)
                 .background(
@@ -403,22 +406,22 @@ public struct AskMarkdownText: View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.sm - 2) {
             Text(marker)
                 .font(monospacedMarker
-                      ? .system(size: 15, weight: .regular, design: .monospaced)
-                      : .recapRaw)
+                      ? .system(size: 16, weight: .regular, design: .monospaced)
+                      : Self.bodyFont)
                 .foregroundStyle(Color.recapTea)
             Text(AskMarkdownRenderer.attributed(text))
-                .font(.recapRaw)
-                .lineSpacing(4)
+                .font(Self.bodyFont)
+                .lineSpacing(5)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return .system(size: 19, weight: .semibold, design: .default)
-        case 2: return .system(size: 17, weight: .semibold, design: .default)
-        case 3: return .system(size: 16, weight: .semibold, design: .default)
-        default: return .system(size: 15, weight: .semibold, design: .default)
+        case 1: return .system(size: 20, weight: .semibold, design: .default)
+        case 2: return .system(size: 18, weight: .semibold, design: .default)
+        case 3: return .system(size: 17, weight: .semibold, design: .default)
+        default: return .system(size: 16, weight: .semibold, design: .default)
         }
     }
 

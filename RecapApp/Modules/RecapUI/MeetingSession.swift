@@ -53,6 +53,8 @@ public final class MeetingSession: ObservableObject {
     /// 会后 LLM 润色任务（独立于 CoreML 的 postMeetingTask，二者可并发）。
     private var polishTask: Task<Void, Never>?
     private var endingLive = false
+    /// 全新会进会已自动发起开麦（防 onAppear 重入）；session 是按 meeting 创建的 @StateObject，标志位天然按会议隔离。
+    private var didAutoStartLive = false
     private var liveSpeaker = Speaker(id: "asr-live", name: "转写", colorIndex: 0)
     /// LIVE 字幕合并（index / 续录偏移 / partial·segment）；UI `blocks` 由其投影。
     private var merger = LiveTranscriptMerger()
@@ -90,8 +92,14 @@ public final class MeetingSession: ObservableObject {
                 isLivePaused = false
                 return
             }
-            // 进会不自动开麦：未开录 = 启动台（无状态字）；收起后再进 = 已暂停。均等用户点开始。
-            enterPausedState(status: hasStartedRecording ? "已暂停" : "")
+            if hasStartedRecording {
+                // 录过、暂停后重进：停「已暂停」，等用户点继续（不自动续录）
+                enterPausedState(status: "已暂停")
+            } else if !didAutoStartLive {
+                // 全新会：进会即开麦，不再停在会前启动台
+                didAutoStartLive = true
+                startLive()
+            }
         case .review:
             loadBlocksIfNeeded()
             if summary.tldr.isEmpty {
@@ -375,21 +383,27 @@ public final class MeetingSession: ObservableObject {
         defer { isDiarizing = false }
 
         do {
-            let outcome = try await DiarizationService.diarizeMeeting(
-                audioPath: path,
-                segments: source,
-                numberOfSpeakers: numberOfSpeakers,
-                preserveSpeakerNames: meeting.speakers.filter { !$0.id.hasPrefix("asr-") },
-                progress: { [weak self] fraction in
-                    Task { @MainActor in
-                        guard let self, self.isDiarizing else { return }
-                        let pct = Int((fraction * 100).rounded())
-                        self.statusMessage = pct < 5
-                            ? "准备说话人模型…"
-                            : "说话人分离中… \(pct)%"
+            // 超时预算：按时长比例（pyannote RTF 未知，给 3×）。放门**外**，同重转写。
+            let audioDuration = MeetingAudioStore.durationSeconds(storedPath: path) ?? 1800
+            let budget = audioDuration * 3 + 300
+            let preserve = meeting.speakers.filter { !$0.id.hasPrefix("asr-") }
+            let outcome = try await withThrowingTimeout(seconds: budget) {
+                try await DiarizationService.diarizeMeeting(
+                    audioPath: path,
+                    segments: source,
+                    numberOfSpeakers: numberOfSpeakers,
+                    preserveSpeakerNames: preserve,
+                    progress: { [weak self] fraction in
+                        Task { @MainActor in
+                            guard let self, self.isDiarizing else { return }
+                            let pct = Int((fraction * 100).rounded())
+                            self.statusMessage = pct < 5
+                                ? "准备说话人模型…"
+                                : "说话人分离中… \(pct)%"
+                        }
                     }
-                }
-            )
+                )
+            }
             let labeled = outcome.segments.filter { ($0.speakerId ?? "").hasPrefix("spk") }.count
             meeting.segments = outcome.segments
             meeting.speakers = outcome.speakers
@@ -401,6 +415,10 @@ public final class MeetingSession: ObservableObject {
             } else {
                 statusMessage = "已标注 \(labeled)/\(outcome.segments.count) 段 · \(outcome.speakers.count) 位说话人"
             }
+        } catch is CancellationError {
+            statusMessage = "已取消"
+        } catch InferenceTimeoutError.exceeded {
+            statusMessage = "说话人分离超时，请稍后重试"
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -438,10 +456,25 @@ public final class MeetingSession: ObservableObject {
             return
         }
         statusMessage = engineKind?.isOnDevice == true ? "端侧重转中…" : "重转中…"
+
+        // 失败/取消路径兜底释放引擎（成功路径手动 release 后清空此引用）
+        var preparedEngine: (any AsrEngine)?
+        defer {
+            if let e = preparedEngine { Task { await e.release() } }
+        }
+
         do {
+            if Task.isCancelled {
+                statusMessage = "已取消"
+                return
+            }
             let samples = try MeetingAudioStore.loadFloatSamples(storedPath: path)
             guard !samples.isEmpty else {
                 statusMessage = "本地录音为空"
+                return
+            }
+            if Task.isCancelled {
+                statusMessage = "已取消"
                 return
             }
             let engine: any AsrEngine
@@ -450,14 +483,23 @@ public final class MeetingSession: ObservableObject {
             } else {
                 engine = try await AsrEngineResolver.resolve()
             }
+            preparedEngine = engine
             let hints = liveContextualHints
             if !hints.isEmpty { await engine.setContextualHints(hints) }
-            let result = try await engine.transcribe(
-                samples: samples,
-                sampleRate: MeetingAudioStore.sampleRate,
-                onPartial: nil
-            )
+
+            // 超时预算：RTF>2× 即判失败（plan 024「RTF<1 通过」标准）。放门**外**——超时后当前
+            // chunk 推理可能仍跑完（CoreML 不响应取消），期间门保持占用、不与下次推理并发 → 不触发 #661。
+            let audioDuration = Double(samples.count) / MeetingAudioStore.sampleRate
+            let budget = audioDuration * 2 + 300
+            let result = try await withThrowingTimeout(seconds: budget) {
+                try await engine.transcribe(
+                    samples: samples,
+                    sampleRate: MeetingAudioStore.sampleRate,
+                    onPartial: nil
+                )
+            }
             await engine.release()
+            preparedEngine = nil
             let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
             meeting.segments = result.segments
             // 重转产生新 raw，旧 polished 不再对应：清空，稍后联动重新润色
@@ -470,6 +512,10 @@ public final class MeetingSession: ObservableObject {
             checkpointSaver?()
             statusMessage = result.segments.isEmpty ? "重转完成（无字幕）" : "重转完成"
             schedulePolishIfNeeded()   // ①③ 联动：新 raw → 自动润色
+        } catch is CancellationError {
+            statusMessage = "已取消"
+        } catch InferenceTimeoutError.exceeded {
+            statusMessage = "端侧重转过慢/超时，建议改用云端或稍后重试"
         } catch {
             statusMessage = "重转失败：\(error.localizedDescription)"
         }
@@ -798,6 +844,8 @@ public final class MeetingSession: ObservableObject {
             adoptSegmentsAsBlocks(source)   // 重新构造 blocks，这次 polished 有值 → 双行
             checkpointSaver?()
             statusMessage = "逐字稿已优化"
+        } catch is CancellationError {
+            statusMessage = "已取消"
         } catch {
             statusMessage = "优化失败：\(error.localizedDescription)（请在设置配置 LLM 密钥）"
         }
