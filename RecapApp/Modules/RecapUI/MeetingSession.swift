@@ -56,6 +56,8 @@ public final class MeetingSession: ObservableObject {
     private var postMeetingTask: Task<Void, Never>?
     /// 会后 LLM 润色任务（独立于 CoreML 的 postMeetingTask，二者可并发）。
     private var polishTask: Task<Void, Never>?
+    /// #M2：暂停时捕获 stop() 定稿分段的任务；endLive 等其落地，resume 取消丢弃。
+    private var pauseFlushTask: Task<Void, Never>?
     /// #6b：会后 LLM 纪要管线的后台名额；用户完成即切后台时争取时间让管线跑完。
     private var minutesBgTaskID: UIBackgroundTaskIdentifier = .invalid
     private var endingLive = false
@@ -257,26 +259,48 @@ public final class MeetingSession: ObservableObject {
         revealTask?.cancel()
         endingLive = false
         setIdleTimerDisabled(false)
-        if let recording, recording.isRunning {
-            // #3：摘除回调，避免 stop() 迟到的定稿分段在 resume 抬高 timelineOffset 后，
-            //   以错误的绝对时间落回 merger 叠行/错位；末句草稿由下方就地定稿保留。
-            recording.onPartial = nil
-            recording.onSegment = nil
-            recording.onError = nil
-            recording.onInterrupted = nil
-            Task { _ = try? await recording.stop() }
-        }
+
+        let recordingToFlush = recording
         recording = nil
-        // #3：定稿当前未完的末句草稿，防止 resume 时被新 session 的首个 partial 覆盖丢失
-        merger.finalizeTrailingDraft()
-        publishMergerRows()
-        checkpointIfNeeded(force: true)
+        // 摘除回调：flush 结果由 pauseFlushTask 显式应用，避免迟到回调在 resume 抬高
+        // timelineOffset 后以错误的绝对时间落回 merger（resume 会取消此 task 丢弃结果）。
+        recordingToFlush?.onPartial = nil
+        recordingToFlush?.onSegment = nil
+        recordingToFlush?.onError = nil
+        recordingToFlush?.onInterrupted = nil
+
+        // #M2：捕获 stop() 的定稿分段并入 merger，避免 pause→complete 丢末段；
+        //   finalizeTrailingDraft 兜底未进 flush 的末句草稿。
+        pauseFlushTask?.cancel()
+        pauseFlushTask = Task { [weak self] in
+            guard let self else { return }
+            if let r = recordingToFlush, r.isRunning {
+                let result = try? await r.stop()
+                if Task.isCancelled { return }
+                if let result, !result.segments.isEmpty {
+                    self.applyPauseFlush(result)
+                }
+            }
+            if Task.isCancelled { return }
+            self.merger.finalizeTrailingDraft()
+            self.publishMergerRows()
+            self.checkpointIfNeeded(force: true)
+        }
         enterPausedState(status: "已暂停")
+    }
+
+    /// #M2：把暂停时 stop() 的定稿分段并入 merger（用当前未抬高的 timelineOffset）。
+    private func applyPauseFlush(_ result: TranscribeResult) {
+        for seg in result.segments { merger.applySegment(seg) }
+        publishMergerRows()
     }
 
     /// 从暂停态恢复收音。
     public func resumeLive() {
         guard phase == .live || meeting.phase == .live else { return }
+        // #M2：用户选择继续，丢弃暂停 flush（旧 stop 仍在后台释放引擎，结果不再需要）
+        pauseFlushTask?.cancel()
+        pauseFlushTask = nil
         isLivePaused = false
         liveStartFailed = false
         startLive()
@@ -652,6 +676,12 @@ public final class MeetingSession: ObservableObject {
         revealTask = Task { [weak self] in
             guard let self else { return }
             defer { self.endingLive = false }
+
+            // #M2：暂停后立即完成时，等暂停 flush 落地再收尾，避免丢末段
+            if let flush = self.pauseFlushTask {
+                _ = await flush.value
+                self.pauseFlushTask = nil
+            }
 
             if let recordingToStop {
                 do {
