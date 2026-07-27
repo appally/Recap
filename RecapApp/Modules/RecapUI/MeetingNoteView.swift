@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import AVFoundation
 import RecapModels
 import RecapLLM
 import RecapASR
@@ -51,6 +52,7 @@ public struct MeetingNoteView: View {
     @StateObject private var audioPlayer = MeetingAudioPlayer()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     private var researchRunner: AgentTaskRunner { AgentTaskRunner.shared }
 
     public init(meeting: Meeting, onDismiss: @escaping () -> Void = {}) {
@@ -691,8 +693,27 @@ public struct MeetingNoteView: View {
         return "将停止录音并开始整理纪要，此操作不可撤销。"
     }
 
+    /// #5：当前麦克风权限被拒 → 失败态给「打开设置」入口，避免死路。
+    private var liveMicPermissionDenied: Bool {
+        AVAudioApplication.shared.recordPermission != .granted
+    }
+
     private var liveFailureActions: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
+            if liveMicPermissionDenied {
+                Text("麦克风权限未开启，请在系统设置中允许后返回重试")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.recapTea)
+                Button {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        openURL(url)
+                    }
+                } label: {
+                    Text("打开设置")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.recapCeladon)
+                }
+            }
             Button("重试转写引擎") {
                 session.retryLiveRecording()
             }
@@ -1867,8 +1888,8 @@ private enum ReviewTab: Hashable {
 
 // MARK: - Process stage (整理态舞台)
 
-/// 整理舞台：海獭 Mascot 悬浮 + 多重弥散极光 + 动态智能体整理文案。
-/// 风格高级、简洁、有趣。Reduce Motion 时静帧优雅呈现。
+/// 整理舞台：海獭 Mascot 悬浮 + 多重弥散极光 + Gemini 底部流光动效 + 逐字稿飞升 + 动态处理步骤。
+/// 风格简洁、干净、高级（参考 Plaud AI 与 Google Gemini APP）。Reduce Motion 时静帧优雅呈现。
 private struct ProcessStageCanvas: View {
     let title: String
     let subtitle: String?
@@ -1900,10 +1921,24 @@ private struct ProcessStageCanvas: View {
     }
 
     private func stageStack(t: Double) -> some View {
-        ZStack {
-            atmosphere(t: t)
-            if showGhost, !ghostBlocks.isEmpty { ghostLayer }
-            signalCore(t: t)
+        VStack(spacing: 0) {
+            ZStack {
+                atmosphere(t: t)
+                if showGhost, !ghostBlocks.isEmpty {
+                    TranscriptStreamFlowView(ghostBlocks: ghostBlocks, reduceMotion: reduceMotion)
+                        .padding(.top, Spacing.lg)
+                }
+                signalCore(t: t)
+            }
+            .frame(maxHeight: .infinity)
+
+            // 底部 Google Gemini 风格流光 Bar
+            VStack(spacing: Spacing.md) {
+                GeminiFluidGlowView(height: 5, reduceMotion: reduceMotion)
+                    .padding(.horizontal, Spacing.xxl)
+                    .opacity(appeared ? 1 : 0)
+            }
+            .padding(.bottom, Spacing.xl)
         }
     }
 
@@ -1947,30 +1982,6 @@ private struct ProcessStageCanvas: View {
         .allowsHitTesting(false)
     }
 
-    // MARK: - Ghost Layer (字幕沉降残影)
-
-    private var ghostLayer: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Spacer(minLength: 0)
-            ForEach(ghostBlocks) { block in
-                SpeakerBlockView(block: block, isCurrent: false)
-                    .padding(.horizontal, Spacing.xl)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .opacity(appeared ? (reduceMotion ? 0.20 : 0.14) : 0)
-        .blur(radius: reduceMotion ? 0 : 5)
-        .mask(
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.85), .black.opacity(0.85), .clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
-        .allowsHitTesting(false)
-    }
-
     // MARK: - Core (海獭 Mascot + 流光轨 + 动态文案)
 
     private func signalCore(t: Double) -> some View {
@@ -1979,7 +1990,7 @@ private struct ProcessStageCanvas: View {
         let rot1 = reduceMotion ? 0 : t * 0.35
         let rot2 = reduceMotion ? 0 : -t * 0.25
 
-        return VStack(spacing: Spacing.xxl) {
+        return VStack(spacing: Spacing.xl) {
             // 核心动画区：海獭 Mascot + 双流光轨
             ZStack {
                 // 外层流光轨 (Outer Orbit)
@@ -1997,7 +2008,7 @@ private struct ProcessStageCanvas: View {
                         ),
                         lineWidth: 1.2
                     )
-                    .frame(width: 144, height: 144)
+                    .frame(width: 136, height: 136)
                     .rotationEffect(.radians(rot2))
 
                 // 内层流光弧 (Inner Arc)
@@ -2014,7 +2025,7 @@ private struct ProcessStageCanvas: View {
                         ),
                         style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
                     )
-                    .frame(width: 118, height: 118)
+                    .frame(width: 110, height: 110)
                     .rotationEffect(.radians(rot1))
 
                 // 轨道小光点粒子
@@ -2022,13 +2033,13 @@ private struct ProcessStageCanvas: View {
                     Circle()
                         .fill(Color.recapInk.opacity(0.6))
                         .frame(width: 4, height: 4)
-                        .offset(x: 59)
+                        .offset(x: 55)
                         .rotationEffect(.radians(rot1 + .pi * 0.38))
 
                     Circle()
                         .fill(Color.recapCeladon.opacity(0.5))
                         .frame(width: 3, height: 3)
-                        .offset(x: -72)
+                        .offset(x: -68)
                         .rotationEffect(.radians(rot2))
                 }
 
@@ -2041,23 +2052,39 @@ private struct ProcessStageCanvas: View {
                     Circle()
                         .strokeBorder(Color.recapInk.opacity(0.06), lineWidth: 1)
 
-                    RecapAIAvatarImage(size: 58)
+                    RecapAIAvatarImage(size: 54)
                         .clipShape(Circle())
                 }
-                .frame(width: 82, height: 82)
+                .frame(width: 76, height: 76)
                 .offset(y: floatY)
                 .scaleEffect(breathScale)
             }
-            .frame(width: 160, height: 160)
+            .frame(width: 144, height: 144)
             .scaleEffect(appeared ? 1 : 0.90)
             .opacity(appeared ? 1 : 0)
 
-            // 动态故事文案区
+            // 动态 Processing 步骤文案区
             VStack(spacing: Spacing.xs) {
+                // 步骤指示胶囊 Badge
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.recapCeladon)
+                        .frame(width: 6, height: 6)
+                    Text(stepBadgeText(t: t))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.recapTea)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Color.recapInk.opacity(0.04),
+                    in: Capsule()
+                )
+
                 Text(dynamicStatusTitle(t: t))
                     .font(.system(size: 16, weight: .semibold, design: .default))
-                    .tracking(1.2)
-                    .foregroundStyle(Color.recapInk.opacity(0.9))
+                    .tracking(0.8)
+                    .foregroundStyle(Color.recapInk.opacity(0.92))
                     .multilineTextAlignment(.center)
                     .id(dynamicStatusTitle(t: t))
                     .transition(.opacity.combined(with: .offset(y: 4)))
@@ -2075,26 +2102,38 @@ private struct ProcessStageCanvas: View {
         .padding(.horizontal, Spacing.xxl)
     }
 
-    // MARK: - Dynamic Copy Helper (动态文案转换)
+    // MARK: - Dynamic Step & Copy Helper (动态步骤文案)
 
-    private func dynamicStatusTitle(t: Double) -> String {
-        // 若没有 Model Key，使用静态标题 "已保存"
+    private func stepBadgeText(t: Double) -> String {
         guard MinutesPipelineSmoke.canRunMinutesPipeline else {
-            return title
+            return "本地完成"
         }
-        // 如果传入了特化 title（如 "语音识别完成"），直接显示
-        if title != "整理中" && !title.isEmpty {
-            return title
-        }
-        // 动态递进文案（根据时间 t 切换）
         let cycle = Int(t) % 9
         switch cycle {
         case 0..<3:
-            return "海獭正在梳理会议要点…"
+            return "STEP 1 / 3"
         case 3..<6:
-            return "提炼关键决议与行动项…"
+            return "STEP 2 / 3"
         default:
-            return "即将为您呈献精炼纪要…"
+            return "STEP 3 / 3"
+        }
+    }
+
+    private func dynamicStatusTitle(t: Double) -> String {
+        guard MinutesPipelineSmoke.canRunMinutesPipeline else {
+            return title
+        }
+        if title != "整理中" && !title.isEmpty {
+            return title
+        }
+        let cycle = Int(t) % 9
+        switch cycle {
+        case 0..<3:
+            return "正在梳理语音对话原稿…"
+        case 3..<6:
+            return "正在提炼核心议题与关键决议…"
+        default:
+            return "正在生成行动待办与结构化纪要…"
         }
     }
 
@@ -2103,7 +2142,7 @@ private struct ProcessStageCanvas: View {
             return subtitle
         }
         if MinutesPipelineSmoke.canRunMinutesPipeline {
-            return "语音识别完成 · 智能提炼中"
+            return "Gemini AI 智能推理中"
         }
         return nil
     }
