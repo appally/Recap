@@ -691,6 +691,13 @@ public final class MeetingSession: ObservableObject {
 
     private func startProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
                                  persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        // #7：空会议（无转写内容）不进 LLM 纪要管线，直接进 review，避免空跑 processing 态与无效调用
+        guard !blocks.isEmpty || !meeting.segments.isEmpty else {
+            RecapLog.session.info("startProcessing: 转写为空，跳过纪要管线，直接进 review")
+            statusMessage = "本场无录音内容"
+            finishReviewWithoutMock()
+            return
+        }
         if MinutesPipelineSmoke.canRunMinutesPipeline {
             RecapLog.session.info("startProcessing: 闸门通过，启动 LLM 纪要管线")
             startLLMProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
