@@ -256,9 +256,19 @@ public final class MeetingSession: ObservableObject {
         endingLive = false
         setIdleTimerDisabled(false)
         if let recording, recording.isRunning {
+            // #3：摘除回调，避免 stop() 迟到的定稿分段在 resume 抬高 timelineOffset 后，
+            //   以错误的绝对时间落回 merger 叠行/错位；末句草稿由下方就地定稿保留。
+            recording.onPartial = nil
+            recording.onSegment = nil
+            recording.onError = nil
+            recording.onInterrupted = nil
             Task { _ = try? await recording.stop() }
         }
         recording = nil
+        // #3：定稿当前未完的末句草稿，防止 resume 时被新 session 的首个 partial 覆盖丢失
+        merger.finalizeTrailingDraft()
+        publishMergerRows()
+        checkpointIfNeeded(force: true)
         enterPausedState(status: "已暂停")
     }
 
@@ -361,6 +371,8 @@ public final class MeetingSession: ObservableObject {
             recording = nil
             isUsingMockAudio = false
             liveStartFailed = true
+            // #4：启动失败时停表，避免失败态时钟空走、时长虚高（重试时 startLive 会重启时钟）
+            clockTask?.cancel()
             if !isLivePaused {
                 statusMessage = "转写引擎启动失败：\(error.localizedDescription)"
             }
