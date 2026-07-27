@@ -4,6 +4,8 @@ import Foundation
 public enum NoteTarget: Sendable, Hashable {
     /// 总结（默认选中 · inline 渲染）。对应 `meeting.latestSummaryOutput`。
     case summary
+    /// 模板产物笔记：`AIOutput(.note)` 的 id（对外纪要 / 邮件 / 周报等）。
+    case note(UUID)
     /// 调研草稿：`AIOutput(.draft)` 的 id。
     case researchDraft(UUID)
     /// 进行中 / 挂起的 `AgentTask` id。
@@ -49,6 +51,7 @@ public enum NoteIndex {
     /// 本场所有笔记（总结置顶）。
     public static func notes(from meeting: Meeting, runningTaskId: UUID? = nil) -> [NoteItem] {
         var items: [NoteItem] = [summaryItem(meeting)]
+        items.append(contentsOf: noteItems(from: meeting))
         items.append(contentsOf: draftItems(from: meeting))
         items.append(contentsOf: taskItems(from: meeting, runningTaskId: runningTaskId))
         return items
@@ -77,6 +80,23 @@ public enum NoteIndex {
             createdAt: meeting.startedAt,
             target: .summary
         )
+    }
+
+    private static func noteItems(from meeting: Meeting) -> [NoteItem] {
+        meeting.outputs
+            .filter { $0.kind == .note }
+            .sorted { $0.createdAt > $1.createdAt }
+            .map { output in
+                let payload = output.notePayload
+                return NoteItem(
+                    id: "note-note-\(output.id.uuidString)",
+                    title: payload?.title ?? "笔记",
+                    subtitle: "AI 生成 · 请核实",
+                    systemImage: "doc.text",
+                    createdAt: output.createdAt,
+                    target: .note(output.id)
+                )
+            }
     }
 
     private static func draftItems(from meeting: Meeting) -> [NoteItem] {

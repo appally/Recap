@@ -152,6 +152,7 @@ public struct MeetingListView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     searchButton
                 }
+                .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
                     accountButton
                 }
@@ -241,6 +242,40 @@ public struct MeetingListView: View {
                 Text(statsLine)
                     .font(.system(size: 13, weight: .regular, design: .default))
                     .foregroundStyle(Color.recapTea)
+            }
+
+            if showSearchField {
+                HStack(spacing: Spacing.sm) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Color.recapTea)
+
+                    TextField("搜索会议标题、摘要或地点...", text: $searchText)
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Color.recapInk)
+
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 15))
+                                .foregroundStyle(Color.recapTea)
+                        }
+                    }
+                }
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(light: 0xF6F7F8, dark: 0x16191D))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.recapTea.opacity(0.12), lineWidth: 0.5)
+                        )
+                )
+                .padding(.top, Spacing.sm)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -484,13 +519,27 @@ public struct MeetingListView: View {
         path.append(MeetingRoute.live(meeting.id))
     }
 
-    /// 与纪要顶栏同规：`RecapToolbarIcon`（44pt · 16 medium · 墨色 0.78）。
+    private var searchButton: some View {
+        RecapToolbarIcon(
+            "magnifyingglass",
+            accessibilityLabel: "搜索会议"
+        ) {
+            withAnimation(.recapSoft) {
+                showSearchField.toggle()
+                if !showSearchField {
+                    searchText = ""
+                }
+            }
+        }
+    }
+
     private var accountButton: some View {
         RecapToolbarIcon(
             RecapSymbol.account,
-            accessibilityLabel: "账户与设置",
-            accessibilityHint: "打开账户与设置"
-        ) { showSettings = true }
+            accessibilityLabel: "账户与设置"
+        ) {
+            showSettings = true
+        }
     }
 }
 

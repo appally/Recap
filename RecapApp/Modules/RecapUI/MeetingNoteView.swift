@@ -19,10 +19,13 @@ public struct MeetingNoteView: View {
     @State private var agentDetent: PresentationDetent = .large
     /// REVIEW 正文两 Tab：原稿（转写+录音+现场）/ 笔记（模板产物·默认）。
     @State private var reviewTab: ReviewTab = .notes
+    /// 笔记 Tab 当前选中的笔记（switcher 驱动 inline 渲染）。
+    @State private var selectedNote: NoteTarget = .summary
     /// Segmented 选中胶囊在「摘要/逐字稿」间滑动的命名空间。
     @Namespace private var segNamespace
     @State private var pendingScrollStart: Double?
     @State private var showAudioPlayer = false
+    @State private var showTemplateSelection = false
     @State private var showEndLiveConfirm = false
     @State private var showDeleteLiveConfirm = false
     @State private var showResearchProgress = false
@@ -86,6 +89,34 @@ public struct MeetingNoteView: View {
         }
     }
 
+    /// 为模板生成（`SkillNoteWriter`）构建只读 Agent 上下文（对齐 `AgentInvokeSheet` 的入参）。
+    private func makeAgentToolContext() -> AgentToolContext {
+        let snapshots = meeting.actionItems.map {
+            ActionItemSnapshot(
+                id: $0.id,
+                task: $0.task,
+                owner: $0.owner,
+                dueText: $0.dueText,
+                statusRaw: $0.status.rawValue,
+                meetingTitle: meeting.title,
+                isDispatched: $0.isReallyDispatched
+            )
+        }
+        return AgentToolContext(
+            meetingTitle: meeting.title,
+            phase: session.phase,
+            segments: askSegments,
+            speakers: meeting.speakers,
+            briefSources: meeting.brief?.sources ?? [],
+            fallbackTranscript: transcriptContext,
+            webEnabled: false,
+            currentMeetingId: meeting.id,
+            actionItems: snapshots,
+            currentMinutes: meeting.latestSummary,
+            workspace: nil
+        )
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             customTopBar
@@ -139,6 +170,18 @@ public struct MeetingNoteView: View {
             .presentationBackground(Color.recapBg)
             .onAppear { agentDetent = .large }
             .onDisappear { agentPrefill = "" }
+        }
+        .sheet(isPresented: $showTemplateSelection) {
+            TemplateSelectionSheet(
+                isPresented: $showTemplateSelection,
+                meetingTitle: meeting.title,
+                meeting: meeting,
+                agentToolContext: makeAgentToolContext(),
+                onGenerated: { id in
+                    withAnimation(.recapSoft) { selectedNote = .note(id) }
+                    reviewTab = .notes
+                }
+            )
         }
         .sheet(isPresented: $showMinutesVersions) {
             MinutesVersionsSheet(meeting: meeting) { output in
@@ -307,87 +350,81 @@ public struct MeetingNoteView: View {
     /// 自绘顶栏。LIVE 阶段：左侧保留最小化收起按钮 (chevron.down)，居中挂载声波时间胶囊 (LiveSonicCapsule)。
     private var customTopBar: some View {
         let isLiveInteractive = session.phase == .live && !isSettling
-        return GlassEffectContainer(spacing: Spacing.sm) {
-            HStack(spacing: Spacing.sm) {
-                // 左侧控制按钮：LIVE 阶段为最小化收起 (chevron.down)，REVIEW 阶段为返回 (chevron.left)
-                Button {
-                    dismissFromTopBar()
-                } label: {
-                    Image(systemName: session.phase == .live ? RecapSymbol.dismissDown : RecapSymbol.back)
+        return HStack(spacing: Spacing.sm) {
+            // 左侧控制按钮：LIVE 阶段为最小化收起 (chevron.down)，REVIEW 阶段为返回 (chevron.left)
+            Button {
+                dismissFromTopBar()
+            } label: {
+                Image(systemName: session.phase == .live ? RecapSymbol.dismissDown : RecapSymbol.back)
+                    .font(.system(size: RecapToolbarIconMetrics.pointSize, weight: RecapToolbarIconMetrics.weight))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(RecapPressStyle())
+            .accessibilityLabel(topBarDismissAccessibilityLabel)
+            .disabled(isSettling)
+
+            Spacer(minLength: 0)
+
+            if isLiveInteractive {
+                if session.hasStartedRecording {
+                    meetingMoreMenu
+                }
+            }
+
+            if session.phase == .review {
+                ShareLink(item: currentNoteMarkdown, subject: Text(meeting.title)) {
+                    Image(systemName: RecapSymbol.share)
                         .font(.system(size: RecapToolbarIconMetrics.pointSize, weight: RecapToolbarIconMetrics.weight))
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity))
-                        .contentTransition(.symbolEffect(.replace))
                         .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)
                         .contentShape(Circle())
                 }
                 .buttonStyle(RecapPressStyle())
-                .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityLabel(topBarDismissAccessibilityLabel)
-                .disabled(isSettling)
 
-                Spacer(minLength: 0)
-
-                if isLiveInteractive {
-                    // 删除等低频破坏动作进「更多」；启动台已可清场，不必再挂
-                    if session.hasStartedRecording {
-                        meetingMoreMenu
-                    }
-                }
-
-                // 工具仅 REVIEW 落定后出现；分享已下沉到笔记层（每条笔记自带）
-                if session.phase == .review {
-                    if hasLocalAudio {
-                        RecapToolbarIcon(
-                            RecapSymbol.listen,
-                            emphasized: showAudioPlayer || audioPlayer.isPlaying,
-                            accessibilityLabel: showAudioPlayer ? "关闭回听" : "回听录音",
-                            accessibilityHint: "播放本场会议的本地录音"
-                        ) {
-                            if showAudioPlayer {
-                                closeAudioPlayer()
-                            } else {
-                                openAudioPlayer(autoplay: false)
-                            }
-                        }
-                    }
-
-                    meetingMoreMenu
-                }
-            }
-            .overlay {
-                if isLiveInteractive {
-                    LiveSonicCapsule(
-                        isPaused: session.isLivePaused,
-                        elapsedTimeText: elapsedText(session.elapsed)
-                    )
-                    .transition(.scale(scale: 0.92).combined(with: .opacity))
-                    .onTapGesture {
-                        dismissFromTopBar()
-                    }
-                } else if showsStageTitleInTopBar {
-                    VStack(spacing: 1) {
-                        Text(meeting.title)
-                            .font(.system(size: 15, weight: .semibold, design: .default))
-                            .tracking(0.1)
-                            .foregroundStyle(Color.recapInk)
-                            .lineLimit(1)
-                        if let meta = liveTopMetaText {
-                            Text(meta)
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .monospacedDigit()
-                                .tracking(0.2)
-                                .foregroundStyle(Color.recapOchre)
-                        }
-                    }
-                    .padding(.horizontal, 100)
-                    .allowsHitTesting(false)
-                }
+                meetingMoreMenu
             }
         }
-        .padding(.horizontal, Spacing.sm)
-        .padding(.top, Spacing.xs)
-        // 不在 GlassEffectContainer 上挂隐式 animation，避免 glassEffect 同帧多次更新
+        .padding(.horizontal, Spacing.lg)
+        .padding(.vertical, Spacing.sm)
+        .overlay {
+            if isLiveInteractive {
+                LiveSonicCapsule(
+                    isPaused: session.isLivePaused,
+                    elapsedTimeText: elapsedText(session.elapsed)
+                )
+                .transition(.scale(scale: 0.92).combined(with: .opacity))
+                .onTapGesture {
+                    dismissFromTopBar()
+                }
+            } else if session.phase == .review {
+                HStack(spacing: 24) {
+                    segHeaderButton("来源", .source)
+                    segHeaderButton("笔记", .notes)
+                }
+            } else if showsStageTitleInTopBar {
+                VStack(spacing: 1) {
+                    Text(meeting.title)
+                        .font(.system(size: 15, weight: .semibold, design: .default))
+                        .tracking(0.1)
+                        .foregroundStyle(Color.recapInk)
+                        .lineLimit(1)
+                    if let meta = liveTopMetaText {
+                        Text(meta)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .monospacedDigit()
+                            .tracking(0.2)
+                            .foregroundStyle(Color.recapOchre)
+                    }
+                }
+                .padding(.horizontal, 100)
+                .allowsHitTesting(false)
+            }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -437,11 +474,8 @@ public struct MeetingNoteView: View {
                         }
 
                         if session.blocks.isEmpty && !session.liveStartFailed {
-                            Text(liveEmptyPrompt)
-                                .font(.recapRaw)
-                                .foregroundStyle(Color.recapTea)
-                                .padding(.leading, Spacing.xl + 2 + Spacing.md)
-                                .padding(.trailing, Spacing.xl)
+                            PlaudLiveWaveformVisualizer(isPaused: session.isLivePaused)
+                                .padding(.horizontal, Spacing.xl)
                                 .padding(.bottom, Spacing.lg)
                         }
 
@@ -671,21 +705,11 @@ public struct MeetingNoteView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Spacing.xxl) {
                     // revealStep==0：标题只在顶栏；有内容后再在正文展开
-                    if session.phase == .review {
-                        titleMeta
-                    } else if session.revealStep >= 1 {
-                        titleMetaReadonly
-                    }
                     if !session.statusMessage.isEmpty,
                        session.revealStep >= 1 || session.phase == .review {
                         Text(session.statusMessage)
                             .font(.recapMeta)
                             .foregroundStyle(Color.recapOchre)
-                    }
-                    // Tab 等有内容后再出现，避免整理期像填表
-                    if session.revealStep >= 1 {
-                        segmented
-                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                     if reviewTab == .source { transcriptBody } else { notesBody }
                 }
@@ -796,9 +820,28 @@ public struct MeetingNoteView: View {
         }
     }
 
+    private func segHeaderButton(_ title: String, _ tab: ReviewTab) -> some View {
+        Button {
+            Haptics.selection()
+            withAnimation(.recapSoft) { reviewTab = tab }
+        } label: {
+            VStack(spacing: 3) {
+                Text(title)
+                    .font(.system(size: 16, weight: reviewTab == tab ? .semibold : .regular))
+                    .foregroundStyle(reviewTab == tab ? Color.recapInk : Color.recapTea)
+
+                Rectangle()
+                    .fill(reviewTab == tab ? Color.recapInk : Color.clear)
+                    .frame(width: 24, height: 2.5)
+                    .cornerRadius(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
     private var segmented: some View {
         HStack(spacing: 2) {
-            segButton("原稿", .source)
+            segButton("来源", .source)
             segButton("笔记", .notes)
         }
         .padding(3)
@@ -829,22 +872,84 @@ public struct MeetingNoteView: View {
 
     // MARK: Notes tab（笔记层）
 
-    /// 笔记 Tab：模板切换器 + 当前笔记。
-    /// Phase 1：总结 inline（复用 `summaryBody`）；调研草稿 / 进行中任务从下拉打开既有 sheet。
+    /// 笔记 Tab：模板切换器 + 当前笔记（按 `selectedNote` 分发 inline 渲染）。
     private var notesBody: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
             noteSwitcherBar
+            currentNoteView
+        }
+    }
+
+    @ViewBuilder
+    private var currentNoteView: some View {
+        switch selectedNote {
+        case .note(let id):
+            noteInlineView(id)
+        case .summary, .researchDraft, .researchTask:
+            summaryNoteView
+        }
+    }
+
+    /// 总结笔记：复用既有 disclaimer + Plaud H1 + `summaryBody`（结构化交互保留）。
+    private var summaryNoteView: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            Text("内容由 AI 生成，仅供参考")
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(Color.recapTea.opacity(0.65))
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 2)
+
+            // Plaud AI 风格 H1 页面大标题（大字号粗体）
+            Text(meeting.title)
+                .font(.system(size: 30, weight: .bold))
+                .foregroundStyle(Color.recapInk)
+                .lineSpacing(4)
+                .padding(.top, Spacing.xs)
+                .padding(.bottom, Spacing.xs)
+
             summaryBody
         }
     }
 
-    /// `[总结 ▼]   分享`：▼ 列出本场其它笔记（调研草稿 / 进行中任务），点选打开对应 sheet。
+    /// 模板产物笔记（.note）：ochre AI 声明 + 笔记标题 + markdown 正文（`AskMarkdownText` 页面级渲染）。
+    @ViewBuilder
+    private func noteInlineView(_ id: UUID) -> some View {
+        if let payload = meeting.outputs.first(where: { $0.id == id })?.notePayload {
+            VStack(alignment: .leading, spacing: Spacing.lg) {
+                AIDisclaimerBanner()
+                Text(payload.title)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(Color.recapInk)
+                AskMarkdownText(source: payload.body, isStreaming: false)
+            }
+        } else {
+            // 笔记被删除等异常情况，回退总结
+            summaryNoteView
+        }
+    }
+
+    /// switcher 当前标题。
+    private var currentNoteTitle: String {
+        switch selectedNote {
+        case .summary, .researchDraft, .researchTask:
+            return "总结"
+        case .note(let id):
+            return meeting.outputs.first(where: { $0.id == id })?.notePayload?.title ?? "笔记"
+        }
+    }
+
+    /// Plaud 风格模板切块：`标记` | `当前笔记 ∨` | `+`
     private var noteSwitcherBar: some View {
-        let others = otherNoteItems
-        return HStack(spacing: Spacing.sm) {
+        HStack(spacing: Spacing.sm) {
+            Text("标记")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Color.recapTea)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(light: 0xF6F7F8, dark: 0x16191D), in: Capsule())
+
             Menu {
-                Label("总结", systemImage: "doc.richtext")
-                ForEach(others) { item in
+                ForEach(allNoteItems) { item in
                     Button {
                         openNote(item.target)
                     } label: {
@@ -852,52 +957,72 @@ public struct MeetingNoteView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 6) {
-                    Text(others.isEmpty ? "总结" : "总结 · 另 \(others.count) 份")
-                        .font(.recapMeta.weight(.semibold))
+                HStack(spacing: 4) {
+                    Text(currentNoteTitle)
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.recapInk)
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.recapTea)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.recapInk)
                 }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 7)
-                .background(Color.recapPaper, in: Capsule())
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(light: 0xF6F7F8, dark: 0x16191D), in: Capsule())
             }
-            .disabled(others.isEmpty)
+
+            Button {
+                Haptics.impact(.light)
+                showTemplateSelection = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.recapInk)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color(light: 0xF6F7F8, dark: 0x16191D), in: Capsule())
+            }
 
             Spacer(minLength: 0)
 
-            // 分享当前笔记（Phase 1：总结）。Phase 2 泛化为按笔记类型出选项。
-            ShareLink(item: shareMarkdown, subject: Text(meeting.title)) {
+            ShareLink(item: currentNoteMarkdown, subject: Text(meeting.title)) {
                 Image(systemName: RecapSymbol.share)
-                    .font(.system(size: RecapToolbarIconMetrics.pointSize, weight: RecapToolbarIconMetrics.weight))
-                    .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity))
-                    .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)
-                    .contentShape(Circle())
+                    .font(.system(size: 16, weight: .regular))
+                    .foregroundStyle(Color.recapInk)
             }
             .buttonStyle(RecapPressStyle())
-            .glassEffect(.regular.interactive(), in: .circle)
-            .accessibilityLabel("分享总结")
         }
     }
 
-    /// 本场除总结外的笔记（switcher 下拉用）。
-    private var otherNoteItems: [NoteItem] {
-        Array(
-            NoteIndex.notes(
-                from: meeting,
-                runningTaskId: researchRunner.isBusy ? researchRunner.current?.id : nil
-            ).dropFirst()
+    /// 本场所有笔记（switcher 下拉用；总结恒置顶）。
+    private var allNoteItems: [NoteItem] {
+        NoteIndex.notes(
+            from: meeting,
+            runningTaskId: researchRunner.isBusy ? researchRunner.current?.id : nil
         )
     }
 
-    /// switcher 下拉点选：调研草稿 / 进行中任务 → 打开既有 sheet；总结保持 inline。
+    /// 当前笔记的可分享 markdown（总结走 `shareMarkdown`；.note 走标题+正文）。
+    private var currentNoteMarkdown: String {
+        switch selectedNote {
+        case .note(let id):
+            if let payload = meeting.outputs.first(where: { $0.id == id })?.notePayload {
+                return "# \(payload.title)\n\n\(payload.body)"
+            }
+            return shareMarkdown
+        case .summary, .researchDraft, .researchTask:
+            return shareMarkdown
+        }
+    }
+
+    /// switcher 下拉点选：总结/笔记 → inline 切换；调研草稿 / 进行中任务 → 打开既有 sheet。
     private func openNote(_ target: NoteTarget) {
         switch target {
         case .summary:
             Haptics.selection()
+            withAnimation(.recapSoft) { selectedNote = .summary }
+        case .note(let id):
+            Haptics.selection()
+            withAnimation(.recapSoft) { selectedNote = .note(id) }
         case .researchDraft(let id):
             if let draft = meeting.outputs.first(where: { $0.id == id })?.researchDraftPayload {
                 Haptics.selection()
@@ -1273,21 +1398,18 @@ public struct MeetingNoteView: View {
     }
 
     private func sectionTitle(systemImage: String, _ text: String, color: Color, count: Int? = nil) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(color)
+        HStack(spacing: 8) {
             Text(text)
-                .font(.recapSection)
-                .foregroundStyle(color)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(Color.recapInk)
             if let c = count {
                 Text("\(c)")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .monospacedDigit()
-                    .foregroundStyle(color.opacity(0.85))
+                    .foregroundStyle(Color.recapTea)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
-                    .background(color.opacity(0.1), in: Capsule())
+                    .background(Color(light: 0xF1F3F5, dark: 0x22252A), in: Capsule())
             }
             Spacer()
         }
@@ -1295,30 +1417,69 @@ public struct MeetingNoteView: View {
 
     @ViewBuilder
     private var transcriptBody: some View {
-        // 直接向父 LazyVStack 贡献行，避免嵌套 VStack 物化全表
-        // 会议时刻（moments）与转写分段按 startSeconds 合并排序，时刻卡片在对应位置插队。
-        let listeningId = listeningBlockId
-        ForEach(timelineRows) { row in
-            switch row.kind {
-            case .block(let block):
-                SpeakerBlockView(
-                    block: block,
-                    isCurrent: false,
-                    isListening: listeningId == block.id,
-                    onSeek: hasLocalAudio
-                        ? { openAudioPlayer(seekTo: blockStartSeconds(block), autoplay: true) }
-                        : nil
-                )
-                .id(row.id)
-            case .moment(let moment):
-                MomentCardView(
-                    moment: moment,
-                    onSeek: hasLocalAudio
-                        ? { openAudioPlayer(seekTo: moment.startSeconds, autoplay: true) }
-                        : nil,
-                    onOpen: { galleryMoment = moment }
-                )
-                .id(row.id)
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            // H1 页面大标题：转写（带墨色下划线）
+            VStack(alignment: .leading, spacing: 4) {
+                Text("转写")
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(Color.recapInk)
+                Rectangle()
+                    .fill(Color.recapInk)
+                    .frame(width: 24, height: 2.5)
+                    .cornerRadius(1)
+            }
+            .padding(.top, Spacing.xs)
+
+            // 音频播放控制卡片
+            PlaudAudioPlayerCard(
+                player: audioPlayer,
+                onSeek15Back: {
+                    audioPlayer.seek(to: max(0, audioPlayer.currentTime - 15))
+                },
+                onSeek15Forward: {
+                    audioPlayer.seek(to: min(audioPlayer.duration, audioPlayer.currentTime + 15))
+                },
+                onSpeedToggle: {
+                    Haptics.impact(.light)
+                },
+                onCrop: {
+                    Haptics.impact(.light)
+                }
+            )
+
+            Divider()
+                .background(Color.recapTea.opacity(0.12))
+
+            // 转写区标头
+            Text("转写")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(Color.recapInk)
+                .padding(.top, Spacing.xs)
+
+            // 逐字稿内容流
+            let listeningId = listeningBlockId
+            ForEach(timelineRows) { row in
+                switch row.kind {
+                case .block(let block):
+                    SpeakerBlockView(
+                        block: block,
+                        isCurrent: false,
+                        isListening: listeningId == block.id,
+                        onSeek: hasLocalAudio
+                            ? { openAudioPlayer(seekTo: blockStartSeconds(block), autoplay: true) }
+                            : nil
+                    )
+                    .id(row.id)
+                case .moment(let moment):
+                    MomentCardView(
+                        moment: moment,
+                        onSeek: hasLocalAudio
+                            ? { openAudioPlayer(seekTo: moment.startSeconds, autoplay: true) }
+                            : nil,
+                        onOpen: { galleryMoment = moment }
+                    )
+                    .id(row.id)
+                }
             }
         }
     }
@@ -1441,14 +1602,21 @@ public struct MeetingNoteView: View {
                 Haptics.impact(.light)
                 session.pauseLive()
             } label: {
-                Image(systemName: RecapSymbol.pause)
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Color.recapInk.opacity(0.82))
+                Circle()
+                    .fill(Color(light: 0xFFFFFF, dark: 0x1F2329))
                     .frame(width: 68, height: 68)
-                    .contentShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color.recapCinnabar.opacity(0.4), lineWidth: 2)
+                    )
+                    .overlay(
+                        Image(systemName: RecapSymbol.pause)
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(Color.recapCinnabar)
+                    )
             }
             .buttonStyle(RecapPressStyle())
-            .glassEffect(.regular.interactive(), in: .circle)
+            .shadow(color: Color.black.opacity(0.06), radius: 6, x: 0, y: 3)
             .accessibilityLabel("暂停录音")
             .accessibilityHint("停止收音，可继续或完成整理")
             .overlay(alignment: .top) {
@@ -1589,24 +1757,25 @@ public struct MeetingNoteView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(RecapPressStyle())
-        .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel("记录此刻")
         .accessibilityHint("拍下白板或此刻，锚定到录音当前秒，不打断录音")
     }
 
-    /// 会后底栏：右下浮钮（全站统一右下角 AI 入口）。
+    /// 会后底栏：笔记页直刷虹彩悬浮 Ask Bar，转写页保持纯净无浮钮
     private var reviewBottom: some View {
-        HStack {
-            Spacer(minLength: 0)
-            Button { askRecap() } label: {
-                RecapAskEntryLabel()
+        Group {
+            if reviewTab == .notes {
+                PlaudAskBar(
+                    placeholder: "对此笔记提问",
+                    onSubmit: { prompt in
+                        agentPrefill = prompt
+                        showAgent = true
+                    }
+                )
+                .padding(.horizontal, Spacing.lg)
+                .padding(.bottom, Spacing.sm)
             }
-            .buttonStyle(RecapPressStyle())
-            .accessibilityLabel("问 Recap")
-            .accessibilityHint("提问、改纪要、技能，都从这里进")
         }
-        .padding(.horizontal, Spacing.xl)
-        .padding(.bottom, Spacing.lg)
     }
 
     /// 低频破坏动作：删除进「更多」，也可在首页列表左滑/长按删除。
@@ -1653,7 +1822,6 @@ public struct MeetingNoteView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(RecapPressStyle())
-        .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel("更多")
         .accessibilityHint("删除本场等操作")
     }
@@ -1984,6 +2152,266 @@ private struct ProcessStageCanvas: View {
             return "语音识别完成 · 智能提炼中"
         }
         return nil
+    }
+}
+
+/// Plaud AI 标志性贴底 AI 问答输入框（彩虹微渐变边框 + Beta 微标）
+private struct PlaudAskBar: View {
+    @State private var text: String = ""
+    let placeholder: String
+    let onSubmit: (String) -> Void
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(light: 0xFFFFFF, dark: 0x16191D))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color(hex: 0x38BDF8), // 天蓝
+                                    Color(hex: 0x818CF8), // 靛蓝
+                                    Color(hex: 0x4ADE80), // 翠绿
+                                    Color(hex: 0xF472B6)  // 粉紫
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.5
+                        )
+                )
+
+            HStack(spacing: Spacing.sm) {
+                TextField(placeholder, text: $text)
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(Color.recapInk)
+                    .submitLabel(.send)
+                    .onSubmit {
+                        let trimmed = text.trimmingCharacters(in: .whitespaces)
+                        if !trimmed.isEmpty {
+                            onSubmit(trimmed)
+                            text = ""
+                        }
+                    }
+
+                Button {
+                    let trimmed = text.trimmingCharacters(in: .whitespaces)
+                    onSubmit(trimmed)
+                    if !trimmed.isEmpty { text = "" }
+                } label: {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+
+            // Floating Beta Badge
+            Text("Beta")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.recapTea)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color(light: 0xF1F3F5, dark: 0x22252A))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(Color.recapTea.opacity(0.2), lineWidth: 0.5)
+                        )
+                )
+                .offset(x: 14, y: -22)
+        }
+        .frame(height: 44)
+    }
+}
+
+/// Plaud AI 风格音频播放卡片
+private struct PlaudAudioPlayerCard: View {
+    @ObservedObject var player: MeetingAudioPlayer
+    var onSeek15Back: () -> Void
+    var onSeek15Forward: () -> Void
+    var onSpeedToggle: () -> Void
+    var onCrop: () -> Void
+
+    private func formatTime(_ s: TimeInterval) -> String {
+        let total = max(0, Int(s))
+        let hrs = total / 3600
+        let mins = (total % 3600) / 60
+        let secs = total % 60
+        return String(format: "%02d:%02d:%02d", hrs, mins, secs)
+    }
+
+    var body: some View {
+        VStack(spacing: Spacing.md) {
+            // Line 1: Time & Crop
+            HStack {
+                Text("\(formatTime(player.currentTime)) / \(formatTime(player.duration))")
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Color.recapTea)
+
+                Spacer()
+
+                Button {
+                    onCrop()
+                } label: {
+                    Image(systemName: "crop")
+                        .font(.system(size: 15, weight: .regular))
+                        .foregroundStyle(Color.recapTea)
+                }
+            }
+
+            // Line 2: Waveform bar
+            PlaudAudioWaveformView(
+                progress: player.duration > 0 ? player.currentTime / player.duration : 0
+            )
+            .frame(height: 36)
+
+            // Line 3: 5 Control Buttons
+            HStack(spacing: 0) {
+                // 1. Play / Pause
+                Button {
+                    player.togglePlayPause()
+                } label: {
+                    Circle()
+                        .fill(Color(light: 0xEEEEF0, dark: 0x1F2329))
+                        .frame(width: 44, height: 44)
+                        .overlay(
+                            Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Color.recapInk)
+                        )
+                }
+                .frame(maxWidth: .infinity)
+
+                // 2. Skip 15s Back
+                Button {
+                    onSeek15Back()
+                } label: {
+                    Image(systemName: "gobackward.15")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(Color.recapInk)
+                }
+                .frame(maxWidth: .infinity)
+
+                // 3. Skip 15s Forward
+                Button {
+                    onSeek15Forward()
+                } label: {
+                    Image(systemName: "goforward.15")
+                        .font(.system(size: 20, weight: .regular))
+                        .foregroundStyle(Color.recapInk)
+                }
+                .frame(maxWidth: .infinity)
+
+                // 4. Speed & AI Enhance
+                Button {
+                    onSpeedToggle()
+                } label: {
+                    HStack(spacing: 2) {
+                        Image(systemName: "sparkle")
+                            .font(.system(size: 10))
+                        Text("1x")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.recapInk)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color(light: 0xF1F3F5, dark: 0x22252A), in: Capsule())
+                }
+                .frame(maxWidth: .infinity)
+
+                // 5. Crop / Selection
+                Button {
+                    onCrop()
+                } label: {
+                    Image(systemName: "sparkles.rectangle.stack")
+                        .font(.system(size: 18, weight: .regular))
+                        .foregroundStyle(Color.recapInk)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, Spacing.xs)
+    }
+}
+
+/// Plaud AI 极简音频波形视图
+private struct PlaudAudioWaveformView: View {
+    var progress: Double = 0.0
+
+    var body: some View {
+        GeometryReader { geo in
+            let count = 45
+            let barWidth: CGFloat = 2.5
+            let spacing = (geo.size.width - (CGFloat(count) * barWidth)) / CGFloat(count - 1)
+
+            HStack(alignment: .center, spacing: max(1, spacing)) {
+                ForEach(0..<count, id: \.self) { index in
+                    let ratio = Double(index) / Double(count)
+                    let isPlayed = ratio <= progress
+                    let height = heightForBar(index: index, total: count, maxHeight: geo.size.height)
+
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(isPlayed ? Color.recapInk : Color.recapTea.opacity(0.3))
+                        .frame(width: barWidth, height: height)
+                }
+            }
+        }
+    }
+
+    private func heightForBar(index: Int, total: Int, maxHeight: CGFloat) -> CGFloat {
+        let seed = sin(Double(index) * 0.4) * cos(Double(index) * 0.7)
+        let normalized = (abs(seed) * 0.75) + 0.25
+        return CGFloat(normalized) * maxHeight
+    }
+}
+
+/// Plaud AI 实时收音动态声波场
+private struct PlaudLiveWaveformVisualizer: View {
+    let isPaused: Bool
+    @State private var phase: Double = 0.0
+
+    var body: some View {
+        VStack(spacing: Spacing.md) {
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(0..<36, id: \.self) { i in
+                    let height = barHeight(for: i)
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(
+                            isPaused
+                                ? AnyShapeStyle(Color.recapTea.opacity(0.25))
+                                : AnyShapeStyle(LinearGradient(
+                                    colors: [Color.recapCinnabar, Color.recapOchre],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ))
+                        )
+                        .frame(width: 3, height: height)
+                }
+            }
+            .frame(height: 52)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.55).repeatForever(autoreverses: true)) {
+                    phase = .pi * 2
+                }
+            }
+
+            Text(isPaused ? "录音已暂停 · 点击下方「完成」生成纪要" : "正在倾听中 · 开始讲话字幕实时呈现")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.recapTea)
+        }
+        .padding(.vertical, Spacing.xl)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func barHeight(for index: Int) -> CGFloat {
+        if isPaused { return 6 }
+        let base = sin(Double(index) * 0.4 + phase)
+        let normalized = (abs(base) * 0.75) + 0.25
+        return CGFloat(normalized * 40 + 8)
     }
 }
 

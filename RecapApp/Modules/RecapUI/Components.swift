@@ -78,18 +78,14 @@ public struct SpeakerBlockView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             timestampLabel
             if showLiveMeter {
                 LiveDots()
                     .accessibilityHidden(true)
             } else if showsSpeakerIdentity {
-                Circle()
-                    .fill(Color.speaker(block.speaker.colorIndex))
-                    .frame(width: 6, height: 6)
                 Text(block.speaker.name)
-                    .font(.system(size: 12, weight: .medium, design: .default))
-                    .tracking(0.15)
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.recapTea)
             }
             Spacer(minLength: 0)
@@ -103,22 +99,14 @@ public struct SpeakerBlockView: View {
         if let onSeek {
             Button(action: onSeek) {
                 Text(block.timestamp)
-                    .font(.recapTimestamp)
-                    .tracking(0.2)
-                    .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea.opacity(0.9))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        (isListening ? Color.recapCeladon : Color.recapTea).opacity(0.10),
-                        in: Capsule()
-                    )
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("从 \(block.timestamp) 回听")
         } else {
             Text(block.timestamp)
-                .font(.recapTimestamp)
-                .tracking(0.2)
+                .font(.system(size: 13, weight: .regular, design: .monospaced))
                 .foregroundStyle(
                     showLiveMeter ? Color.recapCinnabar.opacity(0.85) : Color.recapTea.opacity(0.85)
                 )
@@ -165,59 +153,14 @@ public struct SpeakerBlockView: View {
 
 public struct TldrCard: View {
     public let text: String
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var grown = false
     public init(text: String) { self.text = text }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: Spacing.xs + 2) {
-            HStack(spacing: 5) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.recapCeladon)
-                Text("核心结论")
-                    .font(.system(size: 12, weight: .bold, design: .default))
-                    .tracking(0.5)
-                    .foregroundStyle(Color.recapCeladon)
-            }
-
-            HStack(alignment: .top, spacing: Spacing.md) {
-                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.recapCeladon, Color.recapCeladon.opacity(0.4)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 3)
-                    .scaleEffect(y: grown ? 1 : 0, anchor: .top)
-
-                Text(text)
-                    .font(.recapTldr)
-                    .foregroundStyle(Color.recapInk)
-                    .lineSpacing(5)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(Spacing.lg)
-        .background {
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .fill(Color.recapPaper)
-                .shadow(color: Color.black.opacity(0.04), radius: 10, x: 0, y: 3)
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                .strokeBorder(Color.recapCeladon.opacity(0.12), lineWidth: 1)
-        )
-        .onAppear {
-            guard !grown else { return }
-            if reduceMotion {
-                grown = true
-            } else {
-                withAnimation(.recapLand) { grown = true }
-            }
-        }
+        Text(text)
+            .font(.system(size: 16, weight: .regular))
+            .foregroundStyle(Color.recapInk)
+            .lineSpacing(6)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -654,45 +597,48 @@ public struct LiveSonicCapsule: View {
     }
 
     public var body: some View {
-        HStack(spacing: Spacing.xs) {
+        HStack(spacing: 6) {
             if isPaused {
                 Image(systemName: "pause.fill")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.recapOchre)
             } else {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(Color.recapCinnabar)
-                        .frame(width: 6, height: 6)
-                        .scaleEffect(reduceMotion ? 1 : (isBreathing ? 1.25 : 0.85))
-                        .opacity(reduceMotion ? 1 : (isBreathing ? 1.0 : 0.45))
-                        .animation(
-                            reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
-                            value: isBreathing
-                        )
-                        .onAppear { isBreathing = true }
+                Circle()
+                    .fill(Color.recapCinnabar)
+                    .frame(width: 7, height: 7)
+                    .scaleEffect(reduceMotion ? 1 : (isBreathing ? 1.2 : 0.85))
+                    .opacity(reduceMotion ? 1 : (isBreathing ? 1.0 : 0.5))
+                    .animation(
+                        reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
+                        value: isBreathing
+                    )
+                    .onAppear { isBreathing = true }
 
-                    LiveDots()
-                        .scaleEffect(0.85)
-                }
+                LiveDots()
+                    .scaleEffect(0.8)
             }
 
             Text(isPaused ? "已暂停 · \(elapsedTimeText)" : elapsedTimeText)
-                .font(.system(size: 13, weight: .semibold, design: .default))
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
-                .foregroundStyle(isPaused ? Color.recapInk.opacity(0.65) : Color.recapInk)
+                .foregroundStyle(isPaused ? Color.recapTea : Color.recapInk)
         }
-        .padding(.horizontal, Spacing.md)
+        .padding(.horizontal, 14)
         .padding(.vertical, 6)
-        .background {
+        .background(
             Capsule(style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Color(light: 0xFFFFFF, dark: 0x1A1C20))
                 .overlay(
                     Capsule(style: .continuous)
-                        .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.5)
+                        .stroke(
+                            isPaused
+                                ? Color.recapOchre.opacity(0.3)
+                                : Color.recapCinnabar.opacity(0.3),
+                            lineWidth: 1
+                        )
                 )
-        }
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isPaused ? "已暂停，时长 \(elapsedTimeText)" : "正在录音，时长 \(elapsedTimeText)")
     }

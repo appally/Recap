@@ -111,6 +111,38 @@ final class NoteIndexTests: XCTestCase {
         XCTAssertEqual(notes.first?.subtitle, "v3")
     }
 
+    /// 模板产物笔记（AIOutput(.note)）聚合到总结之后、调研之前。
+    func testNoteAggregated() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let meeting = Meeting(title: "有笔记")
+        context.insert(meeting)
+
+        let payload = NotePayload(skillId: "external-minutes", title: "对外纪要", body: "正文", modelId: "m")
+        let data = try JSONEncoder().encode(payload)
+        let output = AIOutput(
+            kind: .note,
+            payloadData: data,
+            modelId: "m",
+            promptHash: "external-minutes",
+            version: 1,
+            meeting: meeting
+        )
+        context.insert(output)
+        meeting.outputs.append(output)
+        try context.save()
+
+        let notes = NoteIndex.notes(from: meeting)
+        XCTAssertEqual(notes.count, 2)
+        XCTAssertEqual(notes.first?.title, "总结")
+        XCTAssertEqual(notes.last?.title, "对外纪要")
+        if case .note(let id) = notes.last?.target {
+            XCTAssertEqual(id, output.id)
+        } else {
+            XCTFail("expected note target")
+        }
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema([
             Meeting.self,

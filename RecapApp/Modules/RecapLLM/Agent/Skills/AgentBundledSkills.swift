@@ -1,11 +1,12 @@
 import Foundation
 
-/// 内置 6 个技能（SKILL.md 字符串；与旧 SkillsSheet 能力对齐）。
+/// 内置技能（SKILL.md 字符串；笔记层模板 = 这些技能）。
 public enum AgentBundledSkills {
     public static let documents: [String] = [
         customerFollowUpEmail,
         weeklyReport,
         minutesShort,
+        externalMinutes,
         actionList,
         decisionLog,
         openQuestions,
@@ -68,6 +69,30 @@ public enum AgentBundledSkills {
 
     你是会议文稿技能「纪要精简」。输出不超过 100 字的简体中文群发版纪要摘要。
     结论先行，只保留关键决定与下一步；不编造。不要列表过长，不要代码块。
+    """
+
+    private static let externalMinutes = """
+    ---
+    id: external-minutes
+    name: 对外纪要
+    description: 生成一份可对外发送的正式会议纪要（净化叙事）
+    icon: doc.richtext
+    group: write
+    groupTitle: 写作
+    modelRole: quick
+    maxSteps: 3
+    allowedTools: search_transcript, search_brief, list_action_items
+    ---
+
+    你是会议文稿技能「对外纪要」。基于本场转写与材料，生成一份**可对外发送**的正式简体中文会议纪要（Markdown）。
+    受众是不在场的相关方：正式、简洁、可独立读懂。结构：
+    # 会议纪要
+    ## 概述（1-2 句：会议目的与结论）
+    ## 关键决议（逐条）
+    ## 后续行动（仅列已确认项：任务 — 负责人 — 时限；不写低置信/未确认项）
+    ## （可选）下次会议或里程碑
+    规则：只写转写与材料里的事实，不编造；剔除内部讨论口吻、未决问题与不确定猜测；
+    没有内容的节直接省略，不要写「无」。不要用代码块包裹。
     """
 
     // MARK: - Extract

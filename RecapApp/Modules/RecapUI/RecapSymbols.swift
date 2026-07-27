@@ -66,10 +66,10 @@ public enum RecapSymbol {
 
 public enum RecapToolbarIconMetrics {
     public static let side: CGFloat = 44
-    public static let pointSize: CGFloat = 16
+    public static let pointSize: CGFloat = 17
     public static let weight: Font.Weight = .medium
-    public static let inkOpacity: Double = 0.78
-    public static let accentOpacity: Double = 0.92
+    public static let inkOpacity: Double = 0.85
+    public static let accentOpacity: Double = 0.95
     public static let dot: CGFloat = 7
     public static let dotOffset = CGSize(width: -7, height: 9)
 }
@@ -107,14 +107,14 @@ public struct RecapToolbarIcon: View {
                     .symbolRenderingMode(.monochrome)
                     .foregroundStyle(
                         emphasized
-                            ? Color.recapCeladon.opacity(RecapToolbarIconMetrics.accentOpacity)
+                            ? Color.recapCeladon
                             : Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity)
                     )
                     .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)
                     .contentShape(Circle())
                 if hasBadge {
                     Circle()
-                        .fill(Color.recapCeladon)
+                        .fill(Color.recapCinnabar)
                         .frame(width: RecapToolbarIconMetrics.dot, height: RecapToolbarIconMetrics.dot)
                         .offset(x: RecapToolbarIconMetrics.dotOffset.width,
                                 y: RecapToolbarIconMetrics.dotOffset.height)
@@ -122,7 +122,6 @@ public struct RecapToolbarIcon: View {
             }
         }
         .buttonStyle(RecapPressStyle())
-        .glassEffect(.regular.interactive(), in: .circle)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityHint(accessibilityHint ?? "")
     }

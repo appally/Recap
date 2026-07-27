@@ -33,11 +33,13 @@ public struct AgentSkillRunOutcome: Sendable, Equatable {
     public let text: String
     public let steps: Int
     public let toolCallCount: Int
+    public let modelId: String
 
-    public init(text: String, steps: Int, toolCallCount: Int) {
+    public init(text: String, steps: Int, toolCallCount: Int, modelId: String = "") {
         self.text = text
         self.steps = steps
         self.toolCallCount = toolCallCount
+        self.modelId = modelId
     }
 
     public var budgetCost: AgentBudgetCost {
@@ -185,7 +187,7 @@ public enum AgentSkillRunner {
         if trimmed.isEmpty {
             throw AgentSkillRunnerError.emptyOutput
         }
-        return AgentSkillRunOutcome(text: trimmed, steps: stepsUsed, toolCallCount: toolCallsUsed)
+        return AgentSkillRunOutcome(text: trimmed, steps: stepsUsed, toolCallCount: toolCallsUsed, modelId: model)
     }
 
     public static func run(
