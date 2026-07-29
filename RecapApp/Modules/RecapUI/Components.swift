@@ -597,48 +597,42 @@ public struct LiveSonicCapsule: View {
     }
 
     public var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             if isPaused {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.recapOchre)
+                // 暂停：灰色方块指示符，无动画
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.recapTea.opacity(0.5))
+                    .frame(width: 6, height: 6)
             } else {
+                // 录音中：红点呼吸
                 Circle()
                     .fill(Color.recapCinnabar)
-                    .frame(width: 7, height: 7)
-                    .scaleEffect(reduceMotion ? 1 : (isBreathing ? 1.2 : 0.85))
-                    .opacity(reduceMotion ? 1 : (isBreathing ? 1.0 : 0.5))
+                    .frame(width: 6, height: 6)
+                    .scaleEffect(reduceMotion ? 1 : (isBreathing ? 1.15 : 0.82))
+                    .opacity(reduceMotion ? 1 : (isBreathing ? 1.0 : 0.55))
                     .animation(
-                        reduceMotion ? nil : .easeInOut(duration: 0.85).repeatForever(autoreverses: true),
+                        reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
                         value: isBreathing
                     )
                     .onAppear { isBreathing = true }
-
-                LiveDots()
-                    .scaleEffect(0.8)
             }
 
-            Text(isPaused ? "已暂停 · \(elapsedTimeText)" : elapsedTimeText)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            Text(elapsedTimeText)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
                 .monospacedDigit()
                 .foregroundStyle(isPaused ? Color.recapTea : Color.recapInk)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 13)
         .padding(.vertical, 6)
         .background(
             Capsule(style: .continuous)
                 .fill(Color(light: 0xFFFFFF, dark: 0x1A1C20))
                 .overlay(
                     Capsule(style: .continuous)
-                        .stroke(
-                            isPaused
-                                ? Color.recapOchre.opacity(0.3)
-                                : Color.recapCinnabar.opacity(0.3),
-                            lineWidth: 1
-                        )
+                        .stroke(Color.recapInk.opacity(isPaused ? 0.08 : 0.10), lineWidth: 0.75)
                 )
         )
-        .shadow(color: Color.black.opacity(0.04), radius: 6, x: 0, y: 2)
+        .shadow(color: Color.black.opacity(0.05), radius: 8, x: 0, y: 2)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isPaused ? "已暂停，时长 \(elapsedTimeText)" : "正在录音，时长 \(elapsedTimeText)")
     }

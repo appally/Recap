@@ -16,9 +16,12 @@ public final class MeetingAudioPlayer: ObservableObject {
     @Published public private(set) var isPlaying = false
     @Published public private(set) var currentTime: TimeInterval = 0
     @Published public private(set) var duration: TimeInterval = 0
+    @Published public private(set) var rate: Float = 1.0
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
+    /// 变速不变调（会议回听倍速）。插在 playerNode 与 mainMixer 之间。
+    private let timePitch = AVAudioUnitTimePitch()
     private var format: AVAudioFormat?
     private var fileHandle: FileHandle?
     private var totalFrames: Int64 = 0
@@ -39,6 +42,7 @@ public final class MeetingAudioPlayer: ObservableObject {
 
     public init() {
         engine.attach(playerNode)
+        engine.attach(timePitch)
     }
 
     public var isReady: Bool {
@@ -87,7 +91,8 @@ public final class MeetingAudioPlayer: ObservableObject {
             if !engine.attachedNodes.contains(playerNode) {
                 engine.attach(playerNode)
             }
-            engine.connect(playerNode, to: engine.mainMixerNode, format: fmt)
+            engine.connect(playerNode, to: timePitch, format: fmt)
+            engine.connect(timePitch, to: engine.mainMixerNode, format: fmt)
             try prepareEngine()
             loadState = .ready
         } catch {
@@ -144,6 +149,13 @@ public final class MeetingAudioPlayer: ObservableObject {
 
     public func skip(by delta: TimeInterval) {
         seek(to: currentTime + delta)
+    }
+
+    /// 倍速回听（变速不变调），范围 1.0–2.0。
+    public func setRate(_ newRate: Float) {
+        let clamped = min(max(1.0, newRate), 2.0)
+        rate = clamped
+        timePitch.rate = clamped
     }
 
     public func stop() {

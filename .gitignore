@@ -1,0 +1,17 @@
+# Xcode & Apple Build Products
+build/
+*.noindex/
+DerivedData/
+RecapApp/build/
+
+# User-specific Xcode data
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+
+# macOS system files
+.DS_Store
+
+# Swift Package Manager & CocoaPods
+.swiftpm/

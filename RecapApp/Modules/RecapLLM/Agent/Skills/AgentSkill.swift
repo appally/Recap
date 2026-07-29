@@ -6,8 +6,11 @@ public struct AgentSkill: Sendable, Hashable, Identifiable {
     public let name: String
     public let description: String
     public let icon: String
+    /// 产出形态（模板分类脊柱的辅轴）：recap / extract / write / visualize。
     public let groupId: String
     public let groupTitle: String
+    /// 场景域（模板分类脊柱的主轴）：通用会议 / 客户与销售 / …
+    public let scenario: TemplateScenario
     public let systemPrompt: String
     public let allowedTools: Set<String>
     public let modelRole: AgentModelRole
@@ -20,6 +23,7 @@ public struct AgentSkill: Sendable, Hashable, Identifiable {
         icon: String,
         groupId: String,
         groupTitle: String,
+        scenario: TemplateScenario = .general,
         systemPrompt: String,
         allowedTools: Set<String>,
         modelRole: AgentModelRole = .quick,
@@ -31,6 +35,7 @@ public struct AgentSkill: Sendable, Hashable, Identifiable {
         self.icon = icon
         self.groupId = groupId
         self.groupTitle = groupTitle
+        self.scenario = scenario
         self.systemPrompt = systemPrompt
         self.allowedTools = allowedTools
         self.modelRole = modelRole

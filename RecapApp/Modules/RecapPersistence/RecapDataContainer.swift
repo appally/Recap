@@ -14,6 +14,7 @@ public enum RecapDataContainer {
         AIOutput.self,
         ActionItem.self,
         Moment.self,
+        HandwritingNote.self,
         LLMProviderConfig.self,
         ChatSession.self,
         ChatMessageRecord.self,

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light dark">
+  <!-- mermaid 桥接页：离线加载同目录 mermaid.min.js，把 Swift 注入的源码渲染成 SVG。
+       安全：securityLevel=strict（转义 HTML、禁交互绑定）；不加载任何外网。 -->
+  <style>
+    html, body { margin: 0; padding: 0; background: transparent; }
+    /* inline-block 让 #d 收缩到内容尺寸，ResizeObserver 才能读到真实图高 */
+    #d { display: inline-block; max-width: 100%; }
+    #d svg { max-width: 100%; height: auto; display: block; }
+  </style>
+  <script src="mermaid.min.js"></script>
+</head>
+<body>
+  <div id="d"></div>
+  <script>
+    (function () {
+      var counter = 0;
+      var lastTheme = null;
+
+      // 高度回传：#d 尺寸一变就通知 Swift，由 SwiftUI 重排容器。
+      var ro = new ResizeObserver(function () {
+        var h = document.getElementById('d').offsetHeight;
+        try { window.webkit.messageHandlers.height.postMessage(h); } catch (e) {}
+      });
+      ro.observe(document.getElementById('d'));
+
+      /// Swift 调用：renderMermaid(<json编码的source>, 'default'|'dark')。
+      /// 失败时不清空 #d —— 保留上一帧成功渲染（流式半截图静默消化），仅回传 error。
+      window.renderMermaid = function (src, theme) {
+        theme = theme || 'default';
+        try {
+          // 仅 theme 变化时 re-initialize，避免重复 initialize 警告。
+          if (theme !== lastTheme) {
+            mermaid.initialize({
+              startOnLoad: false,
+              securityLevel: 'strict',
+              theme: theme,
+              flowchart: { useMaxWidth: true, htmlLabels: true },
+              themeVariables: {}
+            });
+            lastTheme = theme;
+          }
+          var id = 'm_' + (counter++);
+          mermaid.render(id, src).then(function (res) {
+            document.getElementById('d').innerHTML = res.svg;
+          }).catch(function (e) {
+            report(e);
+          });
+        } catch (e) {
+          report(e);
+        }
+      };
+
+      function report(e) {
+        var msg = (e && (e.message || e.str)) ? String(e.message || e.str) : String(e);
+        try { window.webkit.messageHandlers.error.postMessage(msg); } catch (_) {}
+      }
+
+      // 通知 Swift：mermaid.js 已就绪，可以注入源码渲染（规避 didFinish 与子资源加载的时序问题）。
+      try { window.webkit.messageHandlers.ready.postMessage(true); } catch (e) {}
+    })();
+  </script>
+</body>
+</html>

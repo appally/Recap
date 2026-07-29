@@ -1,4 +1,6 @@
 .DS_Store
+build/
+*.noindex/
 DerivedData/
 *.xcuserstate
 xcuserdata/
@@ -7,3 +9,4 @@ xcuserdata/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 RecapApp.xcodeproj/project.xcworkspace/xcuserdata/
 RecapApp.xcodeproj/xcuserdata/
+

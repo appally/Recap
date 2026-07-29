@@ -17,6 +17,8 @@ public struct AgentInvokeSheet: View {
     public let minutesSummary: MeetingSummary?
     public let briefSummary: String?
     public let briefSources: [BriefSource]
+    public let momentsSummary: String?
+    public let handwritingSummary: String?
     public let hasStartedRecording: Bool
     public let isLivePaused: Bool
     public let linkedMeetingTitle: String?
@@ -25,6 +27,9 @@ public struct AgentInvokeSheet: View {
     public var onJumpToTranscript: ((Double) -> Void)?
     public var onMinutesUpdated: ((MeetingSummary) -> Void)?
     public var initialInput: String
+    /// 底栏发问时为 true：sheet 一出现即自动发送 initialInput、不抢焦点（让用户直接看回答）。
+    /// 从「问 Recap」按钮进来时 prefill 为空，自动落到聚焦分支。
+    public let autoSendInitial: Bool
     @Binding public var isPresented: Bool
 
     @State private var model: AskConversationModel
@@ -34,9 +39,11 @@ public struct AgentInvokeSheet: View {
     /// chips：L1 规则层 init 即填；L2 LLM 异步返回（≥3 条）后替换。
     @State private var suggestionChips: [String]
     @State private var didLoadL2 = false
+    /// auto-send once 守卫：防止 onAppear 多次触发重复发送。
+    @State private var didAutoSend = false
     @FocusState private var inputFocused: Bool
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
         meeting: Meeting? = nil,
@@ -49,12 +56,15 @@ public struct AgentInvokeSheet: View {
         minutesSummary: MeetingSummary? = nil,
         briefSummary: String? = nil,
         briefSources: [BriefSource] = [],
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil,
         hasStartedRecording: Bool = false,
         isLivePaused: Bool = false,
         linkedMeetingTitle: String? = nil,
         onJumpToTranscript: ((Double) -> Void)? = nil,
         onMinutesUpdated: ((MeetingSummary) -> Void)? = nil,
         initialInput: String = "",
+        autoSendInitial: Bool = false,
         isPresented: Binding<Bool>
     ) {
         self.meeting = meeting
@@ -67,6 +77,8 @@ public struct AgentInvokeSheet: View {
         self.minutesSummary = minutesSummary
         self.briefSummary = briefSummary
         self.briefSources = briefSources
+        self.momentsSummary = momentsSummary
+        self.handwritingSummary = handwritingSummary
         self.hasStartedRecording = hasStartedRecording
         self.isLivePaused = isLivePaused
         self.linkedMeetingTitle = linkedMeetingTitle
@@ -79,6 +91,7 @@ public struct AgentInvokeSheet: View {
         self.onJumpToTranscript = onJumpToTranscript
         self.onMinutesUpdated = onMinutesUpdated
         self.initialInput = initialInput
+        self.autoSendInitial = autoSendInitial
         self._isPresented = isPresented
         self._model = State(initialValue: AskConversationModel(
             phase: phase,
@@ -89,7 +102,9 @@ public struct AgentInvokeSheet: View {
             actionItems: actionItems,
             minutesSummary: minutesSummary,
             briefSummary: briefSummary,
-            briefSources: briefSources
+            briefSources: briefSources,
+            momentsSummary: momentsSummary,
+            handwritingSummary: handwritingSummary
         ))
         self._input = State(initialValue: initialInput)
         // L1 规则层瞬时打底（init 单次确定，不依赖 onAppear 多次触发）。
@@ -225,20 +240,38 @@ public struct AgentInvokeSheet: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            grabber
             topBar
             conversation
             bottomDock
         }
         .background(Color.recapBg.ignoresSafeArea())
         .onAppear {
-            if let meeting {
-                model.attach(meeting: meeting, modelContext: modelContext)
-            }
             model.onMinutesUpdated = onMinutesUpdated
             syncLiveContext()
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(200))
-                inputFocused = true
+            if autoSendInitial, !initialInput.isEmpty, !didAutoSend {
+                // 底栏发问：attach 完即发送（依赖 modelContext/meeting，必须同步）——
+                // 让对话窗一出现就「有问有答」，不再需要手工重输重发。
+                if let meeting {
+                    model.attach(meeting: meeting, modelContext: modelContext)
+                }
+                didAutoSend = true
+                input = ""
+                ask(initialInput)
+            } else {
+                // 纯打开：历史会话恢复（loadSession 逐条 decodeCitations）推迟到滑入收尾，
+                // 避免阻塞 spring 首帧；键盘聚焦也延后一拍让位给出现动画。中途关闭则放弃。
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300))
+                    guard isPresented else { return }
+                    if let meeting {
+                        model.attach(meeting: meeting, modelContext: modelContext)
+                    }
+                }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(320))
+                    inputFocused = true
+                }
             }
         }
         .onChange(of: transcriptContext) { _, _ in syncLiveContext() }
@@ -306,6 +339,15 @@ public struct AgentInvokeSheet: View {
     }
 
     // MARK: - Top
+
+    /// 顶部 grabber 视觉：下拉关闭的拖拽锚点（命中区由 host overlay 顶部对齐此处）。
+    private var grabber: some View {
+        Capsule(style: .continuous)
+            .fill(Color.recapInk.opacity(0.18))
+            .frame(width: 36, height: 5)
+            .padding(.top, Spacing.sm)
+            .frame(maxWidth: .infinity)
+    }
 
     private var topBar: some View {
         GlassEffectContainer(spacing: Spacing.sm) {
@@ -380,7 +422,6 @@ public struct AgentInvokeSheet: View {
 
                 Button {
                     isPresented = false
-                    dismiss()
                 } label: {
                     Image(systemName: RecapSymbol.close)
                         .font(.system(size: RecapToolbarIconMetrics.pointSize, weight: RecapToolbarIconMetrics.weight))
@@ -617,7 +658,6 @@ public struct AgentInvokeSheet: View {
         case .transcript:
             guard let onJump = onJumpToTranscript, let start = cite.startSeconds else { return }
             isPresented = false
-            dismiss()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                 onJump(start)
             }
@@ -718,7 +758,9 @@ public struct AgentInvokeSheet: View {
                         .foregroundStyle(.white)
                         .frame(width: 32, height: 32)
                         .background(
-                            (canSend ? Color.recapCeladon : Color.recapTea.opacity(0.35)),
+                            canSend
+                                ? AnyShapeStyle(LinearGradient(colors: [.recapAICyan, .recapAIBlue, .recapAITeal], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                : AnyShapeStyle(Color.recapTea.opacity(0.35)),
                             in: Circle()
                         )
                         .scaleEffect(canSend ? 1 : 0.95)
@@ -732,7 +774,7 @@ public struct AgentInvokeSheet: View {
             .padding(.leading, Spacing.lg)
             .padding(.trailing, Spacing.sm)
             .padding(.vertical, Spacing.sm)
-            .recapGlassBackground(cornerRadius: Radius.island)
+            .aiComposeBarStyle(focused: inputFocused, reduceMotion: reduceMotion)
             .padding(.horizontal, Spacing.xl)
             .padding(.bottom, Spacing.md)
         }

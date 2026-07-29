@@ -135,4 +135,93 @@ final class AskMarkdownRendererTests: XCTestCase {
         XCTAssertEqual(blocks[1], .orderedList(["**报价**：保持 9 折", "**跟进**：下周联系王总"]))
         XCTAssertEqual(blocks[2], .paragraph("建议提前准备方案文档。"))
     }
+
+    // MARK: - 表格（GFM）
+
+    func testTableParsed() {
+        let md = "| 名称 | 数值 |\n| --- | --- |\n| 甲 | 1 |\n| 乙 | 2 |"
+        let blocks = MarkdownBlockParser.parse(md)
+        XCTAssertEqual(blocks, [.table(
+            header: ["名称", "数值"],
+            aligns: [.left, .left],
+            rows: [["甲", "1"], ["乙", "2"]]
+        )])
+    }
+
+    func testTableAlignFromDelimiter() {
+        let md = "| 左 | 中 | 右 |\n| :-- | :-: | --: |\n| a | b | c |"
+        let blocks = MarkdownBlockParser.parse(md)
+        XCTAssertEqual(blocks, [.table(
+            header: ["左", "中", "右"],
+            aligns: [.left, .center, .right],
+            rows: [["a", "b", "c"]]
+        )])
+    }
+
+    func testTableWithoutOuterPipes() {
+        let md = "A | B\n-- | --\nx | y"
+        let blocks = MarkdownBlockParser.parse(md)
+        XCTAssertEqual(blocks, [.table(header: ["A", "B"], aligns: [.left, .left], rows: [["x", "y"]])])
+    }
+
+    /// 单元内的 `\|` 是字面竖线，不得被当列分隔符。
+    func testEscapedPipeStaysInCell() {
+        let md = "| 类型 | 说明 |\n| --- | --- |\n| a\\|b | c |"
+        let blocks = MarkdownBlockParser.parse(md)
+        XCTAssertEqual(blocks, [.table(
+            header: ["类型", "说明"],
+            aligns: [.left, .left],
+            rows: [["a|b", "c"]]
+        )])
+    }
+
+    /// 数据行列数不足 → 末列补空串，渲染层据此对齐成网格。
+    func testTableShortRowPadded() {
+        let md = "| a | b | c |\n|---|---|---|\n| 1 | 2 |"
+        let blocks = MarkdownBlockParser.parse(md)
+        XCTAssertEqual(blocks, [.table(
+            header: ["a", "b", "c"],
+            aligns: [.left, .left, .left],
+            rows: [["1", "2", ""]]
+        )])
+    }
+
+    /// 含 `|` 但缺合法分隔行 → 不算表格，回退普通段落（核心回归：旧实现会把竖线当文字乱排）。
+    func testPipeLineWithoutDelimiterIsParagraph() {
+        let blocks = MarkdownBlockParser.parse("单价 | 9 折")
+        XCTAssertEqual(blocks, [.paragraph("单价 | 9 折")])
+    }
+
+    func testTableSitsBetweenParagraphs() {
+        let md = "报价如下：\n\n| 名称 | 数值 |\n| --- | --- |\n| 甲 | 1 |\n\n以上。"
+        let blocks = MarkdownBlockParser.parse(md)
+        XCTAssertEqual(blocks.count, 3)
+        XCTAssertEqual(blocks[0], .paragraph("报价如下："))
+        XCTAssertEqual(blocks[1], .table(header: ["名称", "数值"], aligns: [.left, .left], rows: [["甲", "1"]]))
+        XCTAssertEqual(blocks[2], .paragraph("以上。"))
+    }
+
+    // MARK: - mermaid
+
+    /// ` ```mermaid ` 围栏解析为带 language 的 codeBlock（渲染层据此分流到 WebView）。
+    func testMermaidFenceParsedAsCodeBlock() {
+        let blocks = MarkdownBlockParser.parse("```mermaid\ngraph TD\nA-->B\n```")
+        XCTAssertEqual(blocks, [.codeBlock(language: "mermaid", content: "graph TD\nA-->B")])
+    }
+
+    /// language 原样保留（大小写不敏感判定在渲染层 lowercased()=="mermaid"）。
+    func testMermaidLanguagePreservedCaseInsensitive() {
+        let blocks = MarkdownBlockParser.parse("```Mermaid\ngraph LR\nA-->B\n```")
+        XCTAssertEqual(blocks, [.codeBlock(language: "Mermaid", content: "graph LR\nA-->B")])
+    }
+
+    /// source 注入 WebView 前 JSON 编码，必须能 round-trip（防引号/反斜杠/换行破坏 JS）。
+    func testMermaidJsQuotedRoundTrips() {
+        let raw = "a\"b\nc\\d\t中文节点"
+        let quoted = MermaidDiagramView.Coordinator.jsQuoted(raw)
+        XCTAssertTrue(quoted.hasPrefix("\"") && quoted.hasSuffix("\""), "应为合法 JS 字符串字面量：\(quoted)")
+        let data = ("[" + quoted + "]").data(using: .utf8)!
+        let decoded = (try? JSONSerialization.jsonObject(with: data) as? [String])?.first
+        XCTAssertEqual(decoded, raw, "JSON 解码应还原原文：\(quoted)")
+    }
 }

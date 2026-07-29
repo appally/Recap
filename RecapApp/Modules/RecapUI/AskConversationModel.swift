@@ -96,6 +96,8 @@ public final class AskConversationModel {
     public private(set) var minutesSummary: MeetingSummary?
     public private(set) var briefSummary: String?
     public private(set) var briefSources: [BriefSource]
+    public private(set) var momentsSummary: String?
+    public private(set) var handwritingSummary: String?
 
     @ObservationIgnored private var askTask: Task<Void, Never>?
     @ObservationIgnored private var kernel: AgentKernel?
@@ -119,7 +121,9 @@ public final class AskConversationModel {
         actionItems: [ActionItem],
         minutesSummary: MeetingSummary?,
         briefSummary: String?,
-        briefSources: [BriefSource]
+        briefSources: [BriefSource],
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil
     ) {
         self.phase = phase
         self.transcriptContext = transcriptContext
@@ -130,6 +134,8 @@ public final class AskConversationModel {
         self.minutesSummary = minutesSummary
         self.briefSummary = briefSummary
         self.briefSources = briefSources
+        self.momentsSummary = momentsSummary
+        self.handwritingSummary = handwritingSummary
         self.webEnabled = AskPreferences.webSearchEnabled
     }
 
@@ -157,7 +163,9 @@ public final class AskConversationModel {
         actionItems: [ActionItem]? = nil,
         minutesSummary: MeetingSummary? = nil,
         briefSummary: String? = nil,
-        briefSources: [BriefSource]? = nil
+        briefSources: [BriefSource]? = nil,
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil
     ) {
         if let phase { self.phase = phase }
         if let transcriptContext { self.transcriptContext = transcriptContext }
@@ -168,6 +176,8 @@ public final class AskConversationModel {
         if let minutesSummary { self.minutesSummary = minutesSummary }
         if let briefSummary { self.briefSummary = briefSummary }
         if let briefSources { self.briefSources = briefSources }
+        if let momentsSummary { self.momentsSummary = momentsSummary }
+        if let handwritingSummary { self.handwritingSummary = handwritingSummary }
     }
 
     public func reset() {
@@ -597,6 +607,8 @@ public final class AskConversationModel {
                 briefSources: briefSources,
                 minutesBlock: minutes,
                 actionItemsBlock: actions,
+                momentsSummary: momentsSummary,
+                handwritingSummary: handwritingSummary,
                 phase: phase,
                 retrievalQuery: retrievalQuery
             )

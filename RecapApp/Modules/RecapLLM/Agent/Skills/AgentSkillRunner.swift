@@ -68,7 +68,9 @@ public enum AgentSkillRunner {
         meetingTitle: String,
         transcriptExcerpt: String,
         minutesTldr: String?,
-        hint: String?
+        hint: String?,
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil
     ) -> String {
         var parts: [String] = [
             "【会议】\(meetingTitle)",
@@ -79,6 +81,14 @@ public enum AgentSkillRunner {
         }
         if let tldr = minutesTldr?.trimmingCharacters(in: .whitespacesAndNewlines), !tldr.isEmpty {
             parts.append("【当前纪要摘要】\n\(tldr)")
+        }
+        // 会中标记（照片/想法/识别文字）——注入 user payload（本就每场不同，不触碰 system/caching 契约）。
+        // 仅在「图文纪要」等模板里被显式织入正文；为空时不产生任何输出（其它模板零行为变化）。
+        if let moments = momentsSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !moments.isEmpty {
+            parts.append("【会中标记（照片/想法）】\n\(moments)")
+        }
+        if let handwriting = handwritingSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !handwriting.isEmpty {
+            parts.append("【会中手写笔记】\n\(handwriting)")
         }
         let excerpt = transcriptExcerpt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !excerpt.isEmpty {
@@ -104,6 +114,8 @@ public enum AgentSkillRunner {
         skill: AgentSkill,
         context: AgentToolContext,
         hint: String? = nil,
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil,
         onProgress: (@Sendable (AgentSkillRunProgress) -> Void)? = nil
     ) async throws -> AgentSkillRunOutcome {
         guard MinutesPipelineSmoke.canRunMinutesPipeline else {
@@ -122,14 +134,16 @@ public enum AgentSkillRunner {
             meetingTitle: context.meetingTitle,
             transcriptExcerpt: context.fallbackTranscript,
             minutesTldr: context.currentMinutes?.tldr,
-            hint: hint
+            hint: hint,
+            momentsSummary: momentsSummary,
+            handwritingSummary: handwritingSummary
         )
         var budget = AgentBudget.skill(maxSteps: skill.maxSteps)
         if let remain = context.remainingWallClock {
             budget.wallClock = min(budget.wallClock, max(8, remain))
         }
         let request = AgentRunRequest(
-            systemPrompt: skill.systemPrompt,
+            systemPrompt: AgentSkillDocument.preamble + "\n\n---\n\n" + skill.systemPrompt,
             history: [],
             userInput: user,
             prewarm: nil,

@@ -24,6 +24,35 @@ public enum ThermalGate {
     }
 }
 
+/// 整理态过渡舞台的真信号：驱动 ProcessStageCanvas 的步骤/文案。
+/// 替代早期基于时间的假循环（Int(t)%9）——这里反映 LLM 纪要管线的真实阶段，
+/// 让「处理过程信息」只活在过渡界面，而非泄露到纪要。
+public enum PipelineStage: Equatable {
+    case idle        // 未进入整理
+    case organizing  // 管线已启动，等待首段摘要（梳理原稿）
+    case generating  // 摘要流式中（提炼议题/决议/待办）
+    case done        // 管线结束
+
+    /// 步骤胶囊 Badge；idle/done 不显示。
+    public var badge: String {
+        switch self {
+        case .idle, .done: return ""
+        case .organizing: return "梳理原稿"
+        case .generating: return "提炼内容"
+        }
+    }
+
+    /// 主句：随阶段切换，由 .id() 触发 contentTransition 平滑变形。
+    public var title: String {
+        switch self {
+        case .idle: return "准备中"
+        case .organizing: return "正在梳理语音对话原稿…"
+        case .generating: return "正在提炼核心议题与关键决议…"
+        case .done: return "整理完毕"
+        }
+    }
+}
+
 /// 会话状态机（LIVE → PROCESS → REVIEW）。
 /// LIVE：优先 RecordingSession（真麦 + ASR）；失败进入可恢复错误态（禁止静默演示）。
 @MainActor
@@ -32,6 +61,8 @@ public final class MeetingSession: ObservableObject {
     @Published public var blocks: [TranscriptBlock] = []
     @Published public var elapsed: Int = 0
     @Published public var revealStep: Int = 0
+    /// LLM 纪要管线真实阶段（过渡舞台信号）；进 REVIEW 后不再消费。
+    @Published public var pipelineStage: PipelineStage = .idle
     @Published public var todoCount: Int = 0
     @Published public var summary: MeetingSummary
     @Published public var statusMessage: String = ""
@@ -44,6 +75,10 @@ public final class MeetingSession: ObservableObject {
     @Published public var isLivePaused = false
     /// 会后 SpeakerKit 说话人分离进行中。
     @Published public var isDiarizing = false
+    /// 说话人分离进度（0..1）；nil = 未在分离。供转写 Tab inline 进度条。
+    @Published public var diarizeProgress: Double?
+    /// 原稿优化进行中（供转写 Tab inline 指示）。
+    @Published public var isPolishing = false
 
     public let meeting: Meeting
 
@@ -435,14 +470,19 @@ public final class MeetingSession: ObservableObject {
         }
 
         isDiarizing = true
-        statusMessage = "说话人分离中…"
-        defer { isDiarizing = false }
+        diarizeProgress = 0
+        defer {
+            isDiarizing = false
+            diarizeProgress = nil
+        }
 
         do {
             // 超时预算：按时长比例（pyannote RTF 未知，给 3×）。放门**外**，同重转写。
             let audioDuration = MeetingAudioStore.durationSeconds(storedPath: path) ?? 1800
             let budget = audioDuration * 3 + 300
             let preserve = meeting.speakers.filter { !$0.id.hasPrefix("asr-") }
+            // 自动分离静默进行：进度/成功不写 statusMessage（不打扰纪要阅读），
+            // 结果由 spk* 标签淡入 + 自动切到转写 Tab 呈现；仅失败/可重试才出面。
             let outcome = try await withThrowingTimeout(seconds: budget) {
                 try await DiarizationService.diarizeMeeting(
                     audioPath: path,
@@ -450,13 +490,7 @@ public final class MeetingSession: ObservableObject {
                     numberOfSpeakers: numberOfSpeakers,
                     preserveSpeakerNames: preserve,
                     progress: { [weak self] fraction in
-                        Task { @MainActor in
-                            guard let self, self.isDiarizing else { return }
-                            let pct = Int((fraction * 100).rounded())
-                            self.statusMessage = pct < 5
-                                ? "准备说话人模型…"
-                                : "说话人分离中… \(pct)%"
-                        }
+                        Task { @MainActor in self?.diarizeProgress = fraction }
                     }
                 )
             }
@@ -468,11 +502,9 @@ public final class MeetingSession: ObservableObject {
             checkpointSaver?()
             if labeled == 0 {
                 statusMessage = "检出 \(outcome.speakers.count) 位说话人，但未能标注原稿（可重试）"
-            } else {
-                statusMessage = "已标注 \(labeled)/\(outcome.segments.count) 段 · \(outcome.speakers.count) 位说话人"
             }
         } catch is CancellationError {
-            statusMessage = "已取消"
+            // 自动分离被取消（切后台/离开 REVIEW）：静默，不打扰纪要
         } catch InferenceTimeoutError.exceeded {
             statusMessage = "说话人分离超时，请稍后重试"
         } catch {
@@ -566,10 +598,11 @@ public final class MeetingSession: ObservableObject {
             }
             adoptSegmentsAsBlocks(result.segments)
             checkpointSaver?()
-            statusMessage = result.segments.isEmpty ? "重转完成（无字幕）" : "重转完成"
+            // 有字幕的「重转完成」静默：转写内容已刷新；仅异常（无字幕）出面
+            if result.segments.isEmpty { statusMessage = "重转完成（无字幕）" }
             schedulePolishIfNeeded()   // ①③ 联动：新 raw → 自动润色
         } catch is CancellationError {
-            statusMessage = "已取消"
+            // 取消静默
         } catch InferenceTimeoutError.exceeded {
             statusMessage = "端侧重转过慢/超时，建议改用云端或稍后重试"
         } catch {
@@ -743,12 +776,16 @@ public final class MeetingSession: ObservableObject {
     private func startLLMProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
                                     persistSummary: @escaping (MeetingSummary, String) -> Void) {
         statusMessage = "云端整理中…"
+        pipelineStage = .organizing
         // 注意：不要覆盖仍在跑的 endLive 收尾 task；用独立 task 承接管线
         let pipelineTask = Task { [weak self] in
             guard let self else { return }
             // #6b：争取后台时间让纪要管线跑完；管线结束（完成/失败/取消）即释放名额
             self.beginMinutesBackgroundTask()
-            defer { self.endMinutesBackgroundTask() }
+            defer {
+                self.endMinutesBackgroundTask()
+                MinutesTaskRegistry.shared.unregister(for: self.meeting.id)
+            }
             var summaryText = ""
             var didCommitSummary = false
             do {
@@ -756,17 +793,21 @@ public final class MeetingSession: ObservableObject {
                     .joined(separator: "\n")
                 let briefSummary = self.meeting.briefPromptSummary
                 let momentsSummary = self.meeting.momentsPromptSummary
+                let handwritingSummary = self.meeting.handwritingPromptSummary
                 let provider = try LLMProviderFactory.makeCurrent()
                 RecapLog.session.info("LLM 纪要: provider=\(provider.id, privacy: .public) summary=\(provider.summaryModel, privacy: .public) todo=\(provider.defaultModel, privacy: .public) 转写\(transcript.count) 字")
                 var warning: String?
                 for try await event in MinutesPipeline(provider: provider).run(
                     transcript: transcript,
                     briefSummary: briefSummary,
-                    momentsSummary: momentsSummary
+                    momentsSummary: momentsSummary,
+                    handwritingSummary: handwritingSummary
                 ) {
                     if Task.isCancelled { return }
                     switch event {
                     case .summaryDelta(let d):
+                        // 首段摘要到达 → 进入「生成纪要」阶段，驱动过渡舞台文案
+                        if self.pipelineStage != .generating { self.pipelineStage = .generating }
                         summaryText = Self.mergeStreamText(existing: summaryText, incoming: d)
                         let draft = MinutesMarkdownParser.parse(summaryText).summary
                         self.summary = MeetingSummary(
@@ -810,6 +851,8 @@ public final class MeetingSession: ObservableObject {
                     }
                 }
             } catch {
+                // 取消（含删除会议触发的 cancel）时不写回部分结果，避免把纪要复活到已删除的会议
+                if Task.isCancelled { return }
                 RecapLog.session.error("纪要管线异常: \(error.localizedDescription, privacy: .public)")
                 if !didCommitSummary, !summaryText.isEmpty {
                     self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
@@ -821,11 +864,15 @@ public final class MeetingSession: ObservableObject {
             }
         }
         revealTask = pipelineTask
+        // 句柄随详情页释放后不可达；额外登记到全局表，供首页删除时按 id 取消管线
+        MinutesTaskRegistry.shared.register(pipelineTask, for: meeting.id)
     }
 
     /// 将模型 Markdown 拆成短标题 / tldr / 议题 / 决议 / 未决，并进入 review。
     private func commitAISummary(raw: String,
                                  persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        // 写回安全由 startLLMProcessing 的 catch（Task.isCancelled 不写回）+ MinutesTaskRegistry
+        // 删除时前置 cancel 保证：管线与删除同在 MainActor 串行，cancel 早于 context.delete。
         let parsed = MinutesMarkdownParser.parse(raw)
         summary = parsed.summary
         if let title = parsed.title {
@@ -910,6 +957,8 @@ public final class MeetingSession: ObservableObject {
 
     /// REVIEW：触发逐字稿 LLM 润色（补标点 / 纠错别字 / 最小书面化），保段写回 polished。
     /// 不依赖端侧 ASR，任意设备 + 已配 LLM 密钥即可；raw 原文始终保留。
+    /// 成功/取消静默：进行中由转写 Tab inline 进度（isPolishing）呈现，完成由双行 raw+polished 呈现；
+    /// 仅失败写 statusMessage。用户主动入口由调用方切到转写 Tab 以见 inline 进度。
     public func polishTranscript() {
         polishTask = Task { [weak self] in await self?.performPolish() }
     }
@@ -925,7 +974,8 @@ public final class MeetingSession: ObservableObject {
             statusMessage = "没有可优化的原稿"
             return
         }
-        statusMessage = "原稿优化中…"
+        isPolishing = true
+        defer { isPolishing = false }
         do {
             let provider = try await Task.detached(priority: .userInitiated) {
                 try LLMProviderFactory.makeDefaultDeepSeek()
@@ -939,9 +989,9 @@ public final class MeetingSession: ObservableObject {
             meeting.polishedModelId = LLMPresets.deepSeekFlash
             adoptSegmentsAsBlocks(source)   // 重新构造 blocks，这次 polished 有值 → 双行
             checkpointSaver?()
-            statusMessage = "原稿已优化"
+            // 成功静默：双行已自然呈现，转写 Tab inline 进度收尾即隐
         } catch is CancellationError {
-            statusMessage = "已取消"
+            // 取消静默（用户切走 / 后台取消）
         } catch {
             statusMessage = "优化失败：\(error.localizedDescription)（请在设置配置 LLM 密钥）"
         }
@@ -963,11 +1013,11 @@ public final class MeetingSession: ObservableObject {
             self.setStep(3) // decisions
             let demoTodos: [TodoListPayload.Item] = [
                 .init(task: "出移动端评审方案", owner: "李华", owner_source: "explicit",
-                      due: nil, priority: "high", confidence: 0.9,
+                      due_text: "周五", confidence: 0.9,
                       evidence_quote: "那我周五之前把评审方案弄出来",
                       start_seconds: 50),
                 .init(task: "确认客户报价", owner: "张明", owner_source: "inferred",
-                      due: nil, priority: nil, confidence: 0.45,
+                      due_text: nil, confidence: 0.45,
                       evidence_quote: "客户的报价我再确认一下",
                       start_seconds: 62),
             ]

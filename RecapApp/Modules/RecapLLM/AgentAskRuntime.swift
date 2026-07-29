@@ -46,6 +46,8 @@ public enum AgentAskRuntime {
         briefSources: [BriefSource] = [],
         minutesBlock: String? = nil,
         actionItemsBlock: String? = nil,
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil,
         phase: MeetingPhase = .review,
         retrievalQuery: String? = nil
     ) -> AnswerContext {
@@ -150,6 +152,14 @@ public enum AgentAskRuntime {
         if !actions.isEmpty {
             userParts.append("【本场待办】\n\(actions)")
         }
+        // 会中标记（照片/想法）——补现有缺口：此前 chat 上下文未注入 moments。
+        if let moments = momentsSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !moments.isEmpty {
+            userParts.append("【会中标记（照片/想法）】\n\(moments)")
+        }
+        // 会中手写笔记（Apple Pencil 识别文字）。
+        if let handwriting = handwritingSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !handwriting.isEmpty {
+            userParts.append("【会中手写笔记】\n\(handwriting)")
+        }
         userParts.append("【检索片段】\n\(transcriptBlock)")
         if !briefEvidenceBlock.isEmpty {
             userParts.append("【底稿片段】\n\(briefEvidenceBlock)")
@@ -205,6 +215,8 @@ public enum AgentAskRuntime {
         briefSources: [BriefSource] = [],
         minutesBlock: String? = nil,
         actionItemsBlock: String? = nil,
+        momentsSummary: String? = nil,
+        handwritingSummary: String? = nil,
         phase: MeetingPhase = .review,
         retrievalQuery: String? = nil
     ) -> AnswerContext {
@@ -217,6 +229,8 @@ public enum AgentAskRuntime {
             briefSources: briefSources,
             minutesBlock: minutesBlock,
             actionItemsBlock: actionItemsBlock,
+            momentsSummary: momentsSummary,
+            handwritingSummary: handwritingSummary,
             phase: phase,
             retrievalQuery: retrievalQuery
         )

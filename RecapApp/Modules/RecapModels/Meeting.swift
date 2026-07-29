@@ -44,6 +44,10 @@ public final class Meeting {
     @Relationship(deleteRule: .cascade, inverse: \Moment.meeting)
     public var moments: [Moment] = []
 
+    /// 会中 / 会后的手写笔记（Apple Pencil）；识别文字注入纪要上下文。
+    @Relationship(deleteRule: .cascade, inverse: \HandwritingNote.meeting)
+    public var handwritingNotes: [HandwritingNote] = []
+
     /// 会前底稿（议程 / 上场遗留）；可空，无底稿时行为与旧版一致。
     @Relationship(deleteRule: .cascade, inverse: \MeetingBrief.meeting)
     public var brief: MeetingBrief?
@@ -109,6 +113,20 @@ public final class Meeting {
             return parts.joined(separator: " ")
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// 注入纪要 prompt 的「会中手写笔记」摘要（时间戳 + 识别文字）；无则 nil。
+    /// 与 `momentsPromptSummary` 平级，让 AI 生成的纪要 / 待办兼顾用户手写记录。
+    public var handwritingPromptSummary: String? {
+        guard !handwritingNotes.isEmpty else { return nil }
+        let lines = handwritingNotes
+            .sorted { $0.startSeconds < $1.startSeconds }
+            .compactMap { n -> String? in
+                let text = n.recognizedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !text.isEmpty else { return nil }
+                return "[\(n.sourceTime)] 手写：\(String(text.prefix(500)))"
+            }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
     /// 便捷访问分段（解码失败返回空，不抛错以保 App 不崩）。

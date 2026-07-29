@@ -42,6 +42,12 @@ public extension Color {
     static let recapCinnabar = Color(light: 0xC8463C, dark: 0xE15A4E)
     static let recapOchre = Color(light: 0xA87842, dark: 0xC99659)
 
+    /// AI 对话强调色谱（电光青·蓝·翠）——AskBar 边框/发送钮、AgentInvokeSheet 发送钮统一用此，
+    /// 与 LIVE 推理绿光晕(GeminiFluidGlowView)的青色端同谱：科技/未来感，但不与既有绿光晕突兀。
+    static let recapAICyan = Color(hex: 0x22D3EE)
+    static let recapAIBlue = Color(hex: 0x3B82F6)
+    static let recapAITeal = Color(hex: 0x2DD4BF)
+
     /// 说话人灰度阶梯（中性）：主说话人对比最强，逐档递减。
     /// light 深→浅、dark 浅→深，保证两种模式下 speaker0 都是最高对比。
     static func speaker(_ i: Int) -> Color {
@@ -53,6 +59,19 @@ public extension Color {
             (0xB0B7B1, 0x5D635C),  // 淡（最弱）
         ]
         let (l, d) = palette[abs(i) % palette.count]
+        return Color(light: l, dark: d)
+    }
+
+    /// 活动热力图色阶：青蓝科技递进（符合附图高质感青蓝点缀点）。i 取 1..4。
+    static func heatmapLevel(_ i: Int) -> Color {
+        let palette: [(UInt32, UInt32)] = [
+            (0xA5F3FC, 0x164E63),  // L1 柔青 (Cyan-200)
+            (0x67E8F9, 0x0891B2),  // L2 Cyan-300
+            (0x22D3EE, 0x06B6D4),  // L3 Cyan-400
+            (0x2DD4BF, 0x0D9488),  // L4 极亮点缀青
+        ]
+        let idx = max(0, min(i - 1, palette.count - 1))
+        let (l, d) = palette[idx]
         return Color(light: l, dark: d)
     }
 }
@@ -149,6 +168,58 @@ public extension View {
     }
 }
 
+// MARK: - AI 输入栏统一皮肤（PlaudAskBar ↔ AgentInvokeSheet 共用，保证一致）
+
+/// 流光炫彩描边。锥形渐变沿胶囊边框缓慢旋转（≈45s/圈，色相流动）；reduceMotion 退化为静态线性渐变。
+/// 仅描边、无外发光——只要边框流光，不要光晕。
+public struct AIAuroraRing: View {
+    let focused: Bool
+    let reduceMotion: Bool
+    public init(focused: Bool, reduceMotion: Bool) {
+        self.focused = focused
+        self.reduceMotion = reduceMotion
+    }
+    /// 首尾同色（青→青），保证旋转时接缝不可见。
+    private static let ring: [Color] = [.recapAICyan, .recapAIBlue, .recapAITeal, .recapAIBlue, .recapAICyan]
+
+    public var body: some View {
+        Group {
+            if reduceMotion {
+                Capsule(style: .continuous)
+                    .stroke(
+                        LinearGradient(colors: [.recapAICyan, .recapAIBlue, .recapAITeal],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing),
+                        lineWidth: focused ? 2.5 : 2
+                    )
+            } else {
+                // 仅输入栏聚焦时才持续旋转锥形渐变；底栏（focused=false）与失焦态静止，省持续 30fps GPU。
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !focused)) { ctx in
+                    let a = (ctx.date.timeIntervalSinceReferenceDate * 8.0).truncatingRemainder(dividingBy: 360)
+                    Capsule(style: .continuous)
+                        .stroke(
+                            AngularGradient(colors: Self.ring, center: .center, angle: .degrees(a)),
+                            lineWidth: focused ? 2.5 : 2
+                        )
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+public extension View {
+    /// AI compose 栏统一皮肤：纸底 + 流光炫彩描边（无光晕）。
+    /// PlaudAskBar(底栏) 与 AgentInvokeSheet(对话窗) 输入栏共用——保证「底栏发问 → 对话窗回答」视觉连续、一致。
+    func aiComposeBarStyle(focused: Bool, reduceMotion: Bool) -> some View {
+        background {
+            Capsule(style: .continuous)
+                .fill(Color.recapPaper)
+        }
+        .overlay { AIAuroraRing(focused: focused, reduceMotion: reduceMotion) }
+        .animation(.recapSoft, value: focused)
+    }
+}
+
 public extension Animation {
     static let recapLand = Animation.spring(response: 0.45, dampingFraction: 0.82)
     static let recapSoft = Animation.spring(response: 0.30, dampingFraction: 0.90)
@@ -165,6 +236,8 @@ public extension Animation {
     static let recapLiveFollow = Animation.easeOut(duration: 0.14)
     /// LIVE 暂停/录音底栏切换：仅 opacity，无位移。
     static let recapPhaseBar = Animation.easeOut(duration: 0.16)
+    /// LIVE 声波形态变形：大波形 ↔ 紧凑细带，spring 轻微回弹更有机（非 opacity 切换）。
+    static let recapSonicMorph = Animation.spring(response: 0.42, dampingFraction: 0.82)
     /// 底栏退场：比入场更快。
     static let recapBottomExit = Animation.easeOut(duration: 0.18)
     /// 设置行右侧取值换字：仅交叉淡入，不做位移。

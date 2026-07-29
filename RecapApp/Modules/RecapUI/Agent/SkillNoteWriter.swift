@@ -26,6 +26,8 @@ public enum SkillNoteWriter {
             skill: skill,
             context: context,
             hint: nil,
+            momentsSummary: meeting.momentsPromptSummary,
+            handwritingSummary: meeting.handwritingPromptSummary,
             onProgress: onProgress
         )
 

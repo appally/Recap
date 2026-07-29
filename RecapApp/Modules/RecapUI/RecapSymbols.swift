@@ -17,6 +17,9 @@ public enum RecapSymbol {
     public static let listen = "headphones"
     /// 会中拍照记录此刻（白板 / 想法 / 此刻快照）。
     public static let camera = "camera"
+    /// 会中手写（Apple Pencil 画布）—— 与「记录此刻」同属底部动作坞。
+    public static let handwrite = "pencil.line"
+    public static let stop = "stop.fill"
     public static let share = "square.and.arrow.up"
     public static let add = "plus"
     public static let more = "ellipsis"
@@ -171,24 +174,29 @@ public struct RecapAIAvatarImage: View {
     }
 }
 
-/// 纪要底栏「问 Recap」入口视觉（LIVE / REVIEW 共用）。
-/// 纪要底栏「问 Recap」入口视觉（通透纯净玻璃 AI 按钮，搭载 AI Avatar Icon）。
-public struct RecapAskEntryLabel: View {
-    public var size: CGFloat = 52
+// MARK: - 底栏玻璃圆辅助钮（LIVE 左右槽共用）
 
-    public init(size: CGFloat = 52) {
+/// 底栏左右辅助槽的统一视觉：SF Symbol + Liquid Glass 圆形容器。
+/// 「记录此刻」(camera) 与「问 Recap」(sparkles) 共用同一规格——
+/// 同形 / 同材 / 同尺寸 / 同字重，与中央实心主控构成
+/// 「玻璃(辅) · 实心(主) · 玻璃(辅)」的清晰层级。
+public struct RecapGlassAuxIcon: View {
+    public let systemName: String
+    public var size: CGFloat
+
+    public init(_ systemName: String, size: CGFloat = 52) {
+        self.systemName = systemName
         self.size = size
     }
 
     public var body: some View {
-        ZStack(alignment: .center) {
-            RecapAIAvatarImage(size: size * 0.64)
-                .clipShape(Circle())
-                .accessibilityHidden(true)
-        }
-        .frame(width: size, height: size, alignment: .center)
-        .contentShape(Circle())
-        .glassEffect(.regular.interactive(), in: .circle)
+        Image(systemName: systemName)
+            .font(.system(size: 19, weight: .semibold))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(Color.recapInk.opacity(0.72))
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+            .glassEffect(.regular.interactive(), in: .circle)
     }
 }
 

@@ -25,7 +25,7 @@ public struct MinutesPipeline: Sendable {
 
     /// 跑完整管线。
     /// - Parameter briefSummary: 会前底稿稳定摘要；空则行为与无底稿一致。
-    public func run(transcript: String, briefSummary: String? = nil, momentsSummary: String? = nil) -> AsyncThrowingStream<MinutesEvent, Error> {
+    public func run(transcript: String, briefSummary: String? = nil, momentsSummary: String? = nil, handwritingSummary: String? = nil) -> AsyncThrowingStream<MinutesEvent, Error> {
         AsyncThrowingStream { c in
             let task = Task {
                 let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,6 +45,7 @@ public struct MinutesPipeline: Sendable {
                         transcript: trimmed,
                         briefSummary: briefSummary,
                         momentsSummary: momentsSummary,
+                        handwritingSummary: handwritingSummary,
                         yield: { c.yield($0) }
                     )
                 } else {
@@ -53,6 +54,7 @@ public struct MinutesPipeline: Sendable {
                         transcript: trimmed,
                         briefSummary: briefSummary,
                         momentsSummary: momentsSummary,
+                        handwritingSummary: handwritingSummary,
                         yield: { c.yield($0) }
                     )
                 }
@@ -68,9 +70,10 @@ public struct MinutesPipeline: Sendable {
         transcript: String,
         briefSummary: String?,
         momentsSummary: String?,
+        handwritingSummary: String?,
         yield: (MinutesEvent) -> Void
     ) async {
-        let userPayload = Self.composeUserPayload(briefSummary: briefSummary, transcript: transcript, momentsSummary: momentsSummary)
+        let userPayload = Self.composeUserPayload(briefSummary: briefSummary, transcript: transcript, momentsSummary: momentsSummary, handwritingSummary: handwritingSummary)
         let hasBrief = !(briefSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         let todosTask = Task { () -> Result<[TodoListPayload.Item], Error> in
@@ -141,6 +144,7 @@ public struct MinutesPipeline: Sendable {
         transcript: String,
         briefSummary: String?,
         momentsSummary: String?,
+        handwritingSummary: String?,
         yield: (MinutesEvent) -> Void
     ) async {
         let chunks = TranscriptChunker.chunk(transcript)
@@ -165,7 +169,8 @@ public struct MinutesPipeline: Sendable {
 
             \(mappedNotes.joined(separator: "\n\n---\n\n"))
             """,
-            momentsSummary: momentsSummary
+            momentsSummary: momentsSummary,
+            handwritingSummary: handwritingSummary
         )
         let hasBrief = !(briefSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
@@ -269,17 +274,21 @@ public struct MinutesPipeline: Sendable {
     /// ⚠️ Prompt caching 契约：本函数必须是纯函数——同一 (briefSummary, momentsSummary, transcript)
     /// 产出字节级相同结果，且不得注入时间戳/随机/会话 ID。DeepSeek/OpenAI/Qwen/Doubao/GLM 均按请求
     /// 前缀自动缓存（DeepSeek 98% off），前缀稳定才命中。`momentsSummary` 为空时输出与旧版字节一致（保 cache）。
-    public static func composeUserPayload(briefSummary: String?, transcript: String, momentsSummary: String? = nil) -> String {
+    public static func composeUserPayload(briefSummary: String?, transcript: String, momentsSummary: String? = nil, handwritingSummary: String? = nil) -> String {
         let brief = (briefSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let moments = (momentsSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        // 无底稿且无时刻：保持原行为（纯转写），字节级不变，缓存不受影响。
-        if brief.isEmpty && moments.isEmpty { return transcript }
+        let handwriting = (handwritingSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // 无底稿且无时刻且无手写：保持原行为（纯转写），字节级不变，缓存不受影响。
+        if brief.isEmpty && moments.isEmpty && handwriting.isEmpty { return transcript }
         var parts: [String] = []
         if !brief.isEmpty {
             parts.append(String(brief.prefix(2_500)))
         }
         if !moments.isEmpty {
             parts.append("## 用户标记的时刻\n（用户在会中特意拍下照片/写下想法的瞬间，整理纪要时请优先覆盖这些内容）\n\(moments)")
+        }
+        if !handwriting.isEmpty {
+            parts.append("## 会中手写笔记\n（用户用 Apple Pencil 在会中写下的要点，整理纪要时请兼顾这些内容）\n\(handwriting)")
         }
         parts.append("## 本场转写\n\(transcript)")
         return parts.joined(separator: "\n\n")
@@ -355,11 +364,14 @@ public struct MinutesPipeline: Sendable {
 
     public static let todoSystem = """
     你是会议待办提取助手。从转写中提取「待办/行动项」，严格遵循：
-    1. 只抽说话者自己承诺要做的（"我来/我负责"算；"你应该"不算）；
-    2. owner 必须是具名参会者，不清楚置 null；
+    1. 抽取「有人明确承担」的待办，两种都算：
+       - 自承诺：说话人表示自己会做（"我来""我负责跟进""我下周一给"）；
+       - 指派他人：说话人明确指定某参会者去做（"小王你来跟""这事交给李华""测试组周五前交"）。
+       owner = 实际承担者。不抽纯建议/吐槽/条件式（"你应该…""最好…""要是…就…"），不抽无具体承担者的泛泛号召（"大家一起想想"）；
+    2. owner 必须是转写中出现的具名参会者，不清楚置 null；owner_source：指派他人填 explicit，自承诺填 inferred；
     3. 同一任务重复多次只取最后一次；
     4. 不抽条件式（"如果…就…"）、不推断被动式；
-    5. due 推断不出置 null，绝不编造日期；
+    5. due_text 照搬转写中的相对日期表达（如"下周三""月底""本周五""3号"），不要换算成绝对日期；未提及为 null；
     6. evidence_quote 必填原文逐字（禁止改写）；引文与 task 不符则不抽该条；
     7. 若能从转写时间线判断证据句位置，填 start_seconds（相对会议开始的秒数）；否则 null，禁止猜测。
     通过 extract_action_items 工具输出。
@@ -370,11 +382,14 @@ public struct MinutesPipeline: Sendable {
     优先：若转写表明底稿「待闭环」某项已完成/仍开放，把对应跟进动作抽成待办（有原文证据才抽）。
     其次：抽取本场新承诺的待办。
     严格遵循：
-    1. 只抽说话者自己承诺要做的（"我来/我负责"算；"你应该"不算）；
-    2. owner 必须是具名参会者，不清楚置 null；
+    1. 抽取「有人明确承担」的待办，两种都算：
+       - 自承诺：说话人表示自己会做（"我来""我负责跟进""我下周一给"）；
+       - 指派他人：说话人明确指定某参会者去做（"小王你来跟""这事交给李华""测试组周五前交"）。
+       owner = 实际承担者。不抽纯建议/吐槽/条件式（"你应该…""最好…""要是…就…"），不抽无具体承担者的泛泛号召（"大家一起想想"）；
+    2. owner 必须是转写中出现的具名参会者，不清楚置 null；owner_source：指派他人填 explicit，自承诺填 inferred；
     3. 同一任务重复多次只取最后一次；
     4. 不抽条件式、不推断被动式；
-    5. due 推断不出置 null，绝不编造日期；
+    5. due_text 照搬转写中的相对日期表达（如"下周三""月底""本周五""3号"），不要换算成绝对日期；未提及为 null；
     6. evidence_quote 必填原文逐字；无转写证据则不抽；
     7. start_seconds 能判断才填，否则 null。
     通过 extract_action_items 工具输出。

@@ -79,4 +79,25 @@ final class LiveTranscriptMergerTests: XCTestCase {
         XCTAssertEqual(merger.rows[2].text, "续录一句")
         XCTAssertEqual(merger.rows[2].startSeconds, merger.timelineOffset, accuracy: 1e-9)
     }
+
+    /// 回归 #fix-live-partial-double：续录后 partial 时间戳不得翻倍。
+    /// 会话层 elapsed 已含会前基数（绝对会议时间），applyPartial 不得再叠加 timelineOffset。
+    /// 旧 bug：63 + timelineOffset(≈60) = 123，超过真实会议位置且大于顶部计时器。
+    func testResumePartialTimestampNotDoubled() {
+        var merger = LiveTranscriptMerger()
+        merger.loadCheckpoint(segments: [
+            TranscriptSegment(startSeconds: 0, endSeconds: 30, text: "前半"),
+            TranscriptSegment(startSeconds: 30, endSeconds: 60, text: "后半"),
+        ])
+        merger.prepareForResume()
+        XCTAssertGreaterThan(merger.timelineOffset, 60)
+
+        // 模拟续录 3 秒后到达的 partial：会话层 elapsed = 会前基数(60) + 3
+        merger.applyPartial(text: "续录草稿", elapsedSeconds: 63)
+
+        XCTAssertEqual(merger.rows.count, 3)
+        XCTAssertFalse(merger.rows[2].isFinal)
+        XCTAssertEqual(merger.rows[2].startSeconds, 63, accuracy: 1e-9,
+                       "partial 应直接用绝对 elapsed，不得再叠加 timelineOffset")
+    }
 }

@@ -25,7 +25,10 @@ public struct LiveCaptionRow: Equatable, Sendable, Identifiable {
 }
 
 /// LIVE 字幕合并状态机：partial / segment / 检查点恢复。
-/// 时间一律用「会议绝对秒」=`引擎相对秒 + timelineOffset`。
+/// 时间用「会议绝对秒」，两条来源（切勿混用）：
+/// - segment：`引擎相对秒 + timelineOffset`。引擎每段从相对 0 重启，需抬偏移映射回绝对轴。
+/// - partial：会话层传入的 `elapsed` 已是绝对会议墙钟（跨续录单调累加），直接用，
+///   不再加 timelineOffset——否则续录后 elapsed 与 offset 各带一次会前基数，草稿时间戳翻倍。
 public struct LiveTranscriptMerger: Sendable {
     public private(set) var rows: [LiveCaptionRow] = []
     /// 绝对 startSeconds → rows 下标
@@ -73,7 +76,11 @@ public struct LiveTranscriptMerger: Sendable {
             return
         }
 
-        let absoluteStart = elapsedSeconds + timelineOffset
+        // elapsed 已是「绝对会议墙钟」——会话层跨续录单调累加（restoreElapsedIfNeeded
+        // 续上会前基数）。此处不得再叠加 timelineOffset：续录后 elapsed 与 offset 各含一份
+        // 会前基数，相加会把草稿时间戳翻倍（如 elapsed=63 + offset≈60 = 123，而真实位置≈61）。
+        // segment 路径才需要 + offset（引擎每段从相对 0 重启）；partial 走绝对时钟，直接用。
+        let absoluteStart = elapsedSeconds
         if let idx = rows.lastIndex(where: { !$0.isFinal }) {
             rows[idx].text = text
             rows[idx].endSeconds = absoluteStart

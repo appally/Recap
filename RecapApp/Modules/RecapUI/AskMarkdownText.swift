@@ -13,10 +13,16 @@ public enum MarkdownBlock: Equatable {
     case blockquote([String])
     case codeBlock(language: String?, content: String)
     case thematicBreak
+    case table(header: [String], aligns: [MarkdownTableAlign], rows: [[String]])
+}
+
+/// GFM 表格列对齐方式（由分隔行 `:--` / `--:` / `:-:` 推导）。
+public enum MarkdownTableAlign: Equatable {
+    case left, center, right
 }
 
 /// 把助手回复 Markdown 拆成块。刻意只覆盖 LLM 常见输出：
-/// 段落 / 标题 / 列表 / 引用 / 代码块 / 分隔线；不做完整 CommonMark（表格、深层嵌套）。
+/// 段落 / 标题 / 列表 / 引用 / 代码块 / 分隔线 / 表格；不做完整 CommonMark（深层嵌套）。
 /// 关键作用：让本该换行的单换行不再被 `AttributedString(markdown:)` 折叠成空格。
 public enum MarkdownBlockParser {
     public static func parse(_ source: String) -> [MarkdownBlock] {
@@ -96,6 +102,13 @@ public enum MarkdownBlockParser {
                 continue
             }
 
+            // GFM 表格：当前行含 `|`，且紧随一行为合法分隔行（`|---|---|`）
+            if let table = tableBlock(lines: lines, start: i) {
+                blocks.append(table.block)
+                i += table.consumed
+                continue
+            }
+
             // 段落：连续非空、非块起始行，按单换行保留为硬换行
             var para: [String] = [trimmed]
             var j = i + 1
@@ -153,6 +166,79 @@ public enum MarkdownBlockParser {
             || blockquoteBody(trimmed) != nil
             || unorderedItemText(trimmed) != nil
             || orderedItemText(trimmed) != nil
+    }
+
+    // MARK: 表格（GFM）
+
+    /// 从 `start` 起尝试解析一张 GFM 表格。要求 start 行为表头（含 `|`），
+    /// start+1 行为合法分隔行；返回 nil 表示此处不是表格（交回段落处理）。
+    /// 列数以「表头与分隔行的较大者」为准，数据行不足补空、多余截断。
+    private static func tableBlock(lines: [String], start: Int) -> (block: MarkdownBlock, consumed: Int)? {
+        guard start + 1 < lines.count else { return nil }
+        guard lines[start].contains("|") else { return nil }
+        let delim = splitCells(lines[start + 1])
+        guard !delim.isEmpty, delim.allSatisfy(isDelimiterCell) else { return nil }
+
+        let header = splitCells(lines[start])
+        let colCount = max(header.count, delim.count)
+        let aligns = paddedAligns(delim, count: colCount)
+
+        var rows: [[String]] = []
+        var j = start + 2
+        while j < lines.count {
+            let t = lines[j].trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { break }          // 空行结束表格
+            if !t.contains("|") { break }   // 非 `|` 行不属于表格
+            rows.append(padCells(splitCells(lines[j]), count: colCount))
+            j += 1
+        }
+        return (.table(header: padCells(header, count: colCount), aligns: aligns, rows: rows), j - start)
+    }
+
+    /// 把一行切成单元格：去掉两侧外框 `|`，按 `|` 分割（`\|` 视为单元内字面竖线），逐段 trim。
+    private static func splitCells(_ line: String) -> [String] {
+        var s = line.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("|") { s.removeFirst() }
+        if s.hasSuffix("|") { s.removeLast() }
+        let placeholder = "\u{0}"
+        let marked = s.replacingOccurrences(of: "\\|", with: placeholder)
+        return marked.components(separatedBy: "|").map {
+            $0.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: placeholder, with: "|")
+        }
+    }
+
+    /// 合法分隔单元格：`:?-+:?`，至少一个 `-`。
+    private static func isDelimiterCell(_ cell: String) -> Bool {
+        let s = cell.trimmingCharacters(in: .whitespaces)
+        guard !s.isEmpty else { return false }
+        var idx = s.startIndex
+        if s[idx] == ":" { idx = s.index(after: idx) }
+        guard idx < s.endIndex, s[idx] == "-" else { return false }
+        while idx < s.endIndex, s[idx] == "-" { idx = s.index(after: idx) }
+        if idx < s.endIndex, s[idx] == ":" { idx = s.index(after: idx) }
+        return idx == s.endIndex
+    }
+
+    /// 由分隔单元格推导对齐：`:-:` 中 / `--:` 右 / 其余左（含默认 `---`）。
+    private static func alignOf(_ cell: String) -> MarkdownTableAlign {
+        let s = cell.trimmingCharacters(in: .whitespaces)
+        switch (s.hasPrefix(":"), s.hasSuffix(":")) {
+        case (true, true): return .center
+        case (false, true): return .right
+        default: return .left
+        }
+    }
+
+    private static func paddedAligns(_ delim: [String], count: Int) -> [MarkdownTableAlign] {
+        var a = delim.map { alignOf($0) }
+        while a.count < count { a.append(.left) }
+        return a
+    }
+
+    private static func padCells(_ cells: [String], count: Int) -> [String] {
+        var c = cells
+        while c.count < count { c.append("") }
+        return Array(c.prefix(count))
     }
 
     // MARK: 行识别
@@ -385,19 +471,26 @@ public struct AskMarkdownText: View {
                     .frame(width: 2)
             }
 
-        case .codeBlock(_, let content):
-            Text(content)
-                .font(.system(size: 14, weight: .regular, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Spacing.sm + 2)
-                .background(
-                    Color.recapInk.opacity(0.05),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
+        case .codeBlock(let language, let content):
+            if language?.lowercased() == "mermaid" {
+                MermaidBlockView(source: content, isStreaming: isStreaming)
+            } else {
+                Text(content)
+                    .font(.system(size: 14, weight: .regular, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(Spacing.sm + 2)
+                    .background(
+                        Color.recapInk.opacity(0.05),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+            }
 
         case .thematicBreak:
             Divider()
                 .background(Color.recapTea.opacity(0.3))
+
+        case .table(let header, let aligns, let rows):
+            tableView(header: header, aligns: aligns, rows: rows)
         }
     }
 
@@ -425,17 +518,86 @@ public struct AskMarkdownText: View {
         }
     }
 
-    private func scheduleRender(_ text: String, streaming: Bool) {
-        if !streaming {
-            debounceTask?.cancel()
-            blocks = MarkdownBlockParser.parse(text)
-            return
+    // MARK: 表格视图
+
+    /// GFM 表格：等宽列网格（每列 `maxWidth: .infinity`，故各行列宽一致、对齐成网格），
+    /// 表头加粗 + 圆角边框 + 行间细分隔线，遵循 recapInk/recapTea 中性体系。
+    @ViewBuilder
+    private func tableView(header: [String], aligns: [MarkdownTableAlign], rows: [[String]]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(header.enumerated()), id: \.offset) { idx, cell in
+                    let a = align(at: idx, in: aligns)
+                    Text(AskMarkdownRenderer.attributedInline(cell))
+                        .font(.system(size: 15, weight: .semibold, design: .default))
+                        .foregroundStyle(Color.recapTea)
+                        .multilineTextAlignment(textAlign(a))
+                        .frame(maxWidth: .infinity, alignment: frameAlign(a))
+                        .padding(.horizontal, Spacing.sm)
+                        .padding(.vertical, Spacing.xs)
+                }
+            }
+            .background(Color.recapInk.opacity(0.04))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.recapTea.opacity(0.35)).frame(height: 1)
+            }
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(Array(row.enumerated()), id: \.offset) { colIdx, cell in
+                        let a = align(at: colIdx, in: aligns)
+                        Text(AskMarkdownRenderer.attributedInline(cell))
+                            .font(Self.bodyFont)
+                            .foregroundStyle(Color.recapInk)
+                            .multilineTextAlignment(textAlign(a))
+                            .frame(maxWidth: .infinity, alignment: frameAlign(a))
+                            .padding(.horizontal, Spacing.sm)
+                            .padding(.vertical, Spacing.xs)
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if rowIdx != rows.count - 1 {
+                        Rectangle().fill(Color.recapTea.opacity(0.15)).frame(height: 1)
+                    }
+                }
+            }
         }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.recapTea.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private func align(at idx: Int, in aligns: [MarkdownTableAlign]) -> MarkdownTableAlign {
+        idx < aligns.count ? aligns[idx] : .left
+    }
+
+    private func textAlign(_ a: MarkdownTableAlign) -> TextAlignment {
+        switch a { case .left: return .leading; case .center: return .center; case .right: return .trailing }
+    }
+
+    private func frameAlign(_ a: MarkdownTableAlign) -> Alignment {
+        switch a { case .left: return .leading; case .center: return .center; case .right: return .trailing }
+    }
+
+    private func scheduleRender(_ text: String, streaming: Bool) {
         debounceTask?.cancel()
-        debounceTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 50_000_000)
-            guard !Task.isCancelled else { return }
-            blocks = MarkdownBlockParser.parse(text)
+        if streaming {
+            // 流式：50ms debounce 合并高频增量解析。
+            debounceTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                guard !Task.isCancelled else { return }
+                blocks = MarkdownBlockParser.parse(text)
+            }
+        } else {
+            // 历史/定稿：错开一帧（~16ms）再 parse，避免对话窗滑入时首屏 N 条消息
+            // 同步解析挤掉出现动画（卡顿 + 动效被吞的成因之一）。
+            debounceTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 16_000_000)
+                guard !Task.isCancelled else { return }
+                blocks = MarkdownBlockParser.parse(text)
+            }
         }
     }
 }
