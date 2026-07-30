@@ -8,19 +8,23 @@ public enum MeetingCardRanker {
         public var decisions: [String]
         public var openQuestions: [String]
         public var actionTasks: [String]
+        /// 笔记层产物（对外纪要/邮件/周报等的 title + body）。
+        public var notes: [String]
 
         public init(
             title: String,
             tldr: String? = nil,
             decisions: [String] = [],
             openQuestions: [String] = [],
-            actionTasks: [String] = []
+            actionTasks: [String] = [],
+            notes: [String] = []
         ) {
             self.title = title
             self.tldr = tldr
             self.decisions = decisions
             self.openQuestions = openQuestions
             self.actionTasks = actionTasks
+            self.notes = notes
         }
     }
 
@@ -46,6 +50,12 @@ public enum MeetingCardRanker {
                 total += h * 3
                 reasons.append("纪要摘要")
             }
+        }
+        let noteText = fields.notes.joined(separator: "\n")
+        let noteHits = countHits(in: noteText, tokens: tokens)
+        if noteHits > 0 {
+            total += noteHits * 3
+            reasons.append("笔记")
         }
         let decisionText = fields.decisions.joined(separator: "\n")
         let dHits = countHits(in: decisionText, tokens: tokens)

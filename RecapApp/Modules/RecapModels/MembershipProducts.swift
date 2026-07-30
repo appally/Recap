@@ -4,11 +4,18 @@ import Foundation
 public enum MembershipProducts {
     public static let proMonthlyID = "com.liuyong.recap.pro.monthly"
     public static let proYearlyID = "com.liuyong.recap.pro.yearly"
+    public static let byokUnlockID = "com.liuyong.recap.byok.unlock"
 
-    public static let allIDs: Set<String> = [proMonthlyID, proYearlyID]
+    /// Pro 订阅 ID（不含 BYOK 解锁品，避免买 BYOK 被误判成 Pro）。
+    private static let proIDs: Set<String> = [proMonthlyID, proYearlyID]
+    public static let allIDs: Set<String> = proIDs.union([byokUnlockID])
 
     public static func isProProduct(_ id: String) -> Bool {
-        allIDs.contains(id)
+        proIDs.contains(id)
+    }
+
+    public static func isByokUnlockProduct(_ id: String) -> Bool {
+        id == byokUnlockID
     }
 }
 

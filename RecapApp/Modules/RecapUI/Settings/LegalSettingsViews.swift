@@ -204,6 +204,17 @@ struct AboutRecapView: View {
                     }
                     SettingsDivider()
                     NavigationLink {
+                        DataPrivacySettingsView()
+                    } label: {
+                        SettingsNavRow(
+                            icon: "lock.shield.fill",
+                            iconTint: .recapTea,
+                            title: "数据与隐私",
+                            value: "导出 / 清除"
+                        )
+                    }
+                    SettingsDivider()
+                    NavigationLink {
                         LegalDocumentView(kind: .terms)
                     } label: {
                         SettingsNavRow(

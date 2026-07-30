@@ -138,6 +138,13 @@ targets:
       - path: App
         excludes:
           - "Recap.storekit"
+          # 作为独立 folder reference 纳入（见下），避免被 App 扫描拆成单文件。
+          - "speakerkit-coreml"
+      # 说话人分离模型：蓝色 folder reference 整目录进 bundle，保持 .mlmodelc 目录原子性
+      #（group/扫描模式会把 .mlmodelc 拆成散文件、破坏 CoreML bundle 结构）。
+      # 首次冷启动命中 bundle、零网络零损坏；详见 SpeakerKitDiarizer.bundledModelFolder。
+      - path: App/speakerkit-coreml
+        type: folder
     info:
       path: App/Info.plist
       properties:

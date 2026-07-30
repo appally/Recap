@@ -30,7 +30,8 @@ public struct TranscriptStreamFlowView: View {
 
     // MARK: - Dynamic Stream Animation
     private func animatedGhostStream(t: Double) -> some View {
-        let displayBlocks = Array(ghostBlocks.suffix(4))
+        // 多展示两行（4 → 6）：让对话原稿向上飞升的「流」更连续
+        let displayBlocks = Array(ghostBlocks.suffix(6))
 
         return VStack(spacing: Spacing.sm) {
             ForEach(Array(displayBlocks.enumerated()), id: \.element.id) { index, block in
@@ -46,25 +47,15 @@ public struct TranscriptStreamFlowView: View {
 
                 let contentText = block.polished.isEmpty ? block.raw : block.polished
 
-                HStack(alignment: .center, spacing: 6) {
-                    Circle()
-                        .fill(Color(hex: 0x10B981).opacity(0.8))
-                        .frame(width: 4, height: 4)
-
-                    Text(contentText)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
-                        .foregroundStyle(Color.recapInk.opacity(0.78))
-                }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 5)
-                .background(
-                    Color.recapPaper.opacity(0.60),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .opacity(opacity)
-                .offset(y: offsetY)
-                .blur(radius: blur)
+                // 纯文字流：去掉小绿点与行底背景，靠呼吸透明度 + 上下淡出遮罩营造飞升感
+                Text(contentText)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color.recapInk.opacity(0.78))
+                    .opacity(opacity)
+                    .offset(y: offsetY)
+                    .blur(radius: blur)
             }
         }
         .frame(maxWidth: 320)

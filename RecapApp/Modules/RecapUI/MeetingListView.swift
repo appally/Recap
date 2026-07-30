@@ -7,6 +7,9 @@ import RecapModels
 public enum MeetingRoute: Hashable {
     case live(UUID)
     case meeting(UUID)
+    /// 带精确跳转上下文（搜索命中片段点击）：scrollStart->转写定位，noteTarget->笔记定位。
+    case meetingAt(UUID, scrollStart: Double?, noteTarget: NoteTarget?)
+    case search
 }
 
 /// 待确认删除的会议快照（避免弹窗期间模型被释放）。
@@ -25,14 +28,20 @@ public struct MeetingListView: View {
     @State private var path = NavigationPath()
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
-    @State private var searchText = ""
-    @State private var showSearchField = false
     /// 冷启动入场门控：仅驱动位移（offset），不用 opacity——opacity 从 0 起的淡入会产生
     /// 至少一帧空白（onAppear 晚于首帧 commit），曾被感知为「列表先出、标题后出」的卡顿。
     /// 本视图生命周期内只播一次，pop 回首页不重播。
     @State private var appeared = false
+    /// FAB 入场门控：独立于 appeared，单独走 ambient withAnimation——
+    /// 不能用隐式 .animation(value:)，会包住 RecordingButton 内部的 repeatForever 呼吸，
+    /// 两套动画叠加导致按钮从错误位置飞入。pop 回首页不重播（同 appeared 守卫）。
+    @State private var fabEntered = false
     @State private var pendingDelete: PendingMeetingDelete?
     @State private var swipedMeetingID: UUID?
+    /// 顶部大标题折叠驱动：仅取 contentOffset.y，喂给 collapseProgress。
+    @State private var scrollOffset: CGFloat = 0
+    /// 折叠行程：≈ hero 字高 + 余量，过大标题在足够滚动距离内渐隐，而非一抖即合。
+    private let collapseDistance: CGFloat = 52
 
     public init() {}
 
@@ -41,30 +50,25 @@ public struct MeetingListView: View {
         reduceMotion ? 0 : points
     }
 
-    private var filteredMeetings: [Meeting] {
-        let trimmed = searchText.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return meetings }
-        let q = trimmed.lowercased()
-        return meetings.filter {
-            $0.title.lowercased().contains(q) ||
-            ($0.tldrPreview?.lowercased().contains(q) ?? false) ||
-            ($0.locationDisplay?.lowercased().contains(q) ?? false)
-        }
+    /// 入场动画：reduceMotion 退化为 nil（立即到位），否则按 delay 错峰位移。
+    private func enterAnimation(_ delay: Double) -> Animation? {
+        reduceMotion ? nil : .recapHomeEnter.delay(delay)
     }
 
-    private var liveMeetings: [Meeting] {
-        filteredMeetings.filter { $0.phase == .live }
+    /// 大标题折叠进度：滚过 collapseDistance 即完成 hero → 贴顶标题 的渐变（clamp 到 [0,1]）。
+    private var collapseProgress: CGFloat {
+        min(max(scrollOffset / collapseDistance, 0), 1)
     }
 
     private var todayMeetings: [Meeting] {
-        filteredMeetings.filter {
-            Calendar.current.isDateInToday($0.startedAt) && $0.phase != .live
+        meetings.filter {
+            Calendar.current.isDateInToday($0.startedAt)
         }
     }
 
     private var earlierMeetings: [Meeting] {
-        filteredMeetings.filter {
-            !Calendar.current.isDateInToday($0.startedAt) && $0.phase != .live
+        meetings.filter {
+            !Calendar.current.isDateInToday($0.startedAt)
         }
     }
 
@@ -100,18 +104,14 @@ public struct MeetingListView: View {
                         header
                             .padding(.bottom, Spacing.xxxl)
                             .offset(y: appeared ? 0 : enterOffset(8))
+                            .animation(enterAnimation(0), value: appeared)
 
                         if meetings.isEmpty {
                             emptyState
                                 .padding(.top, Spacing.xl)
                                 .offset(y: appeared ? 0 : enterOffset(10))
+                                .animation(enterAnimation(0.04), value: appeared)
                         } else {
-                            if !liveMeetings.isEmpty {
-                                liveStage
-                                    .padding(.bottom, Spacing.xxxl)
-                                    .offset(y: appeared ? 0 : enterOffset(10))
-                            }
-
                             if !todayMeetings.isEmpty {
                                 todaySection
                             }
@@ -133,6 +133,7 @@ public struct MeetingListView: View {
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     geo.contentOffset.y
                 } action: { oldY, newY in
+                    scrollOffset = newY
                     guard swipedMeetingID != nil, abs(newY - oldY) > 1.5 else { return }
                     withAnimation(.recapSwipeClose) {
                         swipedMeetingID = nil
@@ -143,12 +144,23 @@ public struct MeetingListView: View {
                     startLiveMeeting()
                 }
                 .padding(.bottom, Spacing.xxl)
-                .offset(y: appeared ? 0 : enterOffset(12))
+                .offset(y: fabEntered ? 0 : enterOffset(12))
+            }
+            .overlay(alignment: .top) {
+                topFadeBackdrop
             }
             .navigationDestination(for: MeetingRoute.self) { route in
                 destination(for: route)
             }
             .toolbar {
+                // 贴顶紧凑标题：随折叠进度淡入（hero 滚走时接管），居中如原生 inline 标题。
+                ToolbarItem(placement: .principal) {
+                    Text("全部记录")
+                        .font(.system(size: 17, weight: .semibold, design: .default))
+                        .foregroundStyle(Color.recapInk)
+                        // 滞后于背板：hero 被遮罩盖住后再淡入，做交叉淡入而非双像。
+                        .opacity(max(0, (collapseProgress - 0.35) / 0.65))
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     searchButton
                 }
@@ -166,13 +178,13 @@ public struct MeetingListView: View {
             }
             // 用 alert 而非 confirmationDialog：iOS 26 GlassPopover + Alert 内部约束易冲突，确认钮可能点不到
             .alert(
-                pendingDelete.map { "删除「\($0.title)」？" } ?? "删除会议？",
+                pendingDelete.map { "删除「\($0.title)」？" } ?? "删除记录？",
                 isPresented: Binding(
                     get: { pendingDelete != nil },
                     set: { if !$0 { pendingDelete = nil } }
                 )
             ) {
-                Button("删除会议", role: .destructive) {
+                Button("删除记录", role: .destructive) {
                     if let pending = pendingDelete {
                         Haptics.notify(.warning)
                         commitDelete(id: pending.id)
@@ -191,12 +203,14 @@ public struct MeetingListView: View {
                 Haptics.prepare()
                 consumeDeepLinkIfNeeded()
                 guard !appeared else { return }
+                // 内容元素各用 .animation(value: appeared) 带各自 delay 错峰（无内部 repeatForever，
+                // 隐式动画安全）。FAB 内部有呼吸 repeatForever，单独走 ambient withAnimation 驱动位移，
+                // 避免隐式 .animation(value:) 与 repeatForever 叠加导致飞入。
+                appeared = true
                 if reduceMotion {
-                    appeared = true
+                    fabEntered = true
                 } else {
-                    withAnimation(.recapHomeEnter) {
-                        appeared = true
-                    }
+                    withAnimation(.recapHomeEnter.delay(0.10)) { fabEntered = true }
                 }
             }
             .onChange(of: scenePhase) { _, phase in
@@ -223,118 +237,71 @@ public struct MeetingListView: View {
         .ignoresSafeArea()
     }
 
+    // MARK: - Top fade backdrop
+
+    /// 贴顶渐隐背板：随折叠进度淡入——上方实色遮住滚入顶部的内容，下沿渐变收口（无硬线），
+    /// 让大标题区如原生般渐隐而非硬切。不拦截触摸（toolbar 与列表滚动照常可用）。
+    private var topFadeBackdrop: some View {
+        GeometryReader { geo in
+            let topInset = geo.safeAreaInsets.top
+            let barBottom = topInset + 44
+            let total = barBottom + 48
+            LinearGradient(
+                stops: [
+                    .init(color: Color.recapBg, location: 0),
+                    .init(color: Color.recapBg, location: barBottom / total),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(width: geo.size.width, height: total)
+            // 背板领先于内联标题达到全不透：先把滚入的 hero 盖死，再让贴顶标题淡入，
+            // 避免两者用同一斜率同步爬升造成的中段叠影（双「全部记录」）。
+            .opacity(min(collapseProgress * 1.8, 1))
+        }
+        .ignoresSafeArea(edges: .top)
+        .allowsHitTesting(false)
+    }
+
     // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("全部文件")
-                    .font(.recapHeroTitle)
-                    .tracking(-0.5)
-                    .foregroundStyle(Color.recapInk)
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.recapInk)
-            }
+            Text("全部记录")
+                .font(.recapHeroTitle)
+                .tracking(-0.5)
+                .foregroundStyle(Color.recapInk)
 
             if !meetings.isEmpty {
                 Text(statsLine)
                     .font(.system(size: 13, weight: .regular, design: .default))
                     .foregroundStyle(Color.recapTea)
             }
-
-            if showSearchField {
-                HStack(spacing: Spacing.sm) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(Color.recapTea)
-
-                    TextField("搜索会议标题、摘要或地点...", text: $searchText)
-                        .font(.system(size: 15, weight: .regular))
-                        .foregroundStyle(Color.recapInk)
-
-                    if !searchText.isEmpty {
-                        Button {
-                            searchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.system(size: 15))
-                                .foregroundStyle(Color.recapTea)
-                        }
-                    }
-                }
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(light: 0xF6F7F8, dark: 0x16191D))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(Color.recapTea.opacity(0.12), lineWidth: 0.5)
-                        )
-                )
-                .padding(.top, Spacing.sm)
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Spacing.lg)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(meetings.isEmpty ? "全部文件" : "全部文件，\(statsLine)")
+        .accessibilityLabel(meetings.isEmpty ? "全部记录" : "全部记录，\(statsLine)")
     }
 
     private var statsLine: String {
         var parts: [String] = []
-        if !liveMeetings.isEmpty {
-            parts.append("\(liveMeetings.count) 份草稿")
-        }
-        let archived = todayMeetings.count + earlierMeetings.count
-        if archived > 0 {
-            parts.append("\(archived) 场记录")
+        let total = todayMeetings.count + earlierMeetings.count
+        if total > 0 {
+            parts.append("\(total) 场记录")
         }
         if openTodoCount > 0 {
             parts.append("\(openTodoCount) 条待办")
         }
-        return parts.joined(separator: "  ·  ")
-    }
-
-    // MARK: - Unfinished (paused live)
-
-    private var liveStage: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            // 列表上的 live 会议 = 已离开录音页，语义为「草稿 / 已暂停」
-            sectionEyebrow("草稿", live: true)
-
-            VStack(spacing: Spacing.sm) {
-                ForEach(liveMeetings) { m in
-                    SwipeableMeetingRow(
-                        isOpen: swipedMeetingID == m.id,
-                        onOpen: { swipedMeetingID = m.id },
-                        onClose: { if swipedMeetingID == m.id { swipedMeetingID = nil } },
-                        onDelete: { requestDelete(m) },
-                        onTap: {
-                            if swipedMeetingID == m.id {
-                                withAnimation(.recapSwipeClose) {
-                                    swipedMeetingID = nil
-                                }
-                            } else {
-                                path.append(MeetingRoute.live(m.id))
-                            }
-                        }
-                    ) {
-                        LiveMeetingCard(meeting: m)
-                    }
-                }
-            }
-        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Today
 
     private var todaySection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            sectionEyebrow("今天", live: false)
+            sectionEyebrow("今天")
 
             VStack(spacing: Spacing.sm) {
                 ForEach(todayMeetings) { m in
@@ -344,6 +311,7 @@ public struct MeetingListView: View {
         }
         .padding(.bottom, Spacing.xxxl)
         .offset(y: appeared ? 0 : enterOffset(8))
+        .animation(enterAnimation(0.04), value: appeared)
     }
 
     // MARK: - Day groups (non-today)
@@ -352,7 +320,7 @@ public struct MeetingListView: View {
         VStack(alignment: .leading, spacing: Spacing.xxxl) {
             ForEach(earlierDayGroups, id: \.key) { group in
                 VStack(alignment: .leading, spacing: Spacing.md) {
-                    sectionEyebrow(group.label, live: false)
+                    sectionEyebrow(group.label)
 
                     VStack(spacing: Spacing.sm) {
                         ForEach(group.items) { m in
@@ -364,34 +332,52 @@ public struct MeetingListView: View {
         }
         .padding(.bottom, Spacing.xxxl)
         .offset(y: appeared ? 0 : enterOffset(8))
+        .animation(enterAnimation(0.08), value: appeared)
     }
 
     private func meetingButton(_ m: Meeting, emphasizeTimeOnly: Bool = false) -> some View {
         let isOpen = swipedMeetingID == m.id
+        let isDraft = m.phase == .live
         return SwipeableMeetingRow(
             isOpen: isOpen,
             onOpen: { swipedMeetingID = m.id },
             onClose: { if swipedMeetingID == m.id { swipedMeetingID = nil } },
             onDelete: { requestDelete(m) },
             onTap: {
+                // 别行已左滑打开时，本击先收起它（原生列表行为），不进详情。
+                if swipedMeetingID != nil && swipedMeetingID != m.id {
+                    withAnimation(.recapSwipeClose) {
+                        swipedMeetingID = nil
+                    }
+                    return
+                }
                 if isOpen {
                     withAnimation(.recapSwipeClose) {
                         swipedMeetingID = nil
                     }
+                } else if isDraft {
+                    // 草稿（已离开录音页）→ 接上录音
+                    path.append(MeetingRoute.live(m.id))
                 } else {
                     path.append(MeetingRoute.meeting(m.id))
                 }
             }
         ) {
-            MeetingListRow(
-                meeting: m,
-                whenText: emphasizeTimeOnly ? m.timeText : m.listWhenText
-            )
+            Group {
+                if isDraft {
+                    LiveMeetingCard(meeting: m)
+                } else {
+                    MeetingListRow(
+                        meeting: m,
+                        whenText: emphasizeTimeOnly ? m.timeText : m.listWhenText
+                    )
+                }
+            }
             .contextMenu {
                 Button(role: .destructive) {
                     requestDelete(m)
                 } label: {
-                    Label("删除会议…", systemImage: "trash")
+                    Label("删除记录…", systemImage: "trash")
                 }
             }
         }
@@ -437,13 +423,8 @@ public struct MeetingListView: View {
         }
     }
 
-    private func sectionEyebrow(_ title: String, live: Bool) -> some View {
+    private func sectionEyebrow(_ title: String) -> some View {
         HStack(spacing: Spacing.sm) {
-            if live {
-                Circle()
-                    .fill(Color.recapTea)
-                    .frame(width: 6, height: 6)
-            }
             Text(title)
                 .font(.recapSection)
                 .tracking(1.4)
@@ -491,17 +472,29 @@ public struct MeetingListView: View {
 
     @ViewBuilder
     private func destination(for route: MeetingRoute) -> some View {
-        let id: UUID = {
-            switch route {
-            case .live(let id), .meeting(let id): return id
+        switch route {
+        case .search:
+            SearchView()
+        case .live(let id), .meeting(let id):
+            if let meeting = meetings.first(where: { $0.id == id }) {
+                MeetingNoteView(meeting: meeting) {
+                    if !path.isEmpty { path.removeLast() }
+                }
+            } else {
+                Text("会议不存在").foregroundStyle(Color.recapTea)
             }
-        }()
-        if let meeting = meetings.first(where: { $0.id == id }) {
-            MeetingNoteView(meeting: meeting) {
-                if !path.isEmpty { path.removeLast() }
+        case .meetingAt(let id, let scrollStart, let noteTarget):
+            if let meeting = meetings.first(where: { $0.id == id }) {
+                MeetingNoteView(
+                    meeting: meeting,
+                    initialScrollStart: scrollStart,
+                    initialNoteTarget: noteTarget
+                ) {
+                    if !path.isEmpty { path.removeLast() }
+                }
+            } else {
+                Text("会议不存在").foregroundStyle(Color.recapTea)
             }
-        } else {
-            Text("会议不存在").foregroundStyle(Color.recapTea)
         }
     }
 
@@ -521,15 +514,10 @@ public struct MeetingListView: View {
 
     private var searchButton: some View {
         RecapToolbarIcon(
-            "magnifyingglass",
-            accessibilityLabel: "搜索会议"
+            RecapSymbol.search,
+            accessibilityLabel: "搜索"
         ) {
-            withAnimation(.recapSoft) {
-                showSearchField.toggle()
-                if !showSearchField {
-                    searchText = ""
-                }
-            }
+            path.append(MeetingRoute.search)
         }
     }
 
@@ -700,6 +688,7 @@ private struct SwipeableMeetingRow<Content: View>: View {
     let onTap: () -> Void
     @ViewBuilder var content: () -> Content
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var offset: CGFloat = 0
     /// 本次触摸已进入横向滑动，禁止随后触发 onTap。
     @State private var swipeEngaged = false
@@ -757,12 +746,12 @@ private struct SwipeableMeetingRow<Content: View>: View {
         }
         .accessibilityAddTraits(.isButton)
         .accessibilityAction { onTap() }
-        .accessibilityAction(named: Text("删除会议")) { onDelete() }
+        .accessibilityAction(named: Text("删除记录")) { onDelete() }
         .onAppear {
             offset = isOpen ? -actionWidth : 0
         }
         .onChange(of: isOpen) { _, open in
-            withAnimation(open ? .recapSwipeOpen : .recapSwipeClose) {
+            withAnimation(swipeAnimation(open: open)) {
                 offset = open ? -actionWidth : 0
             }
         }
@@ -785,7 +774,7 @@ private struct SwipeableMeetingRow<Content: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(RecapPressStyle())
-        .accessibilityLabel("删除会议")
+        .accessibilityLabel("删除记录")
     }
 
     private func finishSwipe(translationX: CGFloat, velocityX: CGFloat) {
@@ -826,8 +815,13 @@ private struct SwipeableMeetingRow<Content: View>: View {
         return -actionWidth + over * overdragResistance
     }
 
+    /// 松手回弹动画：reduceMotion 退化为极短 ease-out（无 spring 回弹），其余跟手 spring。
+    private func swipeAnimation(open: Bool) -> Animation {
+        reduceMotion ? .easeOut(duration: 0.12) : (open ? .recapSwipeOpen : .recapSwipeClose)
+    }
+
     private func snap(open: Bool) {
-        withAnimation(open ? .recapSwipeOpen : .recapSwipeClose) {
+        withAnimation(swipeAnimation(open: open)) {
             offset = open ? -actionWidth : 0
         }
     }

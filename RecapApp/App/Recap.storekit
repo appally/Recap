@@ -4,7 +4,26 @@
 
   ],
   "products" : [
-
+    {
+      "displayPrice" : "68",
+      "familyShareable" : false,
+      "internalID" : "21482020",
+      "localizations" : [
+        {
+          "description" : "永久解锁自备密钥（BYOK）：用你自己的厂商 Key，费用自理、不限量。",
+          "displayName" : "Recap BYOK 解锁",
+          "locale" : "zh_CN"
+        },
+        {
+          "description" : "Lifetime unlock for bringing your own API keys.",
+          "displayName" : "Recap BYOK Unlock",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.liuyong.recap.byok.unlock",
+      "referenceName" : "BYOK Unlock",
+      "type" : "NonConsumable"
+    }
   ],
   "settings" : {
     "_failTransactionsEnabled" : false,

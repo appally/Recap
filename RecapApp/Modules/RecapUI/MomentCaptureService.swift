@@ -96,7 +96,14 @@ final class MomentCaptureService: NSObject, ObservableObject {
         defer { isCapturing = false }
 
         return await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
-            let settings = AVCapturePhotoSettings()
+            // 强制 JPEG：使 fileDataRepresentation() 返回完整 JPEG 字节，与 .jpg 扩展名一致，
+            // 落盘可直接写字节、无需 UIImage 重编码（主线程零编码开销）。JPEG 全设备支持。
+            let settings: AVCapturePhotoSettings
+            if photoOutput.availablePhotoCodecTypes.contains(.jpeg) {
+                settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+            } else {
+                settings = AVCapturePhotoSettings()
+            }
             settings.flashMode = .off
             // 系统快门音：MVP 依赖设备静音模式（方案 §5.3）；V2 在音频流打标记精修。
             let delegate = CaptureDelegate(continuation: continuation)

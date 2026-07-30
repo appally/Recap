@@ -156,19 +156,40 @@ final class AgentSkillDocumentTests: XCTestCase {
         let cases: [(id: String, scenario: TemplateScenario, group: String)] = [
             ("sales-review", .sales, "recap"),
             ("customer-visit-notes", .sales, "recap"),
+            ("feedback-synthesis", .sales, "recap"),
             ("one-on-one", .team, "recap"),
             ("interview-eval", .hiring, "recap"),
             ("standup-summary", .team, "recap"),
             ("retro", .team, "recap"),
             ("lecture-notes", .learning, "recap"),
+            ("cornell-notes", .learning, "recap"),
             ("brief-reconcile", .general, "recap"),
             ("photo-recap", .general, "recap"),
+            ("project-status", .team, "write"),
+            ("key-quotes", .general, "extract"),
         ]
         for c in cases {
             let skill = try XCTUnwrap(catalog.skill(id: c.id), "缺失模板 \(c.id)")
             XCTAssertEqual(skill.scenario, c.scenario, "\(c.id) scenario")
             XCTAssertEqual(skill.groupId, c.group, "\(c.id) group")
             XCTAssertFalse(skill.systemPrompt.isEmpty, "\(c.id) 空 prompt")
+        }
+    }
+
+    /// 全部内置 SKILL.md 都能 parse → encode → reparse 稳定 round-trip（核心字段不丢）。
+    /// 一条覆盖全部模板，未来新增自动覆盖，避免每加一个模板就补一条。
+    func testAllBundledDocumentsRoundTrip() throws {
+        XCTAssertFalse(AgentBundledSkills.documents.isEmpty)
+        for raw in AgentBundledSkills.documents {
+            let skill = try AgentSkillDocument.parse(raw)
+            let encoded = AgentSkillDocument.encode(skill)
+            let reparsed = try AgentSkillDocument.parse(encoded)
+            XCTAssertEqual(reparsed.id, skill.id)
+            XCTAssertEqual(reparsed.name, skill.name)
+            XCTAssertEqual(reparsed.groupId, skill.groupId)
+            XCTAssertEqual(reparsed.scenario, skill.scenario)
+            XCTAssertEqual(reparsed.systemPrompt, skill.systemPrompt)
+            XCTAssertEqual(reparsed.allowedTools, skill.allowedTools)
         }
     }
 }

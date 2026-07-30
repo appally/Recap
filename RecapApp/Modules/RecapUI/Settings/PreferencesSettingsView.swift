@@ -75,6 +75,7 @@ public struct PreferencesSettingsView: View {
     private var llmValue: String {
         switch serviceMode {
         case .recapCloud: return "Recap 云端"
+        case .freeTrial: return "Recap 免费"
         case .byok: return llmTemplate.displayName
         }
     }

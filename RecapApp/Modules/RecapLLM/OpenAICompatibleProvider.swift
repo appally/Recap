@@ -11,16 +11,22 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     private let apiKey: String
     private let host: String
     private let basePath: String
+    /// 首 token 超时预算（秒）：产出首个有效 delta 前若超过则放弃本次、按瞬态错误重试。
+    /// MacPaw 流式 session 库内部自建 `.default` URLSession、不可注入超时（吃默认 60s），
+    /// 故在 provider 内用「首 token race」兜底，避免一场短会卡满 60s 才知道失败。
+    private let firstTokenTimeoutSeconds: Double
 
     /// - Parameter baseURL: 完整 OpenAI 兼容基址（含路径，如
     ///   `https://dashscope.aliyuncs.com/compatible-mode/v1`）。自动拆 host + basePath；
     ///   MacPaw 与原始 HTTP 都走全路径，修子路径被吞（旧实现在此丢 qwen/glm/doubao/gemini/claude 的路径）。
     /// - Parameter summaryModel: 纪要等高质量任务用的强模型；nil 时与 defaultModel 同款。
+    /// - Parameter firstTokenTimeoutSeconds: 首 token 超时；命中后按瞬态错误重试（与 QUIC 抖动同路）。
     public init(id: String = "deepseek",
                 apiKey: String,
                 baseURL: String = "https://api.deepseek.com",
                 defaultModel: String = LLMPresets.deepSeekFlash,
-                summaryModel: String? = nil) {
+                summaryModel: String? = nil,
+                firstTokenTimeoutSeconds: Double = 20) {
         self.id = id
         self.defaultModel = defaultModel
         self.summaryModel = summaryModel ?? defaultModel
@@ -28,6 +34,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         let parsed = Self.parseBaseURL(baseURL)
         self.host = parsed.host
         self.basePath = parsed.basePath
+        self.firstTokenTimeoutSeconds = firstTokenTimeoutSeconds
         self.client = OpenAI(configuration: .init(token: apiKey, host: parsed.host, basePath: parsed.basePath))
     }
 
@@ -43,6 +50,27 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
         if path == "/" { path = "/v1" }
         return (h, path)
+    }
+
+    // MARK: - Streaming（瞬态重试 + 首 token 超时）
+
+    /// 首 token 超时（不跨模块，避免 RecapLLM 依赖 RecapASR 的 InferenceTimeoutError）。
+    private struct FirstTokenTimeoutError: Error, LocalizedError {
+        let seconds: Double
+        var errorDescription: String? { "首 token 超时（\(Int(seconds))s 内无响应）" }
+    }
+
+    /// 瞬态重试上限：`attempt < maxRetries` ⇒ 共 maxRetries+1 次尝试。
+    /// 退避策略抄 ``OpenAICompatibleAgentStreaming/run``（DeepSeekAgentTransport）。
+    private static let maxRetries = 2
+
+    private static func isTransientNetworkError(_ error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .networkConnectionLost, .notConnectedToInternet:
+            return true
+        default:
+            return false
+        }
     }
 
     public func streamText(
@@ -62,27 +90,134 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
                 return .assistant(.init(content: .textContent(turn.content)))
             }
         }
+        let query = ChatQuery(
+            messages: chatMessages,
+            model: m,
+            temperature: temperature,
+            stream: true
+        )
         return AsyncThrowingStream { continuation in
             let task = Task {
-                let query = ChatQuery(
-                    messages: chatMessages,
-                    model: m,
-                    temperature: temperature,
-                    stream: true
-                )
-                do {
-                    for try await chunk in client.chatsStream(query: query) {
-                        if let t = chunk.choices.first?.delta.content, !t.isEmpty {
-                            continuation.yield(t)
-                        }
-                    }
-                    continuation.finish()
-                } catch {
-                    RecapLog.provider.error("streamText model=\(m, privacy: .public) host=\(self.host, privacy: .public) 失败: \(error.localizedDescription, privacy: .public)")
-                    continuation.finish(throwing: error)
-                }
+                await self.runStream(query: query, model: m, attempt: 0, continuation: continuation)
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// 递归驱动单次流式尝试 + 瞬态重试；所有 `continuation.finish` 收敛于此。
+    /// 重试守卫 `!produced`：已向下游产出任意 delta 后**绝不重试**
+    ///（否则下游 ``MinutesPipeline`` 把 delta 重复拼进 summaryText、破坏 mergeStreamText）。
+    private func runStream(
+        query: ChatQuery,
+        model: String,
+        attempt: Int,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) async {
+        let outcome = await performStreamOnce(query: query, continuation: continuation)
+
+        guard let error = outcome.error else {
+            continuation.finish()
+            return
+        }
+
+        let isRetryable = (error is FirstTokenTimeoutError)
+            || ((error as? URLError).map(Self.isTransientNetworkError) ?? false)
+
+        if !outcome.produced && attempt < Self.maxRetries && isRetryable {
+            let delayNs = UInt64(300_000_000) * UInt64(attempt + 1)   // 300ms / 600ms
+            try? await Task.sleep(nanoseconds: delayNs)
+            if Task.isCancelled { continuation.finish(); return }
+            await runStream(query: query, model: model, attempt: attempt + 1, continuation: continuation)
+            return
+        }
+
+        RecapLog.provider.error("streamText model=\(model, privacy: .public) host=\(self.host, privacy: .public) 终结 produced=\(outcome.produced, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        continuation.finish(throwing: error)
+    }
+
+    /// 单次流式尝试：消费 `client.chatsStream`，与「首 token 超时」race。
+    ///
+    /// MacPaw 网络层失败（`.timedOut`/`.networkConnectionLost` 等）**原样透传** `URLError`
+    ///（`StreamingSession.didCompleteWithError` 不包装，仅 HTTP ≥400 才包 `OpenAIError.statusError`），
+    /// 故可被上层 `URLError` 分支精确捕获、纳入瞬态重试。
+    ///
+    /// 返回 `(produced, error)`：error==nil 表示流自然结束。结论以 actor 内 produced/timedOut 为准
+    ///（首 chunk 与超时几乎同时到达时，produced 压制 timedOut，避免误判导致重试）。
+    private func performStreamOnce(
+        query: ChatQuery,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) async -> (produced: Bool, error: Error?) {
+        let attempt = StreamAttempt(continuation: continuation)
+        let budget = firstTokenTimeoutSeconds
+
+        return await withTaskGroup(of: Void.self) { group in
+            // 消费任务：持续 yield delta；随父 Task 取消而取消（结构化并发）。
+            group.addTask {
+                do {
+                    for try await chunk in self.client.chatsStream(query: query) {
+                        if Task.isCancelled { break }
+                        if let t = chunk.choices.first?.delta.content, !t.isEmpty {
+                            await attempt.yieldContent(t)
+                        }
+                    }
+                } catch is CancellationError {
+                    // 超时取消 / 外层取消：静默，结论由 outcome 表达。
+                } catch {
+                    await attempt.recordConsumeError(error)
+                }
+            }
+            // 首 token 超时任务：预算内未产出则判超时；被提前取消（未到时间）则不标记。
+            group.addTask {
+                do {
+                    try await Task.sleep(for: .seconds(budget))
+                } catch {
+                    return
+                }
+                await attempt.markTimeout(seconds: budget)
+            }
+
+            _ = await group.next()        // 任一子任务先完成
+            group.cancelAll()             // 取消另一个（超时则中断消费；提前完成则取消计时）
+            await group.waitForAll()      // 等收尾，避免泄漏
+            return await attempt.outcome()
+        }
+    }
+
+    /// 单次流式尝试的可变状态。actor 串行化，消除「首 chunk 与超时」的竞态。
+    private actor StreamAttempt {
+        private let continuation: AsyncThrowingStream<String, Error>.Continuation
+        private var produced = false
+        private var timedOut = false
+        private var timeoutSeconds: Double = 0
+        private var consumeError: Error?
+
+        init(continuation: AsyncThrowingStream<String, Error>.Continuation) {
+            self.continuation = continuation
+        }
+
+        /// 产出 delta：已判超时后不再写入，避免重试导致下游重复拼接。
+        func yieldContent(_ content: String) {
+            guard !timedOut else { return }
+            produced = true
+            continuation.yield(content)
+        }
+
+        func recordConsumeError(_ error: Error) {
+            if consumeError == nil { consumeError = error }
+        }
+
+        /// 标记首 token 超时；已产出则压制（首 chunk 与超时竞争时 produced 优先）。
+        func markTimeout(seconds: Double) {
+            guard !produced else { return }
+            timedOut = true
+            timeoutSeconds = seconds
+        }
+
+        func outcome() -> (produced: Bool, error: Error?) {
+            if timedOut {
+                return (false, FirstTokenTimeoutError(seconds: timeoutSeconds))
+            }
+            return (produced, consumeError)
         }
     }
 

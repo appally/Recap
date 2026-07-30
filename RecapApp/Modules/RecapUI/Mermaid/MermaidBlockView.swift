@@ -15,8 +15,6 @@ struct MermaidBlockView: View {
     @State private var forceToken = 0
     @State private var showFullScreen = false
 
-    private static let inlineMaxHeight: CGFloat = 360
-
     var body: some View {
         Group {
             if let error {
@@ -29,32 +27,12 @@ struct MermaidBlockView: View {
                     forceToken: forceToken,
                     onError: { err in if !isStreaming { error = err } }
                 )
-                .frame(height: max(height, 100))      // 渲染前骨架 minHeight 防塌陷
-                .frame(maxHeight: Self.inlineMaxHeight)   // 内联限高，超出裁剪
-                .overlay(alignment: .bottom) {
-                    if height > Self.inlineMaxHeight {
-                        LinearGradient(
-                            colors: [.clear, Color.recapPaper],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                        .frame(height: 36)
-                        .allowsHitTesting(false)
-                    }
-                }
+                .frame(height: max(height, 100))      // 渲染前骨架 minHeight 防塌陷；完整图高不限高
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(alignment: .bottomTrailing) {
-                    if height > Self.inlineMaxHeight {
-                        Text("点击查看大图")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.recapTea)
-                            .padding(.horizontal, Spacing.sm)
-                            .padding(.vertical, Spacing.xs)
-                    }
-                }
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture { showFullScreen = true }
+        .onTapGesture { showFullScreen = true }    // 整图已完整显示，点开全屏仅用于 pinch 看细节
         .onChange(of: height) { _, newH in if newH > 0 { error = nil } }
         .onChange(of: isStreaming) { _, streaming in
             if !streaming { forceToken += 1 }            // 终态强制重渲

@@ -145,4 +145,50 @@ final class AgentSkillCatalogTests: XCTestCase {
         // prompt 必须含 mermaid 围栏示例，以显式覆盖 preamble 的全局「禁代码块」契约
         XCTAssertTrue(skill.systemPrompt.contains("```mermaid"), "prompt 应包含 mermaid 围栏示例")
     }
+
+    // MARK: - Prompt 契约回归（防 P0 类语义 bug 回潮）
+
+    /// 全部内置模板：核心字段非空（防误存空 body / 描述 / 名称）。
+    func testAllBundledSkillsHaveNonEmptyFields() throws {
+        let catalog = try AgentSkillCatalog.bundled()
+        XCTAssertFalse(catalog.skills.isEmpty)
+        for skill in catalog.skills {
+            XCTAssertFalse(skill.name.isEmpty, "\(skill.id) name 空")
+            XCTAssertFalse(skill.description.isEmpty, "\(skill.id) description 空")
+            XCTAssertFalse(skill.systemPrompt.isEmpty, "\(skill.id) systemPrompt 空")
+        }
+    }
+
+    /// 依赖「工具空返回」做降级判定的模板，prompt 必须引用工具的精确返回串，
+    /// 否则降级分支不会被触发——这是 P0 类语义反转 bug（list 空≠无待办）的根因。
+    func testSkillPromptsPinToolEmptyReturnStrings() throws {
+        let catalog = try AgentSkillCatalog.bundled()
+        let actionList = try XCTUnwrap(catalog.skill(id: "action-list"))
+        XCTAssertTrue(actionList.systemPrompt.contains("（无待办）"),
+                      "action-list 须引用 list_action_items 的空返回串「（无待办）」")
+        let briefReconcile = try XCTUnwrap(catalog.skill(id: "brief-reconcile"))
+        XCTAssertTrue(briefReconcile.systemPrompt.contains("（底稿无命中）"),
+                      "brief-reconcile 须引用 search_brief 的空返回串「（底稿无命中）」")
+    }
+
+    /// 共享 preamble 须含核心不可违反契约；format 类模板须守住各自输出契约。
+    func testPreambleAndFormatContracts() throws {
+        // preamble 全局契约：语言 / 事实源（含原话引文护栏）/ 截断告知。
+        let preamble = AgentSkillDocument.preamble
+        XCTAssertTrue(preamble.contains("简体中文"))
+        XCTAssertTrue(preamble.contains("严禁编造"))
+        XCTAssertTrue(preamble.contains("原话引文"), "preamble 须含原话引文护栏（防复盘杜撰引文）")
+        XCTAssertTrue(preamble.contains("截断告知"))
+
+        let catalog = try AgentSkillCatalog.bundled()
+        // 思维导图：缩进契约须与 MindmapOutlineView 解析器对齐（每级 2 空格 + `- `）。
+        let mindmap = try XCTUnwrap(catalog.skill(id: "mindmap"))
+        XCTAssertTrue(mindmap.systemPrompt.contains("2 个空格"), "mindmap 须声明 2 空格缩进契约")
+        // 流程图：mermaid 特殊字符鲁棒性护栏。
+        let mermaid = try XCTUnwrap(catalog.skill(id: "mermaid-flowchart"))
+        XCTAssertTrue(mermaid.systemPrompt.contains("双引号"), "mermaid 须含特殊字符双引号护栏")
+        // 周报：描述不得过度承诺跨会议聚合（runner 是单会议执行）。
+        let weekly = try XCTUnwrap(catalog.skill(id: "weekly-report"))
+        XCTAssertTrue(weekly.description.contains("本场会议"), "weekly-report 描述须如实反映单会议")
+    }
 }

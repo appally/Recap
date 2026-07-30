@@ -1,0 +1,28 @@
+{
+  // recap-cloud:凭证签发器 + 法务静态页(一个 Worker 全包,挂在 recap.manymind.chat)
+  "name": "recap-cloud",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "vars": {
+    "ASR_WSS": "wss://dashscope.aliyuncs.com/api-ws/v1/inference/",
+    "LLM_BASE": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  },
+
+  // 绑定 manymind.chat 子域(zone 已在本 CF 账号下;asr. 已被占用,用 recap.)
+  "routes": [{ "pattern": "recap.manymind.chat", "custom_domain": true }],
+
+  // per-user 月度配额 Durable Object(Workers Free plan 即可用)。
+  "durable_objects": {
+    "bindings": [{ "name": "QUOTA", "class_name": "QuotaDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QuotaDO"] }]
+
+  // Secrets(部署后注入,wrangler secret put):
+  //   DASHSCOPE_API_KEY     阿里主 key(RAM 最小权限子账号,仅 fun-asr-realtime + 指定 qwen)
+  //   APPLE_PRIVATE_KEY / APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_BUNDLE_ID   Phase 2 真实验证
+  //
+  // Phase 2(用户量起来):加 Durable Object 做 per-user 配额(需 Workers Paid plan $5/月),
+  //   复用 src/adapter/quota-do.ts + src/core/quota.ts(已写好待接入)。
+}

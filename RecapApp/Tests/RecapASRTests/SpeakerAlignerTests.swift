@@ -111,4 +111,28 @@ final class SpeakerAlignerTests: XCTestCase {
         XCTAssertEqual(outcome.speakers.count, 2)
         XCTAssertEqual(outcome.timeline.count, 2)
     }
+
+    // MARK: voiceprintId 透传（路径 C·Phase 2）
+
+    func testMakeSpeakersPropagatesVoiceprintId() {
+        // 按首现顺序（startSeconds 升序）：speakerIndex 1 @0s 先现 → spk1；speakerIndex 0 @5s 后现 → spk0。
+        let timeline = [
+            SpeakerTimelineSegment(speakerIndex: 1, startSeconds: 0, endSeconds: 5, voiceprintId: "alice-vp"),
+            SpeakerTimelineSegment(speakerIndex: 0, startSeconds: 5, endSeconds: 10, voiceprintId: "bob-vp"),
+        ]
+        let speakers = SpeakerAligner.makeSpeakers(from: timeline)
+        XCTAssertEqual(speakers.count, 2)
+        let byId = Dictionary(uniqueKeysWithValues: speakers.map { ($0.id, $0) })
+        XCTAssertEqual(byId["spk1"]?.voiceprintId, "alice-vp")
+        XCTAssertEqual(byId["spk0"]?.voiceprintId, "bob-vp")
+    }
+
+    func testMakeSpeakersVoiceprintIdNilWhenAbsent() {
+        let timeline = [
+            SpeakerTimelineSegment(speakerIndex: 0, startSeconds: 0, endSeconds: 5),  // 无 voiceprintId
+        ]
+        let speakers = SpeakerAligner.makeSpeakers(from: timeline)
+        XCTAssertEqual(speakers.count, 1)
+        XCTAssertNil(speakers.first?.voiceprintId)
+    }
 }

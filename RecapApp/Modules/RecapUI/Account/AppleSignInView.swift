@@ -45,6 +45,13 @@ struct AppleSignInSection: View {
                 fullName: credential.fullName,
                 email: credential.email
             )
+            // 免费档「登录续杯」:把 identityToken 注入凭证提供者,触发一次 issue 上网关验签、升级月度档。
+            if AIServiceMode.current == .freeTrial,
+               let tokenData = credential.identityToken,
+               let jwt = String(data: tokenData, encoding: .utf8) {
+                RecapCredentialProvider.shared.setIdentityTokenForElevation(jwt)
+                Task { try? await RecapCredentialProvider.shared.ensureFresh(force: true) }
+            }
             onSignedIn()
             onMessage("已通过 Apple 登录")
         }

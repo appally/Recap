@@ -90,6 +90,14 @@ public final class ActionItem {
         return due.formatted(.relative(presentation: .named).locale(Locale(identifier: "zh_CN")))
     }
 
+    /// 复制/分享用单行：`- [ ] task — owner（due）`。
+    /// evidenceQuote 是内部溯源、禁止外发，故不进此串。
+    public var clipboardLine: String {
+        var line = "- [ ] \(task)\(owner.map { " — \($0)" } ?? "")"
+        if let due = dueText { line += "（\(due)）" }
+        return line
+    }
+
     /// 指派首字；无 owner 时用「?」。
     public var assigneeInitial: String {
         guard let owner, let first = owner.first else { return "?" }

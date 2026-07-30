@@ -7,19 +7,18 @@ struct ASRSettingsView: View {
     @State private var preference: ASRPreference = .current
     @State private var serviceMode: AIServiceMode = .current
     @State private var funKey = ""
-    @State private var volcApp = ""
-    @State private var volcAccess = ""
     @State private var hasFun = AsrEngineResolver.hasFunCredentials
-    @State private var hasVolc = AsrEngineResolver.hasVolcCredentials
     @State private var status = ""
     @State private var isPreparingSpeakerModel = false
     @State private var speakerDownloadTask: Task<Void, Never>?
     @State private var fluidDownloadTask: Task<Void, Never>?
-    @State private var showVolcSecret = false
     @State private var fluidRetranscribe = ASRFeatureFlags.fluidRetranscribeEnabled
     @State private var isPreparingFluidModel = false
     @State private var fluidModelsReady = UserDefaults.standard.bool(forKey: "asr.fluidModelsReady")
     @State private var fluidDownloadProgress: Double?
+    @State private var fluidDiarizer = ASRFeatureFlags.fluidDiarizerEnabled
+    @State private var isPreparingFluidDiarizerModel = false
+    @State private var fluidDiarizerDownloadTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -34,9 +33,6 @@ struct ASRSettingsView: View {
                 if needsFunCredentials {
                     funSection
                 }
-                if needsVolcCredentials {
-                    volcSection
-                }
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.md)
@@ -50,11 +46,11 @@ struct ASRSettingsView: View {
             preference = .current
             serviceMode = .current
             hasFun = AsrEngineResolver.hasFunCredentials
-            hasVolc = AsrEngineResolver.hasVolcCredentials
         }
         .onDisappear {
             speakerDownloadTask?.cancel()
             fluidDownloadTask?.cancel()
+            fluidDiarizerDownloadTask?.cancel()
         }
     }
 
@@ -95,7 +91,7 @@ struct ASRSettingsView: View {
 
     private var showsCloudBillingHint: Bool {
         serviceMode == .recapCloud
-            && (preference == .funASR || preference == .volcSeedASR || preference == .auto)
+            && (preference == .funASR || preference == .auto)
     }
 
     private var cloudBillingHint: some View {
@@ -120,11 +116,6 @@ struct ASRSettingsView: View {
             && (preference == .funASR || preference == .auto)
     }
 
-    private var needsVolcCredentials: Bool {
-        serviceMode == .byok
-            && (preference == .volcSeedASR || preference == .auto)
-    }
-
     /// 当前选择下「实际将使用」的引擎说明（auto 按可用性；非 auto 指明 + 凭证状态）。
     private var engineSummary: String {
         switch preference {
@@ -138,10 +129,6 @@ struct ASRSettingsView: View {
             return (hasFun || serviceMode == .recapCloud)
                 ? "将使用阿里 Fun-ASR（云端高保真）。"
                 : "需先在下方配置阿里百炼 API Key。"
-        case .volcSeedASR:
-            return (hasVolc || serviceMode == .recapCloud)
-                ? "将使用火山 Seed-ASR（云端备选）。"
-                : "需先在下方配置火山语音技术凭证。"
         }
     }
 
@@ -153,10 +140,6 @@ struct ASRSettingsView: View {
             return hasFun || serviceMode == .recapCloud
                 ? ("可用", .recapCeladon)
                 : ("需 Key", .recapOchre)
-        case .volcSeedASR:
-            return hasVolc || serviceMode == .recapCloud
-                ? ("可用", .recapCeladon)
-                : ("需凭证", .recapOchre)
         case .auto:
             return ("推荐", .recapCeladon)
         }
@@ -182,7 +165,7 @@ struct ASRSettingsView: View {
                         status = "说话人模型已就绪（约 10.7 MB）"
                     } catch {
                         if Task.isCancelled { return }
-                        status = "模型准备失败：\(error.localizedDescription)"
+                        status = "说话人模型准备失败，请检查网络后重试"
                     }
                 }
             } label: {
@@ -215,6 +198,81 @@ struct ASRSettingsView: View {
             }
             .buttonStyle(SettingsPressStyle())
             .disabled(isPreparingSpeakerModel)
+
+            // 路径 C·POC：FluidAudio 分离引擎（pyannote + WeSpeaker），可替代 SpeakerKit，
+            // 为跨录音声纹身份（Phase 2）铺路。默认关，真机 POC 通过后再考虑默认开。
+            Toggle(isOn: $fluidDiarizer) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("FluidAudio 分离引擎（实验）")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                    Text("用 FluidAudio（pyannote + WeSpeaker）替代 SpeakerKit 做会后分离。仅真机可用。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.recapTea.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+            .tint(Color.recapCeladon)
+            .onChange(of: fluidDiarizer) { _, newValue in
+                ASRFeatureFlags.fluidDiarizerEnabled = newValue
+            }
+            .padding(Spacing.lg)
+            .background(
+                Color.recapPaper,
+                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
+            )
+
+            if fluidDiarizer {
+                Button {
+                    guard !isPreparingFluidDiarizerModel else { return }
+                    isPreparingFluidDiarizerModel = true
+                    status = "正在下载/加载 FluidAudio 分离模型…"
+                    fluidDiarizerDownloadTask = Task {
+                        defer { isPreparingFluidDiarizerModel = false }
+                        do {
+                            try await FluidDiarizer.shared.prepare()
+                            status = "FluidAudio 分离模型已就绪"
+                        } catch {
+                            if Task.isCancelled { return }
+                            status = "FluidAudio 分离模型准备失败，请检查网络后重试"
+                        }
+                    }
+                } label: {
+                    HStack(spacing: Spacing.md) {
+                        Image(systemName: isPreparingFluidDiarizerModel
+                              ? "arrow.down.circle"
+                              : "person.wave.2.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Color.recapCeladon)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(isPreparingFluidDiarizerModel ? "准备中…" : "预下载 FluidAudio 分离模型")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.recapInk)
+                            Text("pyannote 分段 + WeSpeaker 声纹（共约几十 MB，走国内镜像）。")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.recapTea.opacity(0.9))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(Spacing.lg)
+                    .background(
+                        Color.recapPaper,
+                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(SettingsPressStyle())
+                .disabled(isPreparingFluidDiarizerModel)
+            }
         }
     }
 
@@ -294,7 +352,7 @@ struct ASRSettingsView: View {
                             status = "端侧模型已就绪"
                         } catch {
                             if Task.isCancelled { return }
-                            status = "模型准备失败：\(error.localizedDescription)"
+                            status = "端侧模型下载失败，请检查网络后重试"
                         }
                     }
                 } label: {
@@ -366,100 +424,6 @@ struct ASRSettingsView: View {
         }
     }
 
-    private var volcSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("火山 Seed-ASR")
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(1.4)
-                .foregroundStyle(Color.recapTea)
-
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                HStack {
-                    Text("语音技术凭证")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.recapInk)
-                    Spacer()
-                    Button {
-                        showVolcSecret.toggle()
-                    } label: {
-                        Image(systemName: showVolcSecret ? "eye.slash" : "eye")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(Color.recapTea)
-                            .frame(width: 28, height: 28)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(showVolcSecret ? "隐藏凭证" : "显示凭证")
-                    SettingsStatusPill(
-                        text: hasVolc ? "已配置" : "未配置",
-                        kind: hasVolc ? .ready : .missing
-                    )
-                }
-
-                Group {
-                    if showVolcSecret {
-                        TextField("App ID", text: $volcApp)
-                    } else {
-                        SecureField("App ID", text: $volcApp)
-                    }
-                    if showVolcSecret {
-                        TextField("Access Token", text: $volcAccess)
-                    } else {
-                        SecureField("Access Token", text: $volcAccess)
-                    }
-                }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.system(size: 14, design: .monospaced))
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 12)
-                .background(
-                    Color.recapBg,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-                .submitLabel(.done)
-                .onSubmit(saveVolc)
-
-                HStack(spacing: Spacing.md) {
-                    Button(action: saveVolc) {
-                        Text("保存")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 9)
-                            .background(Color.recapCeladon, in: Capsule())
-                    }
-                    .buttonStyle(SettingsPressStyle())
-
-                    if hasVolc {
-                        Button("清除", role: .destructive) {
-                            _ = KeychainStore.delete(ASRPresets.volcAppKeyAccount)
-                            _ = KeychainStore.delete(ASRPresets.volcAccessKeyAccount)
-                            hasVolc = false
-                            status = "已清除火山凭证"
-                        }
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.recapCinnabar)
-                    }
-                    Spacer()
-                }
-            }
-            .padding(Spacing.lg)
-            .background(
-                Color.recapPaper,
-                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                    .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
-            )
-
-            Text("Resource 固定为 \(ASRPresets.volcResourceId)。")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.recapTea.opacity(0.9))
-        }
-    }
-
     private func saveFun() {
         let key = funKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
@@ -470,21 +434,6 @@ struct ASRSettingsView: View {
         funKey = ""
         hasFun = AsrEngineResolver.hasFunCredentials
         status = hasFun ? "Fun-ASR Key 已保存" : "保存失败"
-    }
-
-    private func saveVolc() {
-        let app = volcApp.trimmingCharacters(in: .whitespacesAndNewlines)
-        let access = volcAccess.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !app.isEmpty, !access.isEmpty else {
-            status = "请填写火山 App ID 与 Access Token"
-            return
-        }
-        _ = KeychainStore.set(app, for: ASRPresets.volcAppKeyAccount)
-        _ = KeychainStore.set(access, for: ASRPresets.volcAccessKeyAccount)
-        volcApp = ""
-        volcAccess = ""
-        hasVolc = AsrEngineResolver.hasVolcCredentials
-        status = hasVolc ? "火山凭证已保存" : "保存失败"
     }
 
     private static var isSimulator: Bool {

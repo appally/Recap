@@ -1,0 +1,23 @@
+{
+  "name": "recap-cloud",
+  "private": true,
+  "type": "module",
+  "description": "Recap 凭证签发器后端 (Cloudflare Workers) — 验证 / 部署脚本与 Worker 源码",
+  "scripts": {
+    "verify:sts": "node scripts/verify-sts-asr.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jose": "^5.9.6",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10",
+    "wrangler": "^3.95.0"
+  }
+}

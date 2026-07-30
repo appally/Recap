@@ -14,9 +14,9 @@ public struct SettingsView: View {
 
     /// 从子页返回时自增，迫使首页重读 UserDefaults / 账户状态。
     @State private var refreshToken = 0
-    @State private var showDebug = false
     @State private var showAccount = false
     @State private var showMembership = false
+    @State private var showAbout = false
     @State private var profileStatus = ""
 
     public init() {}
@@ -49,9 +49,6 @@ public struct SettingsView: View {
 
                     VStack(alignment: .leading, spacing: Spacing.md) {
                         plaudNavigationList
-#if DEBUG
-                        debugSection
-#endif
                     }
                     .padding(.top, Spacing.sm)
                 }
@@ -68,17 +65,32 @@ public struct SettingsView: View {
             .navigationDestination(isPresented: $showMembership) {
                 MembershipSettingsView()
             }
+            .navigationDestination(isPresented: $showAbout) {
+                AboutRecapView()
+            }
             .navigationTitle("设置")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
-                        .fontWeight(.semibold)
-                        .foregroundStyle(Color.recapInk)
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: RecapSymbol.back)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Color.recapInk)
+                    }
+                    .accessibilityLabel("返回")
                 }
-            }
-            .sheet(isPresented: $showDebug) {
-                ScaffoldDebugView()
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showAbout = true
+                    } label: {
+                        Image(systemName: RecapSymbol.settings)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Color.recapInk)
+                    }
+                    .accessibilityLabel("关于与合规")
+                }
             }
             .onAppear {
                 Haptics.prepare()
@@ -120,21 +132,7 @@ public struct SettingsView: View {
 
             SettingsDivider()
 
-            // 3. 账号
-            Button {
-                showAccount = true
-            } label: {
-                SettingsNavRow(
-                    icon: "person",
-                    iconTint: .recapInk,
-                    title: "账号"
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-
-            SettingsDivider()
-
-            // 4. 帮助与支持
+            // 3. 帮助与支持
             Link(destination: RecapLegal.supportURL) {
                 SettingsNavRow(
                     icon: "questionmark.square",
@@ -144,26 +142,6 @@ public struct SettingsView: View {
             }
             .buttonStyle(SettingsPressStyle())
         }
-    }
-
-#if DEBUG
-    private var debugSection: some View {
-        SettingsSection(title: "开发") {
-            Button { showDebug = true } label: {
-                SettingsNavRow(
-                    icon: "ant.fill",
-                    iconTint: .recapCinnabar,
-                    title: "冒烟测试",
-                    showChevron: true
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-        }
-    }
-#endif
-
-    private var shortVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }
 
     // MARK: - 居中英雄头像 + 使用看板

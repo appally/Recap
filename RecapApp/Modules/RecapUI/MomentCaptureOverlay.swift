@@ -18,8 +18,6 @@ struct MomentCaptureOverlay: View {
     @State private var photoPaths: [String] = []
     @State private var thumbnails: [UIImage] = []
     @State private var accessGranted = false
-    /// 会中当下的想法（可选；麦克风被转写占用，只能键盘 / 快捷短语）。
-    @State private var noteText = ""
     /// 快门闪光：capture 成功瞬间全屏白闪（相机标志反馈）。
     @State private var flashOpacity: Double = 0
     private var hasCamera: Bool { MomentCaptureService.isCameraAvailable }
@@ -35,7 +33,6 @@ struct MomentCaptureOverlay: View {
                 } else {
                     unavailableStage
                 }
-                ideaField
                 Spacer(minLength: Spacing.xxl)
                 controlDeck
             }
@@ -68,32 +65,41 @@ struct MomentCaptureOverlay: View {
     @MainActor
     private func shoot() async {
         Haptics.impact(.light)
-        guard let data = await camera.capture(), let image = UIImage(data: data) else { return }
+        guard let data = await camera.capture() else { return }
         // 拍到才闪：快门白闪是「已记录」的标志反馈，先瞬时拉满再 ease-out 淡出。
         flashOpacity = 0.85
         withAnimation(.easeOut(duration: 0.2)) { flashOpacity = 0 }
-        do {
-            // 单张 JPEG 编码同步落盘（毫秒级，可接受）；V2 批量拍可挪到 detached。
-            let rel = try MeetingMediaStore.save(
-                image, meetingId: meeting.id, momentId: momentId, index: photoPaths.count)
-            withAnimation(.recapSoft) {
-                photoPaths.append(rel)
-                thumbnails.append(image)
-            }
-        } catch {
+
+        // 重活离线：直接落 fileDataRepresentation 字节（跳过 UIImage 解码 + JPEG 重编码）+
+        // ImageIO 下采样出缩略图。主线程只等相对路径与缩略图数据回来，零编码开销。
+        let meetingId = meeting.id
+        let momentId = self.momentId
+        let index = photoPaths.count
+        let outcome: (String, Data?)? = await Task.detached(priority: .utility) {
+            guard let rel = try? MeetingMediaStore.saveData(
+                data, meetingId: meetingId, momentId: momentId, index: index) else { return nil }
+            return (rel, MeetingMediaStore.makeThumbnailData(from: data))
+        }.value
+        guard let (rel, thumbData) = outcome else {
             // 静默失败（不阻断后续拍摄，对齐 LocationCaptureService 风格）
+            return
+        }
+        // 缩略图退化：ImageIO 极少失败，失败时回退到解码原图（仅多一次主线程解码）。
+        let thumb = thumbData.flatMap(UIImage.init(data:)) ?? UIImage(data: data)
+        withAnimation(.recapSoft) {
+            photoPaths.append(rel)
+            if let thumb { thumbnails.append(thumb) }
         }
     }
 
     /// 关闭：拍了至少一张就落库为 Moment 并钉到锚点；一张没拍则什么都不产生。
     private func finish() {
         camera.stop()
-        let note = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !photoPaths.isEmpty {
             let moment = Moment(
                 startSeconds: Double(anchorElapsed),
-                kind: note.isEmpty ? .photo : .photoAndText,
-                noteText: note.isEmpty ? nil : note,
+                kind: .photo,
+                noteText: nil,
                 photoRelativePaths: photoPaths,
                 meeting: meeting
             )
@@ -104,54 +110,6 @@ struct MomentCaptureOverlay: View {
             Haptics.notify(.success)
         }
         onComplete()
-    }
-
-    /// 想法输入 + 快捷短语（会议中麦克风被转写占用，只能键盘 / 标签）。
-    private var ideaField: some View {
-        VStack(spacing: Spacing.sm) {
-            TextField("写下此刻的想法（可选）", text: $noteText, axis: .vertical)
-                .font(.system(size: 16))
-                .foregroundStyle(.white)
-                .tint(Color.recapCeladon)
-                .multilineTextAlignment(.leading)
-                .lineLimit(1...3)
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, Spacing.sm)
-                .background(Color.white.opacity(0.08),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .submitLabel(.done)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.sm) {
-                    ForEach(quickTags, id: \.self) { tag in
-                        Button {
-                            appendTag(tag)
-                        } label: {
-                            Text("#\(tag)")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.recapCeladon)
-                                .padding(.horizontal, Spacing.md)
-                                .padding(.vertical, 6)
-                                .background(Color.recapCeladon.opacity(0.14), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-        .padding(.top, Spacing.md)
-    }
-
-    private let quickTags = ["待跟进", "存疑", "关键结论", "待转发"]
-
-    private func appendTag(_ tag: String) {
-        Haptics.impact(.soft)
-        let token = "#\(tag)"
-        if noteText.isEmpty {
-            noteText = token
-        } else if !noteText.contains(token) {
-            noteText += " \(token)"
-        }
     }
 
     // MARK: - 组成
@@ -180,8 +138,7 @@ struct MomentCaptureOverlay: View {
     private var previewStage: some View {
         ZStack(alignment: .bottomLeading) {
             CameraPreviewView(previewLayer: camera.previewLayer)
-                .frame(maxWidth: .infinity)
-                .frame(height: 440)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
 
             if !thumbnails.isEmpty {
@@ -204,8 +161,7 @@ struct MomentCaptureOverlay: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 440)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var thumbnailStack: some View {

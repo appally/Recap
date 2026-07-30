@@ -109,4 +109,37 @@ final class TemplateRecommenderTests: XCTestCase {
         )
         XCTAssertTrue(recs.contains { $0.id == "brief-reconcile" })
     }
+
+    func testBoostsProjectStatusOnTitleSignal() throws {
+        let recs = TemplateRecommender.recommend(
+            title: "App 重构项目进展汇报",
+            durationSeconds: 3600,
+            speakerCount: 4,
+            hasMoments: false,
+            catalog: try catalog()
+        )
+        XCTAssertTrue(recs.contains { $0.id == "project-status" })
+    }
+
+    func testBoostsFeedbackOnTitleSignal() throws {
+        let recs = TemplateRecommender.recommend(
+            title: "用户访谈：新手引导反馈",
+            durationSeconds: 3600,
+            speakerCount: 2,
+            hasMoments: false,
+            catalog: try catalog()
+        )
+        XCTAssertTrue(recs.contains { $0.id == "feedback-synthesis" })
+    }
+
+    func testBoostsCornellOnTitleSignal() throws {
+        let recs = TemplateRecommender.recommend(
+            title: "SwiftUI 进阶（康奈尔笔记法）",
+            durationSeconds: 5400,
+            speakerCount: 1,
+            hasMoments: false,
+            catalog: try catalog()
+        )
+        XCTAssertTrue(recs.contains { $0.id == "cornell-notes" })
+    }
 }

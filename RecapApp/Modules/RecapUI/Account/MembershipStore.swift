@@ -10,6 +10,7 @@ public final class MembershipStore {
 
     public private(set) var products: [Product] = []
     public private(set) var isPro = false
+    public private(set) var byokUnlocked = false
     public private(set) var activeProductID: String?
     public private(set) var renewalDate: Date?
     public private(set) var isLoading = false
@@ -83,22 +84,30 @@ public final class MembershipStore {
 
     public func refreshEntitlements(preferCloudOnPro: Bool = false) async {
         var pro = false
+        var byok = false
         var productID: String?
         var renewal: Date?
+        var appleTxnID: String?
 
         for await result in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(result) else { continue }
-            guard MembershipProducts.isProProduct(transaction.productID) else { continue }
             if transaction.revocationDate != nil { continue }
-            pro = true
-            productID = transaction.productID
-            renewal = transaction.expirationDate
+            if MembershipProducts.isProProduct(transaction.productID) {
+                pro = true
+                productID = transaction.productID
+                renewal = transaction.expirationDate
+                appleTxnID = String(transaction.id)
+            } else if MembershipProducts.isByokUnlockProduct(transaction.productID) {
+                byok = true
+            }
         }
 
         isPro = pro
+        byokUnlocked = byok
         activeProductID = productID
         renewalDate = renewal
         RecapAccountStore.setTier(pro ? .pro : .free)
+        RecapAccountStore.appleTransactionID = appleTxnID
 
         if pro, preferCloudOnPro {
             AIServiceMode.current = .recapCloud
@@ -111,6 +120,7 @@ public final class MembershipStore {
 
     public var monthlyProduct: Product? { product(for: MembershipProducts.proMonthlyID) }
     public var yearlyProduct: Product? { product(for: MembershipProducts.proYearlyID) }
+    public var byokUnlockProduct: Product? { product(for: MembershipProducts.byokUnlockID) }
 
     // MARK: - Private
 
@@ -135,6 +145,7 @@ public final class MembershipStore {
         switch id {
         case MembershipProducts.proMonthlyID: return 0
         case MembershipProducts.proYearlyID: return 1
+        case MembershipProducts.byokUnlockID: return 2
         default: return 99
         }
     }

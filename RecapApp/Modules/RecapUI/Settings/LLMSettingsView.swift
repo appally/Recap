@@ -24,8 +24,12 @@ struct LLMSettingsView: View {
                 modePicker
                 if mode == .recapCloud {
                     cloudPanel
-                } else {
+                } else if mode == .freeTrial {
+                    freeTrialPanel
+                } else if membership.byokUnlocked {
                     byokPanel
+                } else {
+                    byokLockedCTA
                 }
                 webSearchPanel
             }
@@ -54,8 +58,14 @@ struct LLMSettingsView: View {
                 selection: $mode
             )
             .onChange(of: mode) { _, newValue in
-                AIServiceMode.current = newValue
-                status = "已切换到\(newValue.title)"
+                if newValue == .byok && !membership.byokUnlocked {
+                    // 未解锁:仅展示解锁 CTA,引擎保持免费档以免纪要断流。
+                    AIServiceMode.current = .freeTrial
+                    status = "自备密钥需先解锁"
+                } else {
+                    AIServiceMode.current = newValue
+                    status = "已切换到\(newValue.title)"
+                }
             }
 
             Text(mode.subtitle)
@@ -124,6 +134,97 @@ struct LLMSettingsView: View {
             )
         }
         .padding(.top, Spacing.xs)
+    }
+
+    // MARK: - Free trial
+
+    private var freeTrialPanel: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            HStack(spacing: Spacing.md) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(Color.recapInk)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Recap 免费")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                    Text("端侧转写 + 平台 Flash 纪要，每月少量额度")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.recapTea)
+                }
+            }
+
+            HStack {
+                Text("本月剩余")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Color.recapTea)
+                Spacer()
+                SettingsStatusPill(
+                    text: "\(FreeTrialQuota.remainingThisMonth) / \(FreeTrialQuota.monthlyLimit) 次",
+                    kind: .info
+                )
+            }
+
+            Text(RecapAccountStore.current.isSignedIn
+                 ? "已登录，每月自动续杯。升级 Pro 享云端高保真 + 强模型。"
+                 : "登录 Apple 账号后额度升级、按月续杯。")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.recapTea.opacity(0.85))
+                .lineSpacing(3)
+
+            SettingsDivider()
+
+            NavigationLink {
+                MembershipSettingsView()
+            } label: {
+                SettingsNavRow(
+                    icon: "creditcard",
+                    iconTint: .recapInk,
+                    title: "升级 Pro 或解锁自备密钥",
+                    value: account.tier.title
+                )
+            }
+            .buttonStyle(SettingsPressStyle())
+        }
+        .padding(.vertical, Spacing.xs)
+    }
+
+    // MARK: - BYOK locked
+
+    private var byokLockedCTA: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            HStack(spacing: Spacing.md) {
+                Image(systemName: "key.fill")
+                    .font(.system(size: 20, weight: .regular))
+                    .foregroundStyle(Color.recapInk)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("自备密钥（未解锁）")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                    Text("一次性解锁后，用你自己的厂商 Key，费用自理、不限量")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.recapTea)
+                }
+            }
+
+            Button {
+                if let p = membership.byokUnlockProduct { Task { await membership.purchase(p) } }
+            } label: {
+                Text(membership.byokUnlockProduct.map { "解锁自备密钥 · \($0.displayPrice)" } ?? "解锁自备密钥")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color.recapInk, in: Capsule())
+            }
+            .buttonStyle(SettingsPressStyle())
+            .disabled(membership.byokUnlockProduct == nil)
+
+            Text("解锁后在此填入厂商 API Key 即可使用。")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.recapTea.opacity(0.85))
+        }
+        .padding(.vertical, Spacing.xs)
     }
 
     // MARK: - BYOK

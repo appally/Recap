@@ -36,17 +36,11 @@ public actor RecapWorkspaceIndex: AgentWorkspaceQuerying {
             if let since, meeting.startedAt < since { continue }
             scanned += 1
 
-            let summary = highestVersionSummary(from: meeting)
-            let fields = MeetingCardRanker.Fields(
-                title: meeting.title,
-                tldr: summary?.tldr,
-                decisions: summary?.decisions ?? [],
-                openQuestions: summary?.openQuestions ?? [],
-                actionTasks: meeting.actionItems.map(\.task)
-            )
+            let fields = rankerFields(from: meeting)
             guard let hit = MeetingCardRanker.score(fields: fields, tokens: tokens) else {
                 continue
             }
+            let summary = highestVersionSummary(from: meeting)
             var reason = hit.matchReason
             if scanned >= Self.scanCap {
                 reason += "（仅扫描最近 \(Self.scanCap) 场）"
@@ -139,6 +133,148 @@ public actor RecapWorkspaceIndex: AgentWorkspaceQuerying {
             if out.count >= capped { break }
         }
         return Array(out.prefix(capped))
+    }
+
+    // MARK: - UI search
+
+    /// 跨会议搜索（面向 UI；独立于 Agent `searchMeetings` 的 limit≤8 契约）。
+    ///
+    /// 召回策略：ranker 快字段（标题/纪要/待办/笔记）命中的会议 → 收集该场纪要/转写/待办的命中明细。
+    /// 纯转写命中（其它字段都不命中）的会议默认不召回——见设计方案「跨会议转写召回权衡」，
+    /// 待会议量级与解 segments 实测耗时确认后再决定是否放开全量转写召回。
+    public func searchForUI(query: String, limit: Int = 50) async -> [MeetingSearchResult] {
+        let tokens = AgentQueryTokens.tokenize(query)
+        guard !tokens.isEmpty else { return [] }
+
+        var descriptor = FetchDescriptor<Meeting>(
+            sortBy: [SortDescriptor(\.startedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = Self.scanCap
+        let meetings = (try? modelContext.fetch(descriptor)) ?? []
+
+        var results: [MeetingSearchResult] = []
+        for meeting in meetings {
+            let fields = rankerFields(from: meeting)
+            guard MeetingCardRanker.score(fields: fields, tokens: tokens) != nil else { continue }
+            let hits = collectHits(query: query, tokens: tokens, from: meeting)
+            guard !hits.isEmpty else { continue }
+            let countByKind = Dictionary(grouping: hits, by: \.kind).mapValues(\.count)
+            results.append(MeetingSearchResult(
+                meetingId: meeting.id,
+                title: meeting.title,
+                startedAt: meeting.startedAt,
+                durationSeconds: meeting.durationSeconds,
+                speakerNames: meeting.speakers.map(\.name),
+                hits: hits.sorted { $0.score > $1.score },
+                countByKind: countByKind
+            ))
+        }
+        return Array(
+            results
+                .sorted { ($0.hits.first?.score ?? 0) > ($1.hits.first?.score ?? 0) }
+                .prefix(limit)
+        )
+    }
+
+    /// `Meeting` → ranker 可搜字段（标题/纪要摘要/笔记/决策/遗留/待办）。
+    /// `searchMeetings` 与 `searchForUI` 共用，确保 Agent 与 UI 命中口径一致。
+    private func rankerFields(from meeting: Meeting) -> MeetingCardRanker.Fields {
+        let summary = highestVersionSummary(from: meeting)
+        let notes = meeting.outputs
+            .filter { $0.kind == .note }
+            .compactMap { $0.notePayload }
+            .flatMap { [$0.title, $0.body] }
+        let actionTasks = meeting.actionItems.flatMap { item -> [String] in
+            if let quote = item.evidenceQuote, !quote.isEmpty {
+                return [item.task, quote]
+            }
+            return [item.task]
+        }
+        return MeetingCardRanker.Fields(
+            title: meeting.title,
+            tldr: summary?.tldr,
+            decisions: summary?.decisions ?? [],
+            openQuestions: summary?.openQuestions ?? [],
+            actionTasks: actionTasks,
+            notes: notes
+        )
+    }
+
+    /// 收集一场会议的各类型命中明细（标题/纪要/转写/待办）。仅在 ranker 命中场调用。
+    private func collectHits(
+        query: String,
+        tokens: [String],
+        from meeting: Meeting
+    ) -> [SearchHit] {
+        var hits: [SearchHit] = []
+
+        // 标题
+        if containsAny(meeting.title, tokens) {
+            hits.append(SearchHit(kind: .title, snippet: SearchSnippet.truncated(meeting.title), score: 5))
+        }
+
+        // 纪要（tldr / decisions / openQuestions）
+        if let summary = highestVersionSummary(from: meeting) {
+            if containsAny(summary.tldr, tokens) {
+                hits.append(SearchHit(kind: .summary, snippet: SearchSnippet.truncated(summary.tldr), score: 3))
+            }
+            for d in summary.decisions where containsAny(d, tokens) {
+                hits.append(SearchHit(kind: .summary, snippet: "决策：\(SearchSnippet.truncated(d))", score: 2))
+            }
+            for q in summary.openQuestions where containsAny(q, tokens) {
+                hits.append(SearchHit(kind: .summary, snippet: "遗留：\(SearchSnippet.truncated(q))", score: 2))
+            }
+        }
+
+        // 待办（task + evidenceQuote）
+        for item in meeting.actionItems {
+            let taskHit = containsAny(item.task, tokens)
+            let quote = item.evidenceQuote.flatMap { q -> String? in containsAny(q, tokens) ? q : nil }
+            if taskHit || quote != nil {
+                let snippet = quote ?? item.task
+                hits.append(SearchHit(
+                    kind: .actionItem,
+                    snippet: SearchSnippet.truncated(snippet),
+                    timeAnchor: item.startSeconds,
+                    speakerName: item.owner,
+                    score: 1
+                ))
+            }
+        }
+
+        // 笔记（NotePayload title + body；修 Phase 1 召回遗漏--原 collectHits 漏收 notes）
+        for output in meeting.outputs where output.kind == .note {
+            guard let payload = output.notePayload else { continue }
+            let combined = payload.title + "\n" + payload.body
+            guard containsAny(combined, tokens) else { continue }
+            let snippet = containsAny(payload.title, tokens) ? payload.title : payload.body
+            hits.append(SearchHit(
+                kind: .note,
+                snippet: SearchSnippet.truncated(snippet),
+                noteTarget: .note(output.id),
+                score: 3
+            ))
+        }
+
+        // 转写（润色稿优先，未润色回退原稿）
+        let segments = meeting.polishedSegments.isEmpty ? meeting.segments : meeting.polishedSegments
+        let speakers = meeting.speakers
+        for th in SearchTranscriptTool.search(query: query, segments: segments, speakers: speakers, limit: 5) {
+            hits.append(SearchHit(
+                kind: .transcript,
+                snippet: SearchSnippet.truncated(th.text),
+                timeAnchor: th.startSeconds,
+                speakerName: th.speakerName,
+                score: 1
+            ))
+        }
+
+        return hits
+    }
+
+    private func containsAny(_ text: String, _ tokens: [String]) -> Bool {
+        guard !text.isEmpty else { return false }
+        return tokens.contains { text.localizedCaseInsensitiveContains($0) }
     }
 
     // MARK: - AppIntents 投影

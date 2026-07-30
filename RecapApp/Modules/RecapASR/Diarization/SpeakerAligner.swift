@@ -62,15 +62,20 @@ public enum SpeakerAligner {
     ) -> [Speaker] {
         var order: [Int] = []
         var seen = Set<Int>()
+        var voiceprintByIndex: [Int: String] = [:]
         for piece in timeline.sorted(by: { $0.startSeconds < $1.startSeconds }) {
             if seen.insert(piece.speakerIndex).inserted {
                 order.append(piece.speakerIndex)
+            }
+            if let vp = piece.voiceprintId {
+                voiceprintByIndex[piece.speakerIndex] = vp
             }
         }
         return order.enumerated().map { colorIndex, speakerIndex in
             let id = "\(speakerIdPrefix)\(speakerIndex)"
             let name = existingNames[id] ?? "发言人\(colorIndex + 1)"
-            return Speaker(id: id, name: name, colorIndex: colorIndex)
+            return Speaker(id: id, name: name, colorIndex: colorIndex,
+                           voiceprintId: voiceprintByIndex[speakerIndex])
         }
     }
 

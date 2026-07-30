@@ -35,7 +35,6 @@ public struct AgentInvokeSheet: View {
     @State private var model: AskConversationModel
     @State private var input: String = ""
     @State private var expandedSteps: Set<UUID> = []
-    @State private var showSkills = false
     /// chips：L1 规则层 init 即填；L2 LLM 异步返回（≥3 条）后替换。
     @State private var suggestionChips: [String]
     @State private var didLoadL2 = false
@@ -245,7 +244,7 @@ public struct AgentInvokeSheet: View {
             conversation
             bottomDock
         }
-        .background(Color.recapBg.ignoresSafeArea())
+        .background(Color.recapBg.ignoresSafeArea(.container, edges: .bottom))
         .onAppear {
             model.onMinutesUpdated = onMinutesUpdated
             syncLiveContext()
@@ -259,18 +258,22 @@ public struct AgentInvokeSheet: View {
                 input = ""
                 ask(initialInput)
             } else {
-                // 纯打开：历史会话恢复（loadSession 逐条 decodeCitations）推迟到滑入收尾，
-                // 避免阻塞 spring 首帧；键盘聚焦也延后一拍让位给出现动画。中途关闭则放弃。
+                // 开场时序（性能 + 一体感）：
+                // ① 键盘：等 sheet 滑入停稳（recapSheet ≈ 0.40s）再升——避免 bottomDock 既随滑入位移、
+                //    又因键盘 safe-area 上移造成的双重位移 jank；此时主线程空闲，键盘动画更顺。
                 Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(300))
+                    try? await Task.sleep(for: .milliseconds(420))
+                    guard isPresented else { return }
+                    inputFocused = true
+                }
+                // ② 历史会话恢复（loadSession 逐条 decodeCitations）：再推迟到键盘升起之后，
+                //    绝不与出现动画 / 键盘抢占主线程（原 300ms 与键盘 320ms 重叠是掉帧隐患）。
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(750))
                     guard isPresented else { return }
                     if let meeting {
                         model.attach(meeting: meeting, modelContext: modelContext)
                     }
-                }
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(320))
-                    inputFocused = true
                 }
             }
         }
@@ -290,23 +293,6 @@ public struct AgentInvokeSheet: View {
             if let l2, l2.count >= 3 {
                 withAnimation(.recapSoft) { suggestionChips = l2 }
             }
-        }
-        .sheet(isPresented: $showSkills) {
-            SkillsSheet(
-                isPresented: $showSkills,
-                meetingTitle: meetingTitle,
-                transcriptContext: transcriptContext,
-                segments: segments,
-                speakers: speakers,
-                briefSources: briefSources,
-                meetingId: meeting?.id ?? UUID(),
-                actionItems: actionItems,
-                minutesSummary: minutesSummary ?? meeting?.latestSummary,
-                workspace: RecapWorkspaceIndex(modelContainer: modelContext.container)
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Color.recapBg)
         }
         .sheet(isPresented: Binding(
             get: { model.pendingApproval != nil },
@@ -353,8 +339,6 @@ public struct AgentInvokeSheet: View {
         GlassEffectContainer(spacing: Spacing.sm) {
             HStack(spacing: Spacing.sm) {
                 HStack(spacing: Spacing.sm) {
-                    RecapAIAvatarImage(size: 20)
-                        .clipShape(Circle())
                     Text("问 Recap")
                         .font(.system(size: 17, weight: .semibold, design: .default))
                         .foregroundStyle(Color.recapInk)
@@ -371,36 +355,6 @@ public struct AgentInvokeSheet: View {
                         set: { model.webEnabled = $0 }
                     )) {
                         Label("联网搜索", systemImage: RecapSymbol.web)
-                    }
-                    Button("技能", systemImage: RecapSymbol.skills) {
-                        showSkills = true
-                    }
-                    if (minutesSummary ?? meeting?.latestSummary) != nil, phase == .review {
-                        Button("改纪要", systemImage: RecapSymbol.revise) {
-                            input = "帮我修改纪要："
-                            inputFocused = true
-                        }
-                    }
-                    if !model.messages.isEmpty || model.currentSessionID != nil {
-                        Divider()
-                        Button("新对话", systemImage: RecapSymbol.newChat) {
-                            withAnimation(.recapSoft) { model.reset() }
-                        }
-                    }
-                    if !model.sessionList.isEmpty {
-                        Menu("历史对话") {
-                            ForEach(model.sessionList) { item in
-                                Button {
-                                    withAnimation(.recapSoft) { model.switchToSession(id: item.id) }
-                                } label: {
-                                    if item.id == model.currentSessionID {
-                                        Label(sessionMenuTitle(item), systemImage: "checkmark")
-                                    } else {
-                                        Text(sessionMenuTitle(item))
-                                    }
-                                }
-                            }
-                        }
                     }
                     if model.currentSessionID != nil {
                         Divider()
@@ -449,21 +403,38 @@ public struct AgentInvokeSheet: View {
                     if model.messages.isEmpty {
                         emptyState
                             .padding(.top, Spacing.xl)
+                            .transition(.opacity)
                     } else {
                         ForEach(model.messages) { message in
                             messageRow(message)
                                 .id(message.id)
+                                .transition(.opacity)
                         }
                         if model.isThinking, model.messages.last?.role == .user {
                             thinkingRow
                                 .id("thinking")
+                                .transition(.opacity)
                         }
                     }
                 }
+                .padding(.top, Spacing.md)
+                // 思考行 / 助手气泡的出入场兜底：isThinking 翻转那一拍（助手 append 与思考行移除同帧）
+                // 正是 live 回合的入场时刻；只盯 isThinking 而非 messages.count，避免会话恢复时历史批量闪入。
+                .animation(.recapSoft, value: model.isThinking)
                 .padding(.horizontal, Spacing.xl)
                 .padding(.bottom, Spacing.md)
             }
             .scrollDismissesKeyboard(.interactively)
+            .overlay(alignment: .bottom) {
+                // 底部渐透：对话内容滚到底部时淡入背景色，与输入栏柔和衔接，消除硬切。
+                LinearGradient(
+                    colors: [Color.recapBg.opacity(0), Color.recapBg],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 28)
+                .allowsHitTesting(false)
+            }
             .onChange(of: model.messages) { _, new in
                 guard let last = new.last else { return }
                 if last.isStreaming {
@@ -486,24 +457,37 @@ public struct AgentInvokeSheet: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: Spacing.xl) {
             Text(emptyHeadline)
-                .font(.system(size: 20, weight: .semibold, design: .default))
+                .font(.system(size: 18, weight: .semibold, design: .default))
                 .foregroundStyle(Color.recapInk)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: Spacing.sm) {
-                    ForEach(suggestionChips, id: \.self) { chip in
-                        Button { ask(chip) } label: {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                ForEach(suggestionChips, id: \.self) { chip in
+                    Button { ask(chip) } label: {
+                        HStack(spacing: 8) {
                             Text(chip)
-                                .font(.recapMeta)
-                                .foregroundStyle(Color.recapInk)
-                                .padding(.horizontal, Spacing.md)
-                                .padding(.vertical, Spacing.sm)
-                                .recapGlass(cornerRadius: 20)
+                                .font(.system(size: 14, weight: .medium, design: .default))
+                                .foregroundStyle(Color.recapInk.opacity(0.88))
+                                .multilineTextAlignment(.leading)
+                                .lineLimit(2)
+
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.recapInk.opacity(0.35))
                         }
-                        .buttonStyle(RecapPressStyle())
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .background(
+                            Color(light: 0xF1F3F1, dark: 0x1E2227),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
+                        )
                     }
+                    .buttonStyle(RecapPressStyle())
                 }
             }
         }
@@ -518,18 +502,27 @@ public struct AgentInvokeSheet: View {
                 Spacer(minLength: 56)
                 Text(message.text)
                     .font(.system(size: 15, weight: .regular, design: .default))
+                    .lineSpacing(3.5)
                     .foregroundStyle(Color.recapInk)
-                    .padding(.horizontal, Spacing.md)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .background(
-                        Color.recapCeladon.opacity(0.16),
-                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        Color(light: 0xF0F2F1, dark: 0x22262B),
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
                     )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.recapShadow.opacity(0.6), radius: 4, x: 0, y: 2)
             }
         case .assistant:
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 if message.text.isEmpty, message.isStreaming {
                     TypingDots()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("正在思考")
                 } else {
                     AskMarkdownText(source: message.text, isStreaming: message.isStreaming)
                 }
@@ -554,52 +547,50 @@ public struct AgentInvokeSheet: View {
 
     private func stepsRow(_ message: AskBubble) -> some View {
         let expanded = expandedSteps.contains(message.id)
-        return VStack(alignment: .leading, spacing: 4) {
+        let totalMs = message.steps.compactMap(\.durationMs).reduce(0, +)
+        let timeStr = totalMs > 0
+            ? (totalMs >= 1000 ? String(format: "%.1fs", Double(totalMs) / 1000) : "\(totalMs)ms")
+            : nil
+
+        return VStack(alignment: .leading, spacing: Spacing.xs) {
             Button {
-                if expanded { expandedSteps.remove(message.id) }
-                else { expandedSteps.insert(message.id) }
-            } label: {
-                Text(expanded ? "用了 \(message.steps.count) 步 ▴" : "用了 \(message.steps.count) 步 ▾")
-                    .font(.system(size: 11, weight: .medium, design: .default))
-                    .foregroundStyle(Color.recapCeladon)
-            }
-            .buttonStyle(.plain)
-            if expanded {
-                ForEach(message.steps) { step in
-                    Text(stepDetailLine(step))
-                        .font(.system(size: 11, weight: .regular, design: .default))
-                        .foregroundStyle(Color.recapTea)
+                withAnimation(.recapSoft) {
+                    if expanded { expandedSteps.remove(message.id) }
+                    else { expandedSteps.insert(message.id) }
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.recapInk.opacity(0.65))
+                    Text("思考与工具调用 (\(message.steps.count) 步)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.recapInk.opacity(0.85))
+                    if let timeStr {
+                        Text("· \(timeStr)")
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Color.recapTea)
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.recapTea)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .padding(.horizontal, Spacing.sm + 2)
+                .padding(.vertical, 5)
+                .background(Color.recapInk.opacity(0.04), in: Capsule())
+                .overlay(
+                    Capsule()
+                        .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.5)
+                )
+            }
+            .buttonStyle(RecapPressStyle())
+
+            if expanded {
+                AgentStepTimelineView(steps: message.steps)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-    }
-
-    private func stepDetailLine(_ step: AskStepChip) -> String {
-        var parts = ["· \(step.name)", step.summary]
-        if let ms = step.durationMs, ms > 0 {
-            parts.append(ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "\(ms)ms")
-        }
-        if let state = step.approvalStateRaw {
-            switch state {
-            case "approved": parts.append("已批准")
-            case "rejected": parts.append("已拒绝")
-            case "interrupted": parts.append("已中断")
-            case "pending": parts.append("待确认")
-            default: break
-            }
-        }
-        if let err = step.errorText, !err.isEmpty {
-            parts.append(err)
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    private func sessionMenuTitle(_ item: AskSessionListItem) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.unitsStyle = .short
-        let rel = formatter.localizedString(for: item.updatedAt, relativeTo: Date())
-        return "\(item.title) · \(rel)"
     }
 
     private func citationRow(_ citations: [AskCitation]) -> some View {
@@ -672,15 +663,33 @@ public struct AgentInvokeSheet: View {
     }
 
     private var thinkingRow: some View {
-        HStack(spacing: Spacing.sm) {
-            TypingDots()
+        HStack(spacing: Spacing.md) {
+            GlowingThinkingDots()
             Text(MinutesPipelineSmoke.canRunMinutesPipeline
-                 ? (model.statusLabel ?? "查阅本场转写…")
+                 ? (model.statusLabel ?? "正在深度思考与推理…")
                  : "未配置可用密钥")
-                .font(.system(size: 13, weight: .regular, design: .default))
-                .foregroundStyle(Color.recapTea)
-            Spacer()
+                .font(.system(size: 13, weight: .medium, design: .default))
+                .foregroundStyle(Color.recapInk.opacity(0.9))
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, Spacing.md + 2)
+        .padding(.vertical, Spacing.sm + 2)
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.recapPaper)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.recapAICyan.opacity(0.35), Color.recapAIBlue.opacity(0.2), Color.recapAITeal.opacity(0.35)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .recapCardShadow()
     }
 
     // MARK: - Approval
@@ -723,10 +732,17 @@ public struct AgentInvokeSheet: View {
                             Button { ask(chip) } label: {
                                 Text(chip)
                                     .font(.recapMeta)
-                                    .foregroundStyle(Color.recapInk)
+                                    .foregroundStyle(Color.recapInk.opacity(0.85))
                                     .padding(.horizontal, Spacing.md)
                                     .padding(.vertical, Spacing.sm)
-                                    .recapGlass(cornerRadius: 20)
+                                    .background(
+                                        Color.recapInk.opacity(0.05),
+                                        in: Capsule()
+                                    )
+                                    .overlay(
+                                        Capsule()
+                                            .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
+                                    )
                             }
                             .buttonStyle(RecapPressStyle())
                             .disabled(model.isThinking)
@@ -771,6 +787,7 @@ public struct AgentInvokeSheet: View {
                 .animation(.easeOut(duration: 0.12), value: canSend)
                 .accessibilityLabel("发送")
             }
+            .animation(.recapSoft, value: inputFieldHeight)
             .padding(.leading, Spacing.lg)
             .padding(.trailing, Spacing.sm)
             .padding(.vertical, Spacing.sm)
@@ -791,6 +808,9 @@ public struct AgentInvokeSheet: View {
     }
 
     private func ask(_ q: String) {
+        // 发送后收键盘：AI 对话重「阅读回答」，键盘升起会压缩回答区。把空间让给回答，
+        // 输入栏仍贴底可见，用户想追问一点即重新聚焦。区别于即时聊天的「连续输入」惯例。
+        inputFocused = false
         withAnimation(.recapSoft) {
             model.send(q)
         }
@@ -802,19 +822,198 @@ public struct AgentInvokeSheet: View {
 private struct TypingDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// 一轮涟漪周期（秒）：三点错峰 120° 连续呼吸，替代旧的「i==phase」3 怔离散跳变。
+    private static let cycle: Double = 1.0
+    /// 不透明度区间：base ↔ base + amplitude（0.32 ↔ 1.0）。
+    private static let base: Double = 0.32
+    private static let amplitude: Double = 0.68
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.32, paused: reduceMotion)) { context in
-            let phase = reduceMotion
-                ? 1
-                : Int(context.date.timeIntervalSinceReferenceDate / 0.32) % 3
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
             HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { i in
                     Circle()
                         .fill(Color.recapCeladon)
                         .frame(width: 5, height: 5)
-                        .opacity(reduceMotion ? 0.55 : (phase == i ? 1 : 0.28))
+                        .opacity(reduceMotion ? 0.5 : Self.waveOpacity(t: t, index: i))
                 }
             }
         }
+    }
+
+    /// 连续正弦错峰：第 i 点相位偏移 120°，输出 base…base+amplitude 的平滑呼吸。
+    private static func waveOpacity(t: Double, index: Int) -> Double {
+        let phaseOffset = Double(index) * (2.0 * .pi / 3.0)
+        let wave = sin((t / cycle) * 2.0 * .pi + phaseOffset)        // -1…1
+        return base + amplitude * (0.5 + 0.5 * wave)                 // 0.32…1.0
+    }
+}
+
+// MARK: - 极光思考状态指示器
+
+private struct GlowingThinkingDots: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let cycle: Double = 1.0
+    private static let base: Double = 0.35
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 5) {
+                ForEach(0..<3, id: \.self) { i in
+                    let op = reduceMotion ? 0.6 : Self.waveOpacity(t: t, index: i)
+                    let scale = reduceMotion ? 1.0 : Self.waveScale(t: t, index: i)
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.recapAICyan, Color.recapAITeal],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(scale)
+                        .opacity(op)
+                        .shadow(color: Color.recapAICyan.opacity(op * 0.6), radius: 3, x: 0, y: 0)
+                }
+            }
+        }
+    }
+
+    private static func waveOpacity(t: Double, index: Int) -> Double {
+        let phaseOffset = Double(index) * (2.0 * .pi / 3.0)
+        let wave = sin((t / cycle) * 2.0 * .pi + phaseOffset)
+        return base + 0.65 * (0.5 + 0.5 * wave)
+    }
+
+    private static func waveScale(t: Double, index: Int) -> Double {
+        let phaseOffset = Double(index) * (2.0 * .pi / 3.0)
+        let wave = sin((t / cycle) * 2.0 * .pi + phaseOffset)
+        return 0.85 + 0.3 * (0.5 + 0.5 * wave)
+    }
+}
+
+// MARK: - Agent 推理时间线 View
+
+private struct AgentStepTimelineView: View {
+    let steps: [AskStepChip]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                let isLast = index == steps.count - 1
+                HStack(alignment: .top, spacing: 10) {
+                    // 左侧轨带与 Node Icon
+                    VStack(spacing: 0) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.recapPaper)
+                                .frame(width: 22, height: 22)
+                                .shadow(color: Color.recapShadow, radius: 2, x: 0, y: 1)
+                                .overlay(
+                                    Circle()
+                                        .stroke(Color.recapInk.opacity(0.12), lineWidth: 0.5)
+                                )
+                            Image(systemName: iconForStep(name: step.name, summary: step.summary))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.recapInk.opacity(0.7))
+                        }
+
+                        if !isLast {
+                            Rectangle()
+                                .fill(Color.recapInk.opacity(0.12))
+                                .frame(width: 1.5)
+                                .frame(maxHeight: .infinity)
+                                .padding(.vertical, 2)
+                        }
+                    }
+                    .frame(width: 22)
+
+                    // 右侧内容
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .center, spacing: 6) {
+                            Text(step.name)
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(Color.recapInk)
+
+                            Spacer(minLength: 0)
+
+                            if let ms = step.durationMs, ms > 0 {
+                                Text(ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "\(ms)ms")
+                                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                                    .foregroundStyle(Color.recapTea)
+                            }
+
+                            if let state = step.approvalStateRaw {
+                                approvalBadge(state)
+                            }
+                        }
+
+                        if !step.summary.isEmpty {
+                            Text(step.summary)
+                                .font(.system(size: 11, weight: .regular))
+                                .foregroundStyle(Color.recapTea)
+                                .lineLimit(3)
+                        }
+
+                        if let err = step.errorText, !err.isEmpty {
+                            Text(err)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.recapCinnabar)
+                        }
+                    }
+                    .padding(.bottom, isLast ? 0 : Spacing.sm + 2)
+                }
+            }
+        }
+        .padding(Spacing.md)
+        .background(
+            Color.recapInk.opacity(0.03),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
+        )
+        .padding(.top, 2)
+    }
+
+    private func iconForStep(name: String, summary: String) -> String {
+        let combined = (name + " " + summary).lowercased()
+        if combined.contains("search") || combined.contains("web") || combined.contains("搜索") || combined.contains("联网") {
+            return "globe"
+        } else if combined.contains("transcript") || combined.contains("转写") || combined.contains("语段") {
+            return "text.magnifyingglass"
+        } else if combined.contains("minutes") || combined.contains("纪要") || combined.contains("revise") || combined.contains("修改") {
+            return "square.and.pencil"
+        } else if combined.contains("reminder") || combined.contains("待办") || combined.contains("提醒") {
+            return "bell.badge"
+        } else if combined.contains("brief") || combined.contains("底稿") {
+            return "doc.text"
+        } else {
+            return "cpu"
+        }
+    }
+
+    @ViewBuilder
+    private func approvalBadge(_ state: String) -> some View {
+        let (label, bg, fg): (String, Color, Color) = {
+            switch state {
+            case "approved": return ("已批准", Color.recapAITeal.opacity(0.15), Color.recapAITeal)
+            case "rejected": return ("已拒绝", Color.recapCinnabar.opacity(0.15), Color.recapCinnabar)
+            case "interrupted": return ("已中断", Color.recapTea.opacity(0.15), Color.recapTea)
+            case "pending": return ("待确认", Color.recapOchre.opacity(0.15), Color.recapOchre)
+            default: return (state, Color.recapTea.opacity(0.15), Color.recapTea)
+            }
+        }()
+
+        Text(label)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(fg)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(bg, in: Capsule())
     }
 }

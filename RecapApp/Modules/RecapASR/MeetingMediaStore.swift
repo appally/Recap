@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import ImageIO
 
 /// 会议照片本地路径约定与编解码
 /// （Application Support / Meetings / <meetingId> / photos / <momentId> / <index>.jpg）。
@@ -59,8 +60,38 @@ public enum MeetingMediaStore {
         return relative
     }
 
+    /// 直接把照片字节（`photo.fileDataRepresentation()` 返回的 JPEG/HEIF）落盘，返回相对路径。
+    /// 跳过 `UIImage` 解码 + 重编码 —— 拍照链路上主线程不再有 JPEG 编码开销。
+    public static func saveData(_ data: Data,
+                                meetingId: UUID,
+                                momentId: UUID,
+                                index: Int) throws -> String {
+        let relative = relativePhotoPath(meetingId: meetingId, momentId: momentId, index: index)
+        let url = try resolveImageURL(storedPath: relative)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+        return relative
+    }
+
     public static func loadUIImage(storedPath: String) -> UIImage? {
         guard let url = try? resolveImageURL(storedPath: storedPath) else { return nil }
         return UIImage(contentsOfFile: url.path)
+    }
+
+    /// 用 ImageIO 下采样生成缩略图 JPEG 数据：不生成全分辨率位图，省内存、CPU 远低于全图编码。
+    /// 供取景 overlay 的连拍缩略图用（避免常驻千万像素原图）。失败返回 nil。
+    public static func makeThumbnailData(from data: Data, maxDimension: Int = 200) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.8)
     }
 }

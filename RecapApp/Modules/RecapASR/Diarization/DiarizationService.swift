@@ -21,6 +21,12 @@ public protocol MeetingDiarizer: Sendable {
 
 /// 会后说话人分离编排：读盘 → 分离引擎 → 对齐转写段 → 产出 speakers。
 public enum DiarizationService {
+
+    /// flag 门控选引擎：开启 FluidAudio 分离（路径 C·POC）则用 FluidDiarizer，否则回退 SpeakerKit。
+    public static var activeDiarizer: any MeetingDiarizer {
+        ASRFeatureFlags.fluidDiarizerEnabled ? FluidDiarizer.shared : SpeakerKitDiarizer.shared
+    }
+
     public struct Outcome: Sendable {
         public let segments: [TranscriptSegment]
         public let speakers: [Speaker]
@@ -43,7 +49,7 @@ public enum DiarizationService {
         segments: [TranscriptSegment],
         numberOfSpeakers: Int? = nil,
         preserveSpeakerNames: [Speaker] = [],
-        diarizer: any MeetingDiarizer = SpeakerKitDiarizer.shared,
+        diarizer: any MeetingDiarizer = DiarizationService.activeDiarizer,
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> Outcome {
         guard MeetingAudioStore.fileExists(storedPath: audioPath) else {

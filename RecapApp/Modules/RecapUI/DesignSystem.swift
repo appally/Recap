@@ -89,18 +89,20 @@ public extension Font {
         .leading(.tight)
     static let recapLargeTitle = Font.system(size: 28, weight: .bold, design: .default)
         .leading(.tight)
-    static let recapH1 = Font.system(size: 22, weight: .semibold, design: .default)
+    /// 正文小节标题：18pt 粗体，排版清晰紧凑。
+    static let recapH1 = Font.system(size: 18, weight: .bold, design: .default)
         .leading(.tight)
 
-    /// 润色行（有别于原话时）：略加重，作主读。
-    static let recapPolished = Font.system(size: 17, weight: .semibold, design: .default)
-    /// LIVE / 单行字幕：中等字重，长读不糊成标题。
-    static let recapTranscript = Font.system(size: 17, weight: .medium, design: .default)
-    static let recapTldr = Font.system(size: 18, weight: .semibold, design: .default)
+    /// 润色行（有别于原话时）：16pt semibold，适中加重。
+    static let recapPolished = Font.system(size: 16, weight: .semibold, design: .default)
+    /// LIVE / 单行字幕：16pt medium，适合长文顺畅阅读。
+    static let recapTranscript = Font.system(size: 16, weight: .medium, design: .default)
+    /// 核心摘要：16.5pt medium，优雅专业。
+    static let recapTldr = Font.system(size: 16.5, weight: .medium, design: .default)
     static let recapRaw = Font.system(size: 15, weight: .regular, design: .default)
 
-    static let recapTask = Font.system(size: 16, weight: .regular, design: .default)
-    static let recapTaskLow = Font.system(size: 16, weight: .regular, design: .default)
+    static let recapTask = Font.system(size: 15, weight: .medium, design: .default)
+    static let recapTaskLow = Font.system(size: 15, weight: .regular, design: .default)
 
     static let recapSection = Font.system(size: 12, weight: .semibold, design: .default)
     static let recapMeta = Font.system(size: 13, weight: .regular, design: .default)

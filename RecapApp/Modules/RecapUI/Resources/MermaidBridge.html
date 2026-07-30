@@ -7,9 +7,24 @@
        安全：securityLevel=strict（转义 HTML、禁交互绑定）；不加载任何外网。 -->
   <style>
     html, body { margin: 0; padding: 0; background: transparent; }
-    /* inline-block 让 #d 收缩到内容尺寸，ResizeObserver 才能读到真实图高 */
-    #d { display: inline-block; max-width: 100%; }
-    #d svg { max-width: 100%; height: auto; display: block; }
+
+    /* 内联（默认）：#d 取满宽，SVG 铺满可用宽度、height 随 viewBox 等比缩放；
+       !important 覆盖 mermaid useMaxWidth 注入的内联 max-width=<自然宽>px，
+       否则窄图（如 TD 流程图）停在自然尺寸显小。高度由 ResizeObserver 回传。 */
+    #d { width: 100%; }
+    #d svg { width: 100%; max-width: 100% !important; height: auto; display: block; }
+
+    /* 全屏（body.fullscreen）：contain——长边贴边、完整居中可见，pinch 放大看细节。
+       不沿用内联的满宽放大：窄高图会高度爆炸超屏、看不全，且 scrollView 不能缩小、
+       pinch 想缩小会被 minimumZoomScale 弹回（“自动恢复”）。 */
+    body.fullscreen #d {
+      width: 100%; height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+    }
+    body.fullscreen #d svg {
+      width: auto; height: auto;
+      max-width: 100% !important; max-height: 100% !important;
+    }
   </style>
   <script src="mermaid.min.js"></script>
 </head>
@@ -27,10 +42,13 @@
       });
       ro.observe(document.getElementById('d'));
 
-      /// Swift 调用：renderMermaid(<json编码的source>, 'default'|'dark')。
+      /// Swift 调用：renderMermaid(<json编码的source>, 'default'|'dark', 'inline'|'fullscreen')。
+      /// mode 决定 CSS 分流：内联满宽铺满 / 全屏 contain 完整居中。
       /// 失败时不清空 #d —— 保留上一帧成功渲染（流式半截图静默消化），仅回传 error。
-      window.renderMermaid = function (src, theme) {
+      window.renderMermaid = function (src, theme, mode) {
         theme = theme || 'default';
+        mode = mode || 'inline';
+        document.body.classList.toggle('fullscreen', mode === 'fullscreen');
         try {
           // 仅 theme 变化时 re-initialize，避免重复 initialize 警告。
           if (theme !== lastTheme) {

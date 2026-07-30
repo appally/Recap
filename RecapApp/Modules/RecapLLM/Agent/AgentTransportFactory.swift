@@ -31,10 +31,25 @@ public enum AgentTransportFactory {
     public static func makeCurrent(role: AgentModelRole) throws -> any AgentTransport {
         switch AIServiceMode.current {
         case .recapCloud:
-            if RecapAccountStore.current.tier != .pro {
-                throw FactoryError.requiresMembership
-            }
-            throw FactoryError.cloudGatewayUnavailable
+            // Pro 托管:Recap 网关签发的阿里临时 token + qwen 兼容端点。
+            // 模型名由调用方写入 options(与 BYOK 路径一致);此处只供传输层。
+            guard RecapAccountStore.current.tier == .pro else { throw FactoryError.requiresMembership }
+            let cred = try RecapCredentialProvider.shared.current()
+            return OpenAIToolTransport(
+                id: "recap-cloud",
+                apiKey: cred.token,
+                baseURL: cred.llmBase,
+                toolsSupported: true
+            )
+        case .freeTrial:
+            // 免费档:网关签发的阿里 token(Flash);模型名由 modelName() 返 cloudFlashModel。
+            let cred = try RecapCredentialProvider.shared.current()
+            return OpenAIToolTransport(
+                id: "recap-free",
+                apiKey: cred.token,
+                baseURL: cred.llmBase,
+                toolsSupported: true
+            )
         case .byok:
             return try makeSelectedBYOK(role: role)
         }
@@ -67,6 +82,7 @@ public enum AgentTransportFactory {
 
     /// 按模板与角色解析模型名（不硬编码 DeepSeek）。
     public static func modelName(for template: LLMProviderTemplate, role: AgentModelRole) -> String {
+        if AIServiceMode.current == .freeTrial { return LLMPresets.cloudFlashModel }
         if template == .deepseek {
             switch role {
             case .quick: return LLMPresets.deepSeekFlash

@@ -6,7 +6,6 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
     case auto
     case speechAnalyzer
     case funASR
-    case volcSeedASR
 
     public var id: String { rawValue }
 
@@ -15,7 +14,6 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         case .auto: return "自动"
         case .speechAnalyzer: return "端侧 SpeechAnalyzer"
         case .funASR: return "阿里 Fun-ASR"
-        case .volcSeedASR: return "火山 Seed-ASR"
         }
     }
 
@@ -23,8 +21,7 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .auto: return "端侧优先，不可用时回落云端"
         case .speechAnalyzer: return "免费 · 隐私 · 需 Apple Intelligence"
-        case .funASR: return "云端高保真 · 约 ¥0.6/小时"
-        case .volcSeedASR: return "云端备选 · 语音技术流式识别"
+        case .funASR: return "云端高保真 · 按推流时长计费（静音也计）· 约 ¥0.6–1.2/小时"
         }
     }
 
@@ -33,14 +30,13 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         case .auto: return "arrow.triangle.2.circlepath"
         case .speechAnalyzer: return "iphone"
         case .funASR: return "waveform.badge.magnifyingglass"
-        case .volcSeedASR: return "bolt.horizontal.fill"
         }
     }
 
     public var requiresCloudCredentials: Bool {
         switch self {
         case .auto, .speechAnalyzer: return false
-        case .funASR, .volcSeedASR: return true
+        case .funASR: return true
         }
     }
 
@@ -76,14 +72,6 @@ public enum AsrEngineResolver {
         return true
     }
 
-    public static var hasVolcCredentials: Bool {
-        guard let ak = KeychainStore.get(ASRPresets.volcAppKeyAccount), !ak.isEmpty,
-              let sk = KeychainStore.get(ASRPresets.volcAccessKeyAccount), !sk.isEmpty else {
-            return false
-        }
-        return true
-    }
-
     @available(iOS 26.0, *)
     public static func resolve(preference: ASRPreference = .current) async throws -> any AsrEngine {
         switch preference {
@@ -91,13 +79,10 @@ public enum AsrEngineResolver {
             return try await prepare(.speechAnalyzer)
         case .funASR:
             return try await prepare(.funASR)
-        case .volcSeedASR:
-            return try await prepare(.volcSeedASR)
         case .auto:
-            // 端侧 → Fun-ASR → 火山备
+            // 端侧 → Fun-ASR（火山已下线：无 Pro 网关分支、与 Fun 职责重叠）
             if let engine = try? await prepare(.speechAnalyzer) { return engine }
             if let engine = try? await prepare(.funASR) { return engine }
-            if let engine = try? await prepare(.volcSeedASR) { return engine }
 
             var reasons: [String] = []
             reasons.append("SpeechAnalyzer 不可用（需 Apple Intelligence / 中文资源）")
@@ -105,11 +90,6 @@ public enum AsrEngineResolver {
                 reasons.append("未配置阿里百炼 API Key")
             } else {
                 reasons.append("Fun-ASR prepare 失败")
-            }
-            if !hasVolcCredentials {
-                reasons.append("未配置火山凭证")
-            } else {
-                reasons.append("火山 prepare 失败")
             }
             throw AsrResolveError.noneAvailable(reasons.joined(separator: "；"))
         }

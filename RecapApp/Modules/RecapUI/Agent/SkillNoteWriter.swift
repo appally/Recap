@@ -28,6 +28,7 @@ public enum SkillNoteWriter {
             hint: nil,
             momentsSummary: meeting.momentsPromptSummary,
             handwritingSummary: meeting.handwritingPromptSummary,
+            userProfile: UserProfile.current,
             onProgress: onProgress
         )
 
@@ -39,6 +40,20 @@ public enum SkillNoteWriter {
         )
         let payloadData = try JSONEncoder().encode(payload)
         let version = (meeting.outputs.filter { $0.kind == .note }.map(\.version).max() ?? 0) + 1
+
+        // 同模板一稿制：同 skillId 的已有笔记就地刷新（一模板一 Tab），不再每次堆新记录。
+        // 刷新正文/模型/版本；createdAt 提至当下，使其落到笔记 Tab 最右（「最新在最右」），
+        // 也让流式草稿落定后视觉连续——草稿 Tab 本就在末位，真实笔记刷新后仍在末位、不左跳。
+        if let existing = meeting.outputs.first(where: {
+            $0.kind == .note && $0.promptHash == skill.id
+        }) {
+            existing.payloadData = payloadData
+            existing.modelId = outcome.modelId
+            existing.version = version
+            existing.createdAt = Date()
+            try? modelContext.save()
+            return existing.id
+        }
 
         let output = AIOutput(
             kind: .note,

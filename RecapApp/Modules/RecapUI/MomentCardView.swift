@@ -165,9 +165,22 @@ struct MomentGalleryView: View {
 
     @State private var index = 0
     @State private var copiedFeedback = false
+    /// 一次性解码缓存：避免 body 重算时反复读盘，并让 ZoomableImageView 的 image 引用稳定，
+    /// 不致在 chromeHidden 变化触发重渲染时把缩放态误复位（见其 updateUIView 的 image 比较）。
+    @State private var images: [UIImage]
+    /// 放大态淡出顶/底栏，沉浸看图；回到 1× 淡回。
+    @State private var chromeHidden = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var images: [UIImage] {
-        moment.photoRelativePaths.compactMap { MeetingMediaStore.loadUIImage(storedPath: $0) }
+    init(moment: Moment,
+         onSeek: (() -> Void)? = nil,
+         onDismiss: @escaping () -> Void) {
+        self.moment = moment
+        self.onSeek = onSeek
+        self.onDismiss = onDismiss
+        _images = State(initialValue: moment.photoRelativePaths.compactMap {
+            MeetingMediaStore.loadUIImage(storedPath: $0)
+        })
     }
 
     var body: some View {
@@ -175,25 +188,24 @@ struct MomentGalleryView: View {
             Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                topBar
-
-                Spacer(minLength: 0)
+                topBar.opacity(chromeHidden ? 0 : 1)
 
                 TabView(selection: $index) {
                     ForEach(Array(images.enumerated()), id: \.offset) { offset, img in
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFit()
-                            .tag(offset)
+                        ZoomableImageView(image: img) { isZoomed in
+                            withAnimation(reduceMotion ? nil : .recapSoft) {
+                                chromeHidden = isZoomed
+                            }
+                        }
+                        .tag(offset)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .automatic : .never))
-                .frame(maxHeight: .infinity)
+                // 保底高度：OCR 文字再多也压不没图片；短 OCR 时 ideal 让图片尽量大。
+                .frame(minHeight: 320, idealHeight: 460, maxHeight: .infinity)
 
-                Spacer(minLength: 0)
-
-                ocrSection
-                footer
+                ocrSection.opacity(chromeHidden ? 0 : 1)
+                footer.opacity(chromeHidden ? 0 : 1)
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.bottom, Spacing.xxl)
@@ -269,11 +281,14 @@ struct MomentGalleryView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text(ocr)
-                    .font(.recapRaw)
-                    .foregroundStyle(.white.opacity(0.8))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // OCR 长文（白板 / PPT）自滚动，限高不再侵吞图片区。
+                ScrollView {
+                    Text(ocr)
+                        .font(.recapRaw)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 200)
             }
             .padding(Spacing.md)
             .background(Color.white.opacity(0.06),

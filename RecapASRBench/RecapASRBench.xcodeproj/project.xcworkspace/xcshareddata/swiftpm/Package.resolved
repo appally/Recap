@@ -1,5 +1,5 @@
 {
-  "originHash" : "d526b956b2941e51520eb1a181d281939054defb03feb9302533a12952391e2e",
+  "originHash" : "fe5e22d7ebb3c33400fec12e619655024eb2c41741b489807275b07dc823150a",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -8,6 +8,33 @@
       "state" : {
         "revision" : "19600a485baa4998812e4654b70d2bab8f2c9949",
         "version" : "0.15.5"
+      }
+    },
+    {
+      "identity" : "openai",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/macpaw/openai",
+      "state" : {
+        "revision" : "a532be89be9a30ec003e4ba0974a52a88d26fc6d",
+        "version" : "0.5.1"
+      }
+    },
+    {
+      "identity" : "swift-http-types",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-http-types",
+      "state" : {
+        "revision" : "db774a277f60063a32d854f2980299caf06da041",
+        "version" : "1.6.0"
+      }
+    },
+    {
+      "identity" : "swift-openapi-runtime",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-openapi-runtime",
+      "state" : {
+        "revision" : "3d3a8457661daf7fb260ceeb9f0e24e5204ba5fb",
+        "version" : "1.12.0"
       }
     }
   ],

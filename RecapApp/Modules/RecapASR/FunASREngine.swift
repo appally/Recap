@@ -48,8 +48,16 @@ public actor FunASREngine: AsrEngine {
     public init() {}
 
     public func prepare() async throws {
-        guard let key = KeychainStore.get(ASRPresets.funApiKeyAccount), !key.isEmpty else {
-            throw FunASRError.missingCredentials
+        let key: String
+        if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
+            // Pro 托管:用 Recap 网关签发的阿里临时 token(不碰 BYOK key)。
+            // 协议/喂流零改动——仅 key 来源不同。缓存由 RecordingSession.start 的 warmup 预热。
+            key = try RecapCredentialProvider.shared.current().token
+        } else {
+            guard let k = KeychainStore.get(ASRPresets.funApiKeyAccount), !k.isEmpty else {
+                throw FunASRError.missingCredentials
+            }
+            key = k
         }
         apiKey = key
         session = URLSession(configuration: .default)
@@ -399,6 +407,13 @@ public actor FunASREngine: AsrEngine {
 }
 
 // MARK: - Protocol helpers
+
+/// `URLSessionWebSocketTask` 的 `@unchecked Sendable` 载体：跨 actor 传递非 Sendable 的 WS task。
+/// （原定义随 VolcASREngine 下线迁入；Fun-ASR 仍需要此封装做收发解耦。）
+final class WSTaskBox: @unchecked Sendable {
+    let task: URLSessionWebSocketTask
+    init(_ t: URLSessionWebSocketTask) { task = t }
+}
 
 enum FunASRProtocol {
     static func runTask(taskId: String) -> [String: Any] {

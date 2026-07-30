@@ -25,11 +25,29 @@ public enum LLMProviderFactory {
     public static func makeCurrent() throws -> any LLMProvider {
         switch AIServiceMode.current {
         case .recapCloud:
-            // 权益以 StoreKit 同步到的 tier 为准；网关未上线前明确失败。
-            if RecapAccountStore.current.tier != .pro {
-                throw FactoryError.requiresMembership
-            }
-            throw FactoryError.cloudGatewayUnavailable
+            // Pro 托管:Recap 网关签发的阿里临时 token + qwen 兼容端点(不经 BYOK key)。
+            guard RecapAccountStore.current.tier == .pro else { throw FactoryError.requiresMembership }
+            let cred = try RecapCredentialProvider.shared.current()
+            let template = LLMProviderTemplate.qwen
+            let userPicked = LLMSelection.selectedModel
+            return OpenAICompatibleProvider(
+                id: "recap-cloud",
+                apiKey: cred.token,
+                baseURL: cred.llmBase,
+                defaultModel: userPicked ?? template.defaultModel,
+                summaryModel: userPicked ?? template.summaryModel
+            )
+        case .freeTrial:
+            // 免费档:网关签发的阿里 token(Flash 模型,服务端按次计量);无 ASR token,转写走端侧。
+            let cred = try RecapCredentialProvider.shared.current()
+            let flash = LLMPresets.cloudFlashModel
+            return OpenAICompatibleProvider(
+                id: "recap-free",
+                apiKey: cred.token,
+                baseURL: cred.llmBase,
+                defaultModel: flash,
+                summaryModel: flash
+            )
         case .byok:
             return try makeSelectedBYOK()
         }
@@ -68,6 +86,10 @@ public enum LLMProviderFactory {
 
     /// 默认 DeepSeek（兼容旧调用；优先走当前选择）。
     public static func makeDefaultDeepSeek() throws -> any LLMProvider {
+        // 云端档(Pro/免费)统一走 makeCurrent;仅 BYOK 走下面的 DeepSeek 预设逻辑。
+        if AIServiceMode.current != .byok {
+            return try makeCurrent()
+        }
         if AIServiceMode.current == .byok,
            LLMSelection.selectedTemplate != .deepseek,
            LLMSelection.hasAPIKey(for: LLMSelection.selectedTemplate) {

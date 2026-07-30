@@ -23,6 +23,8 @@ public struct TemplateSelectionSheet: View {
     @StateObject private var customStore = CustomTemplateStore()
     @State private var showCustomEditor = false
     @State private var editingCustom: AgentSkill?
+    @Namespace private var segmentNS
+    @State private var skillToDelete: AgentSkill?
 
     public enum TemplateTab: String, CaseIterable, Identifiable {
         case recommended = "推荐"
@@ -72,29 +74,43 @@ public struct TemplateSelectionSheet: View {
         .sheet(isPresented: $showCustomEditor) {
             CustomTemplateEditorSheet(store: customStore, editing: editingCustom)
         }
+        .confirmationDialog(
+            "删除「\(skillToDelete?.name ?? "")」？",
+            isPresented: Binding(get: { skillToDelete != nil }, set: { if !$0 { skillToDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("删除", role: .destructive) {
+                if let s = skillToDelete { customStore.delete(id: s.id) }
+                skillToDelete = nil
+            }
+            Button("取消", role: .cancel) { skillToDelete = nil }
+        } message: {
+            Text("删除后无法恢复。")
+        }
     }
 
     // MARK: - Header / segment
 
     private var header: some View {
-        HStack {
-            Button {
-                isPresented = false
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.recapInk)
-            }
-
-            Spacer()
-
+        // sheet 的关闭在 trailing（×），而非 leading 的返回箭头——chevron.left 是
+        // push/pop 导航习语，与 sheet 的 dismiss（下滑 / 右上关闭）语义冲突。
+        ZStack {
             Text("选择模板")
                 .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(Color.recapInk)
-
-            Spacer()
-
-            Color.clear.frame(width: 24, height: 24)
+            HStack {
+                Spacer()
+                Button {
+                    isPresented = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.recapTea)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(RecapPressStyle())
+            }
         }
         .padding(.horizontal, Spacing.lg)
         .padding(.top, Spacing.md)
@@ -105,11 +121,23 @@ public struct TemplateSelectionSheet: View {
         HStack(spacing: 24) {
             ForEach(TemplateTab.allCases) { tab in
                 Button {
+                    Haptics.selection()
                     withAnimation(.recapSoft) { selectedTab = tab }
                 } label: {
-                    Text(tab.rawValue)
-                        .font(.system(size: 15, weight: selectedTab == tab ? .bold : .regular))
-                        .foregroundStyle(selectedTab == tab ? Color.recapInk : Color.recapTea)
+                    VStack(spacing: 4) {
+                        Text(tab.rawValue)
+                            .font(.system(size: 15, weight: selectedTab == tab ? .bold : .regular))
+                            .foregroundStyle(selectedTab == tab ? Color.recapInk : Color.recapTea)
+                        // 滑动下划线：固定占位保高，选中项带 matchedGeometry 的墨色胶囊
+                        // 随 selectedTab 平滑滑动，给眼睛一个移动锚点（空间一致性）。
+                        ZStack {
+                            Capsule().fill(.clear).frame(width: 18, height: 2.5)
+                            if selectedTab == tab {
+                                Capsule().fill(Color.recapInk).frame(width: 18, height: 2.5)
+                                    .matchedGeometryEffect(id: "segmentIndicator", in: segmentNS)
+                            }
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
             }
@@ -123,14 +151,20 @@ public struct TemplateSelectionSheet: View {
 
     @ViewBuilder
     private var scrollView: some View {
-        switch selectedTab {
-        case .recommended:
-            recommendedList
-        case .explore:
-            exploreList
-        case .mySpace:
-            mySpaceList
+        // 用 selectedTab 作 id 强制换 identity，配合 .transition 在 withAnimation 下做
+        // 内容淡入淡出——避免 switch 不同 view 的硬切跳变。
+        Group {
+            switch selectedTab {
+            case .recommended:
+                recommendedList
+            case .explore:
+                exploreList
+            case .mySpace:
+                mySpaceList
+            }
         }
+        .id(selectedTab)
+        .transition(.opacity)
     }
 
     private var recommendedSkills: [AgentSkill] {
@@ -154,7 +188,7 @@ public struct TemplateSelectionSheet: View {
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.md)
-            .padding(.bottom, 100)
+            .padding(.bottom, Spacing.xl)
         }
     }
 
@@ -168,7 +202,7 @@ public struct TemplateSelectionSheet: View {
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.md)
-            .padding(.bottom, 100)
+            .padding(.bottom, Spacing.xl)
         }
     }
 
@@ -180,7 +214,7 @@ public struct TemplateSelectionSheet: View {
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.md)
-            .padding(.bottom, 100)
+            .padding(.bottom, Spacing.xl)
         }
     }
 
@@ -199,8 +233,10 @@ public struct TemplateSelectionSheet: View {
                     Label("新建", systemImage: "plus")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color.recapInk)
+                        .padding(.horizontal, Spacing.xs)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(RecapPressStyle())
             }
             if customStore.isEmpty {
                 Text("还没有自定义模板——点「新建」，用你的提示词创建一个")
@@ -233,58 +269,55 @@ public struct TemplateSelectionSheet: View {
 
     private func customRow(_ skill: AgentSkill) -> some View {
         let isSelected = selectedSkill?.id == skill.id
-        return HStack(spacing: Spacing.md) {
-            Image(systemName: skill.icon.isEmpty ? "doc.text" : skill.icon)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color.recapInk)
-                .frame(width: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(skill.name)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Color.recapInk)
-                    .lineLimit(1)
-                Text(skill.description)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.recapTea)
-                    .lineLimit(2)
-            }
-            Spacer()
-            Button {
-                editingCustom = skill
-                showCustomEditor = true
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.recapTea)
-            }
-            .buttonStyle(.plain)
-            Button {
-                Haptics.impact(.medium)
-                customStore.delete(id: skill.id)
-            } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.recapCinnabar)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(light: 0xFFFFFF, dark: 0x16191D))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(
-                            isSelected ? Color.recapInk : Color.recapTea.opacity(0.12),
-                            lineWidth: isSelected ? 1.5 : 0.5
-                        )
-                )
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
+        return Button {
             Haptics.selection()
-            selectedSkill = skill
+            withAnimation(.recapSoft) {
+                selectedSkill = skill
+            }
+        } label: {
+            HStack(spacing: Spacing.md) {
+                Image(systemName: skill.icon.isEmpty ? "doc.text" : skill.icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.recapInk)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(skill.name)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                        .lineLimit(1)
+                    Text(skill.description)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.recapTea)
+                        .lineLimit(2)
+                }
+                Spacer()
+                Button {
+                    editingCustom = skill
+                    showCustomEditor = true
+                } label: {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.recapTea)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(RecapPressStyle())
+                Button {
+                    Haptics.impact(.medium)
+                    skillToDelete = skill
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.recapCinnabar)
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(RecapPressStyle())
+            }
+            .padding(Spacing.md)
+            .background(cardBackground(cornerRadius: 14, isSelected: isSelected))
         }
+        .buttonStyle(RecapPressStyle())
     }
 
     private func scenarioHeader(_ group: AgentScenarioGroup) -> some View {
@@ -298,6 +331,25 @@ public struct TemplateSelectionSheet: View {
         }
     }
 
+    /// 卡片/行底：纸底 + 选中墨色微填充 + 边框。选中态靠「填充淡入 + 对勾 + 边框加深」
+    /// 三件叠加，而非仅 1px 边框差异——高代价生成前的提交依据必须一眼可辨。
+    private func cardBackground(cornerRadius: CGFloat, isSelected: Bool, selectedLineWidth: CGFloat = 1.5) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(Color.recapPaper)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Color.recapInk)
+                    .opacity(isSelected ? 0.04 : 0)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        isSelected ? Color.recapInk : Color.recapTea.opacity(0.12),
+                        lineWidth: isSelected ? selectedLineWidth : 0.5
+                    )
+            )
+    }
+
     private func skillGrid(_ skills: [AgentSkill]) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Spacing.md) {
             ForEach(skills) { skill in
@@ -309,67 +361,77 @@ public struct TemplateSelectionSheet: View {
     private func templateCard(_ skill: AgentSkill) -> some View {
         let isSelected = selectedSkill?.id == skill.id
         let isFavorite = favorites.contains(skill.id)
-        return VStack(alignment: .leading, spacing: Spacing.sm) {
-            HStack {
-                Image(systemName: skill.icon.isEmpty ? "doc.text" : skill.icon)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color.recapInk)
-                Spacer()
-                Button {
-                    Haptics.selection()
-                    favorites.toggle(skill.id)
-                } label: {
-                    Image(systemName: isFavorite ? "star.fill" : "star")
-                        .font(.system(size: 14))
-                        .foregroundStyle(isFavorite ? Color.recapCinnabar : Color.recapTea.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-            }
-
-            Text(skill.name)
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.recapInk)
-                .lineLimit(1)
-
-            Text(skill.description)
-                .font(.system(size: 12))
-                .foregroundStyle(Color.recapTea)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .frame(height: 32, alignment: .topLeading)
-
-            Spacer(minLength: 0)
-
-            Text(skill.groupTitle)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.recapTea)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(
-                    Capsule().fill(Color.recapTea.opacity(0.12))
-                )
-        }
-        .padding(Spacing.md)
-        .frame(height: 150)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(light: 0xFFFFFF, dark: 0x16191D))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(
-                            isSelected ? Color.recapInk : Color.recapTea.opacity(0.12),
-                            lineWidth: isSelected ? 1.5 : 0.5
-                        )
-                )
-        )
-        .contentShape(Rectangle())
-        .onTapGesture {
+        return Button {
             Haptics.selection()
-            selectedSkill = skill
+            withAnimation(.recapSoft) {
+                selectedSkill = skill
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: skill.icon.isEmpty ? "doc.text" : skill.icon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                    Spacer()
+                    // 选中对勾：固定宽度槽位，淡入淡出，避免收藏星左右跳动。
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                        .opacity(isSelected ? 1 : 0)
+                        .frame(width: 18)
+                    Button {
+                        Haptics.selection()
+                        withAnimation(.recapSoft) { favorites.toggle(skill.id) }
+                    } label: {
+                        Image(systemName: isFavorite ? "star.fill" : "star")
+                            .font(.system(size: 14))
+                            .foregroundStyle(isFavorite ? Color.recapCinnabar : Color.recapTea.opacity(0.5))
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(RecapPressStyle())
+                }
+
+                Text(skill.name)
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.recapInk)
+                    .lineLimit(1)
+
+                Text(skill.description)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.recapTea)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(height: 32, alignment: .topLeading)
+
+                Spacer(minLength: 0)
+
+                Text(skill.groupTitle)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.recapTea)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(Color.recapTea.opacity(0.12))
+                    )
+            }
+            .padding(Spacing.md)
+            .frame(height: 150)
+            .background(cardBackground(cornerRadius: 16, isSelected: isSelected, selectedLineWidth: 2))
         }
+        .buttonStyle(RecapPressStyle())
     }
 
     // MARK: - Generate
+
+    /// 生成钮文案带上所选模板名——显式绑定「选择↔提交」，消除预选带来的
+    /// 「这是 AI 替我选的，还是我点的」模糊。
+    private var generateTitle: String {
+        if let name = selectedSkill?.name, !name.isEmpty {
+            return "生成 · \(name)"
+        }
+        return "生成"
+    }
 
     private var bottomBar: some View {
         VStack(spacing: 0) {
@@ -383,16 +445,17 @@ public struct TemplateSelectionSheet: View {
                 onPickSkill(selectedSkill)
                 isPresented = false
             } label: {
-                Text("生成")
+                Text(generateTitle)
                     .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(Color.recapBg)
                     .frame(maxWidth: .infinity)
                     .frame(height: 50)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color(light: 0x737373, dark: 0x333333))
+                            .fill(Color.recapInk)
                     )
             }
+            .buttonStyle(RecapPressStyle())
             .disabled(selectedSkill == nil)
         }
         .padding(.horizontal, Spacing.xl)

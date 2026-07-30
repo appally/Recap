@@ -52,7 +52,8 @@ public struct RunSkillAgentTool: AgentTool {
             let outcome = try await AgentSkillRunner.runDetailed(
                 skill: skill,
                 context: context,
-                hint: hint
+                hint: hint,
+                userProfile: UserProfile.current
             )
             return AgentToolResult(
                 contentForModel: outcome.text,

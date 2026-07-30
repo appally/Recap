@@ -84,7 +84,6 @@ public enum AsrEngineFactory {
         switch kind {
         case .speechAnalyzer:  SpeechAnalyzerEngine()
         case .funASR:          FunASREngine()
-        case .volcSeedASR:     VolcASREngine()
         case .fluidSenseVoice: FluidAudioEngine(kind: .fluidSenseVoice)
         case .fluidParaformer: FluidAudioEngine(kind: .fluidParaformer)
         }

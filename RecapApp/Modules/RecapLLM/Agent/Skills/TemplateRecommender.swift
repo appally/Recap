@@ -41,6 +41,15 @@ public enum TemplateRecommender {
         if matchAny(titleLow, ["讲座", "课程", "分享", "培训", "lecture", "class", "tutorial"]) {
             boosted += ["lecture-notes"]
         }
+        if matchAny(titleLow, ["cornell", "康奈尔", "笔记法", "学习笔记"]) {
+            boosted += ["cornell-notes"]
+        }
+        if matchAny(titleLow, ["项目", "进展", "汇报", "述职", "status", "project"]) {
+            boosted += ["project-status"]
+        }
+        if matchAny(titleLow, ["反馈", "用户访谈", "用户调研", "客户访谈", "feedback"]) {
+            boosted += ["feedback-synthesis"]
+        }
         // 有会前底稿 → 对账模板（Recap 差异化信号）。
         if hasBrief {
             boosted += ["brief-reconcile"]

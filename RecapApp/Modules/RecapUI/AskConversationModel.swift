@@ -63,12 +63,6 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct AskSessionListItem: Identifiable, Equatable, Sendable {
-    public let id: UUID
-    public let title: String
-    public let updatedAt: Date
-}
-
 /// Ask 对话状态与编排（从 AgentInvokeSheet 迁出）；在 View 侧落库，内核不写 SwiftData。
 @MainActor
 @Observable
@@ -79,7 +73,6 @@ public final class AskConversationModel {
     public private(set) var pendingApproval: AgentApprovalRequest?
     public private(set) var pendingMinutesPayload: MinutesRevisionPayload?
     public private(set) var pendingMinutesDiffs: [MinutesDiff.FieldDiff] = []
-    public private(set) var sessionList: [AskSessionListItem] = []
     public private(set) var currentSessionID: UUID?
     /// 纪要被改写后回调（刷新 MeetingSession.summary）。
     public var onMinutesUpdated: ((MeetingSummary) -> Void)?
@@ -147,7 +140,6 @@ public final class AskConversationModel {
         self.remindersBridge.meeting = meeting
         self.reviseBridge.meeting = meeting
         self.reviseBridge.modelContext = modelContext
-        refreshSessionList()
         if messages.isEmpty, let latest = meeting.chatSessions.max(by: { $0.updatedAt < $1.updatedAt }) {
             loadSession(latest)
         }
@@ -197,7 +189,6 @@ public final class AskConversationModel {
         pendingSteps = []
         turnReasoningChars = 0
         pendingApprovalStepID = nil
-        refreshSessionList()
     }
 
     public func cancel() {
@@ -222,19 +213,9 @@ public final class AskConversationModel {
         pendingApproval = nil
         isThinking = false
         statusLabel = nil
-        refreshSessionList()
         if let next = meeting?.chatSessions.max(by: { $0.updatedAt < $1.updatedAt }) {
             loadSession(next)
         }
-    }
-
-    public func switchToSession(id: UUID) {
-        guard let meeting else { return }
-        guard let target = meeting.chatSessions.first(where: { $0.id == id }) else { return }
-        askTask?.cancel()
-        askTask = nil
-        finalizeInterruptedIfNeeded()
-        loadSession(target)
     }
 
     public func beginFollowUp(on bubble: AskBubble) {
@@ -365,17 +346,6 @@ public final class AskConversationModel {
                     isDegraded: record.isDegraded
                 )
             }
-        refreshSessionList()
-    }
-
-    private func refreshSessionList() {
-        guard let meeting else {
-            sessionList = []
-            return
-        }
-        sessionList = meeting.chatSessions
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .map { AskSessionListItem(id: $0.id, title: $0.title, updatedAt: $0.updatedAt) }
     }
 
     private func ensureSession(titleSeed: String) {
@@ -391,7 +361,6 @@ public final class AskConversationModel {
         session = created
         currentSessionID = created.id
         try? context.save()
-        refreshSessionList()
     }
 
     private func persistUserMessage(id: UUID, text: String) {
@@ -406,7 +375,6 @@ public final class AskConversationModel {
         session.messages.append(record)
         session.updatedAt = .now
         try? context.save()
-        refreshSessionList()
     }
 
     private func persistAssistantTurn(
@@ -457,7 +425,6 @@ public final class AskConversationModel {
         pendingSteps = []
         turnReasoningChars = 0
         pendingApprovalStepID = nil
-        refreshSessionList()
     }
 
     private func pruneStepsIfNeeded(in session: ChatSession, context: ModelContext) {

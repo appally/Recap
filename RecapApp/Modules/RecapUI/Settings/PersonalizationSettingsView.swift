@@ -1,27 +1,86 @@
 import SwiftUI
 import RecapModels
+import RecapASR
 
-/// 个性化设置（Plaud AI 风格：内容侧重、自定义指令、AI 记忆）
+/// 个性化设置（Plaud AI 风格：我的信息、输出偏好）
 public struct PersonalizationSettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    
-    @AppStorage("recap_content_focus") private var contentFocus: String = ""
-    @AppStorage("recap_custom_instructions") private var customInstructions: String = ""
-    @AppStorage("recap_use_memory") private var useMemory: Bool = true
+
+    // 用户身份（全局，自由文本）--驱动纪要称呼与待办归属（见 AgentSkillRunner.makeUserPrompt）
+    @AppStorage("recap.user.about") private var identityAbout: String = ""
+    // 全局输出偏好（自由文本）--驱动纪要风格与侧重；具体结构仍由模板决定
+    @AppStorage("recap.output_pref") private var outputPref: String = ""
+    @State private var galleryRevision = 0
 
     public init() {}
+
+    private var galleryCount: Int {
+        _ = galleryRevision
+        return VoiceprintGallery.shared.count
+    }
+
+    @ViewBuilder
+    private var voiceprintSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("说话人声纹")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.recapInk)
+                Text("在转写里点说话人名「这是我」可让 Recap 跨会议认出你。声纹仅本机、不上云。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.recapTea)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if VoiceprintConsent.granted {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .foregroundStyle(Color.recapCeladon)
+                    Text("已同意 · 已存 \(galleryCount) 个说话人声纹")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.recapInk)
+                    Spacer()
+                }
+                .padding(Spacing.lg)
+                .background(Color.recapPaper,
+                            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1))
+
+                Button(role: .destructive) {
+                    Haptics.impact(.medium)
+                    VoiceprintGallery.shared.clearAll()
+                    VoiceprintConsent.reset()
+                    galleryRevision += 1
+                } label: {
+                    Label("删除全部声纹并撤回同意", systemImage: "trash")
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.recapCinnabar)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(SettingsPressStyle())
+            } else {
+                Text("未开启。在会议转写里点某位说话人的名字选「这是我」时，会单独询问你是否同意。")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.recapTea)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xxl) {
-                // Section 1: 内容侧重
-                contentFocusSection
+                // Section 1: 我的信息
+                identitySection
 
-                // Section 2: 自定义指令
-                customInstructionsSection
+                // Section 2: 输出偏好
+                outputPreferenceSection
 
-                // Section 3: 记忆
-                memorySection
+                // Section 3: 说话人声纹
+                voiceprintSection
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.lg)
@@ -35,104 +94,44 @@ public struct PersonalizationSettingsView: View {
 
     // MARK: - Sections
 
-    private var contentFocusSection: some View {
+    private var identitySection: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("内容侧重")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.recapInk)
-
-            PlaudInputBox(
-                text: $contentFocus,
-                placeholder: "Recap 输出时应重点关注哪些内容？"
-            )
-
-            // Preset Chip Pills
-            HStack(spacing: Spacing.sm) {
-                PlaudChipButton(title: "要点与结论") { appendText(&contentFocus, "要点与结论") }
-                PlaudChipButton(title: "风险与待确认事项") { appendText(&contentFocus, "风险与待确认事项") }
-                PlaudChipButton(title: "行动项与下一步") { appendText(&contentFocus, "行动项与下一步") }
-            }
-        }
-    }
-
-    private var customInstructionsSection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("自定义指令")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.recapInk)
-
-            PlaudInputBox(
-                text: $customInstructions,
-                placeholder: "Recap 应如何表达和说明内容？"
-            )
-
-            // Preset Chip Pills
-            HStack(spacing: Spacing.sm) {
-                PlaudChipButton(title: "简明直接") { appendText(&customInstructions, "简明直接") }
-                PlaudChipButton(title: "正式、专业") { appendText(&customInstructions, "正式、专业") }
-                PlaudChipButton(title: "结构清晰") { appendText(&customInstructions, "结构清晰") }
-            }
-        }
-    }
-
-    private var memorySection: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("记忆")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.recapTea)
-
-            SettingsDivider()
-
-            VStack(alignment: .leading, spacing: 6) {
-                Toggle(isOn: $useMemory) {
-                    Text("使用记忆")
-                        .font(.system(size: 16, weight: .regular))
-                        .foregroundStyle(Color.recapInk)
-                }
-                .tint(Color.recapInk)
-
-                Text("开启后，Recap 会记住并使用你的信息，提供个性化的回复。了解更多")
-                    .font(.system(size: 13, weight: .regular))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("我的信息")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.recapInk)
+                Text("Recap 会用这些信息个性化纪要称呼与待办归属。")
+                    .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(Color.recapTea)
-                    .lineSpacing(3)
             }
-            .padding(.vertical, 4)
 
-            SettingsDivider()
-
-            NavigationLink {
-                MemoryManagementView()
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("管理记忆")
-                            .font(.system(size: 16, weight: .regular))
-                            .foregroundStyle(Color.recapInk)
-                        Spacer()
-                        SettingsChevron()
-                    }
-                    Text("查看和管理 Recap 记住的内容")
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Color.recapTea)
-                }
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(SettingsPressStyle())
+            PlaudInputBox(
+                text: $identityAbout,
+                placeholder: "介绍你自己：姓名、角色、团队，或任何希望 Recap 在纪要中参照的身份信息。"
+            )
         }
     }
 
-    private func appendText(_ target: inout String, _ preset: String) {
-        Haptics.impact(.light)
-        if target.isEmpty {
-            target = preset
-        } else if !target.contains(preset) {
-            target += "，\(preset)"
+    private var outputPreferenceSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("输出偏好")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.recapInk)
+                Text("全局风格与侧重，适用于所有会议；具体结构仍由模板决定。")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Color.recapTea)
+            }
+
+            PlaudInputBox(
+                text: $outputPref,
+                placeholder: "希望 Recap 如何输出？如：简明直接、务必列出待办与截止日期、标注风险与待确认事项。"
+            )
         }
     }
 }
 
-// MARK: - Plaud Input Box & Chip Components
+// MARK: - Plaud Input Box
 
 private struct PlaudInputBox: View {
     @Binding var text: String
@@ -163,52 +162,5 @@ private struct PlaudInputBox: View {
                 .lineLimit(3...5)
         }
         .frame(minHeight: 88)
-    }
-}
-
-private struct PlaudChipButton: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(Color.recapInk.opacity(0.85))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color(light: 0xF6F7F8, dark: 0x1C2025))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color.recapTea.opacity(0.15), lineWidth: 0.5)
-                        )
-                )
-        }
-        .buttonStyle(RecapPressStyle())
-    }
-}
-
-/// 记忆管理占位页
-private struct MemoryManagementView: View {
-    var body: some View {
-        VStack(spacing: Spacing.lg) {
-            Image(systemName: "brain.head.profile")
-                .font(.system(size: 48, weight: .thin))
-                .foregroundStyle(Color.recapTea)
-            Text("暂无积累的偏好记忆")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(Color.recapInk)
-            Text("在使用 Recap 进行语音记录和 AI 纪要生成时，重要的习惯偏好将被自动记住。")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color.recapTea)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, Spacing.xxl)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(SettingsAmbientBackground())
-        .navigationTitle("管理记忆")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }

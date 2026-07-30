@@ -33,15 +33,6 @@ public enum PipelineStage: Equatable {
     case generating  // 摘要流式中（提炼议题/决议/待办）
     case done        // 管线结束
 
-    /// 步骤胶囊 Badge；idle/done 不显示。
-    public var badge: String {
-        switch self {
-        case .idle, .done: return ""
-        case .organizing: return "梳理原稿"
-        case .generating: return "提炼内容"
-        }
-    }
-
     /// 主句：随阶段切换，由 .id() 触发 contentTransition 平滑变形。
     public var title: String {
         switch self {
@@ -91,6 +82,9 @@ public final class MeetingSession: ObservableObject {
     private var postMeetingTask: Task<Void, Never>?
     /// 会后 LLM 润色任务（独立于 CoreML 的 postMeetingTask，二者可并发）。
     private var polishTask: Task<Void, Never>?
+    /// P0-②：会后 diarizer idle 卸载定时器——分离结束 N 秒后释放模型常驻内存（20-40MB wired），
+    /// 避免低内存机型(A14 iPad)叠加 OCR 触发 mach_vm_allocate 失败。新分离请求会取消它。
+    private var diarizerUnloadTask: Task<Void, Never>?
     /// #M2：暂停时捕获 stop() 定稿分段的任务；endLive 等其落地，resume 取消丢弃。
     private var pauseFlushTask: Task<Void, Never>?
     /// #6b：会后 LLM 纪要管线的后台名额；用户完成即切后台时争取时间让管线跑完。
@@ -248,7 +242,7 @@ public final class MeetingSession: ObservableObject {
     private func adoptSegmentsAsBlocks(_ segments: [TranscriptSegment]) {
         merger.loadCheckpoint(segments: segments)
         let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
-        // 若已润色，按段 id 把润色文本并入 block.polished（≠ raw 时 UI 自动双行）
+        // 若已润色，按段 id 把润色文本并入 block.polished（≠ raw 时转写行切到优化稿单行）
         let polishedById = Dictionary(
             uniqueKeysWithValues: meeting.polishedSegments.map { ($0.id, $0.text) }
         )
@@ -434,8 +428,16 @@ public final class MeetingSession: ObservableObject {
             liveStartFailed = true
             // #4：启动失败时停表，避免失败态时钟空走、时长虚高（重试时 startLive 会重启时钟）
             clockTask?.cancel()
+            RecapLog.session.error("startLive 引擎启动失败: \(error.localizedDescription, privacy: .public)")
             if !isLivePaused {
-                statusMessage = "转写引擎启动失败：\(error.localizedDescription)"
+                // 消费 resolver 的四态细分原因（端侧不可用 / 缺云端凭证 / 缺中文资源），
+                // 给可操作引导而非笼统「检查权限」——大部分首录失败并非权限问题。
+                if let resolveErr = error as? AsrResolveError,
+                   let detail = resolveErr.errorDescription, !detail.isEmpty {
+                    statusMessage = detail
+                } else {
+                    statusMessage = "录音启动失败，请检查麦克风权限或稍后重试"
+                }
             }
             setIdleTimerDisabled(false)
         }
@@ -474,6 +476,8 @@ public final class MeetingSession: ObservableObject {
         defer {
             isDiarizing = false
             diarizeProgress = nil
+            // P0-②：分离结束（含取消/失败）后启动 idle 卸载计时；N 秒内再次 schedule 则被取消。
+            scheduleDiarizerIdleUnload()
         }
 
         do {
@@ -508,7 +512,9 @@ public final class MeetingSession: ObservableObject {
         } catch InferenceTimeoutError.exceeded {
             statusMessage = "说话人分离超时，请稍后重试"
         } catch {
-            statusMessage = error.localizedDescription
+            // 说话人分离是可选增强：模型加载/网络等失败不阻断原稿与纪要，
+            // 仅给一句柔和提示，避免把原始 CoreML 错误（含英文 + 沙盒路径）直接抛给用户。
+            statusMessage = "说话人自动标记暂不可用，原稿与纪要不受影响"
         }
     }
 
@@ -601,12 +607,16 @@ public final class MeetingSession: ObservableObject {
             // 有字幕的「重转完成」静默：转写内容已刷新；仅异常（无字幕）出面
             if result.segments.isEmpty { statusMessage = "重转完成（无字幕）" }
             schedulePolishIfNeeded()   // ①③ 联动：新 raw → 自动润色
+            // 重转改变了分段边界 / 时间戳，旧 spk 标签已失效 → 联动重新分离。
+            // 旧段已被无 speakerId 的新段替换，scheduleDiarizationIfNeeded 的「已标注」守卫会放行。
+            scheduleDiarizationIfNeeded()
         } catch is CancellationError {
             // 取消静默
         } catch InferenceTimeoutError.exceeded {
             statusMessage = "端侧重转过慢/超时，建议改用云端或稍后重试"
         } catch {
-            statusMessage = "重转失败：\(error.localizedDescription)"
+            RecapLog.session.error("重转失败: \(error.localizedDescription, privacy: .public)")
+            statusMessage = "重转失败，请检查网络或稍后重试"
         }
     }
 
@@ -739,7 +749,8 @@ public final class MeetingSession: ObservableObject {
                         self.statusMessage = err
                     }
                 } catch {
-                    self.statusMessage = "转写收尾：\(error.localizedDescription)"
+                    RecapLog.session.error("转写收尾失败: \(error.localizedDescription, privacy: .public)")
+                    self.statusMessage = "转写收尾失败，已保留实时字幕"
                 }
             }
             self.finalizeAll()
@@ -766,6 +777,20 @@ public final class MeetingSession: ObservableObject {
         if MinutesPipelineSmoke.canRunMinutesPipeline {
             RecapLog.session.info("startProcessing: 闸门通过，启动 LLM 纪要管线")
             startLLMProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+        } else if AIServiceMode.current == .freeTrial {
+            // 免费档闸门未过(token 未就绪或额度耗尽):强刷一次,成功则重跑管线;仍失败=耗尽,提示升级。
+            RecapLog.session.info("startProcessing: freeTrial gate miss, force-refresh credential")
+            statusMessage = "正在准备免费额度…"
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    try await RecapCredentialProvider.shared.ensureFresh(force: true)
+                    self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+                } catch {
+                    self.statusMessage = "免费额度已用完，升级 Pro 或解锁自备密钥以继续生成纪要"
+                    self.finishReviewWithoutMock()
+                }
+            }
         } else {
             RecapLog.session.error("startProcessing: 闸门失败（无可用大模型密钥）→ 直接进 review，无纪要")
             statusMessage = "未配置可用的大模型密钥（设置 → 大模型）"
@@ -856,9 +881,9 @@ public final class MeetingSession: ObservableObject {
                 RecapLog.session.error("纪要管线异常: \(error.localizedDescription, privacy: .public)")
                 if !didCommitSummary, !summaryText.isEmpty {
                     self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
-                    self.statusMessage = "后续步骤失败：\(error.localizedDescription)"
+                    self.statusMessage = "纪要已生成，部分后续步骤未完成（可重试）"
                 } else if !didCommitSummary {
-                    self.statusMessage = error.localizedDescription
+                    self.statusMessage = "纪要生成失败，请检查网络或大模型密钥后重试"
                     self.finishReviewWithoutMock()
                 }
             }
@@ -875,6 +900,7 @@ public final class MeetingSession: ObservableObject {
         // 删除时前置 cancel 保证：管线与删除同在 MainActor 串行，cancel 早于 context.delete。
         let parsed = MinutesMarkdownParser.parse(raw)
         summary = parsed.summary
+        if AIServiceMode.current == .freeTrial { FreeTrialQuota.incrementUsed() }
         if let title = parsed.title {
             meeting.adoptGeneratedTitle(title)
         }
@@ -903,6 +929,9 @@ public final class MeetingSession: ObservableObject {
 
     /// 有本地录音且尚未标注过说话人时，会后自动跑 SpeakerKit（失败不阻断 REVIEW）。
     private func scheduleDiarizationIfNeeded() {
+        // P0-②：有新分离意图，取消待执行的 idle 卸载（避免卸载后又立刻重新加载模型）。
+        diarizerUnloadTask?.cancel()
+        diarizerUnloadTask = nil
         guard let path = meeting.audioPath,
               MeetingAudioStore.fileExists(storedPath: path) else { return }
         let alreadyLabeled = meeting.segments.contains { seg in
@@ -911,6 +940,24 @@ public final class MeetingSession: ObservableObject {
         }
         guard !alreadyLabeled else { return }
         postMeetingTask = Task { [weak self] in await self?.diarizeFromDisk() }
+    }
+
+    /// P0-②：分离结束后延时卸载 diarizer 模型。N 秒内若再次 `scheduleDiarizationIfNeeded`
+    /// 则取消本计时。卸载走 `unload()`（整体置 nil managerBox），非 `cleanup()`（半释放陷阱）。
+    private func scheduleDiarizerIdleUnload(after seconds: TimeInterval = 150) {
+        diarizerUnloadTask?.cancel()
+        diarizerUnloadTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.performDiarizerIdleUnload()
+        }
+    }
+
+    /// 真正卸载：双保险——MeetingSession 侧确认无在飞分离，Diarizer actor 侧 `isInferring`
+    /// 仍会兜底等待推理完成。idle 路径（默认 150s）分离必已结束，故此处基本直通。
+    private func performDiarizerIdleUnload() async {
+        guard !isDiarizing else { return }
+        await DiarizationService.activeDiarizer.unload()
     }
 
     /// 进 REVIEW 时自动润色逐字稿（有 DeepSeek key 且未润色过）。失败不阻断 REVIEW。
@@ -929,6 +976,11 @@ public final class MeetingSession: ObservableObject {
         postMeetingTask = nil
         polishTask?.cancel()
         polishTask = nil
+        // P0-②：离开 REVIEW/切后台时 diarizer 不再用，卸载释放 wired 内存（20-40MB）。
+        // 安全：Diarizer actor 的 isInferring 会先等待在飞推理完成，再 cleanup（#unload-race）。
+        diarizerUnloadTask?.cancel()
+        diarizerUnloadTask = nil
+        Task { await DiarizationService.activeDiarizer.unload() }
     }
 
     /// #6a：回前台重排被后台取消的会后任务（幂等：已完成/在跑均跳过）。
@@ -957,7 +1009,7 @@ public final class MeetingSession: ObservableObject {
 
     /// REVIEW：触发逐字稿 LLM 润色（补标点 / 纠错别字 / 最小书面化），保段写回 polished。
     /// 不依赖端侧 ASR，任意设备 + 已配 LLM 密钥即可；raw 原文始终保留。
-    /// 成功/取消静默：进行中由转写 Tab inline 进度（isPolishing）呈现，完成由双行 raw+polished 呈现；
+    /// 成功/取消静默：进行中由转写 Tab inline 进度（isPolishing）呈现，完成由优化稿单行呈现；
     /// 仅失败写 statusMessage。用户主动入口由调用方切到转写 Tab 以见 inline 进度。
     public func polishTranscript() {
         polishTask = Task { [weak self] in await self?.performPolish() }
@@ -987,13 +1039,17 @@ public final class MeetingSession: ObservableObject {
             let polished = try await polisher.polish(source)
             meeting.polishedSegmentsData = try? JSONEncoder().encode(polished)
             meeting.polishedModelId = LLMPresets.deepSeekFlash
-            adoptSegmentsAsBlocks(source)   // 重新构造 blocks，这次 polished 有值 → 双行
+            // 用「当前」meeting.segments 重建，而非开跑时的 source 快照：polish 与 diarization 并发，
+            // source 可能在 LLM 期间被 diarization 写入 speakerId 前抓取；用 source 会用过期无 speaker
+            // 的快照覆盖已分离的说话人。diarization 只给同 id 段加 speakerId、不改结构，故取当前安全。
+            adoptSegmentsAsBlocks(meeting.segments)   // 重新构造 blocks，这次 polished 有值 → 优化稿单行
             checkpointSaver?()
-            // 成功静默：双行已自然呈现，转写 Tab inline 进度收尾即隐
+            // 成功静默：优化稿已自然呈现，转写 Tab inline 进度收尾即隐
         } catch is CancellationError {
             // 取消静默（用户切走 / 后台取消）
         } catch {
-            statusMessage = "优化失败：\(error.localizedDescription)（请在设置配置 LLM 密钥）"
+            RecapLog.session.error("原稿优化失败: \(error.localizedDescription, privacy: .public)")
+            statusMessage = "原稿优化失败，请检查网络或大模型密钥后重试"
         }
     }
 

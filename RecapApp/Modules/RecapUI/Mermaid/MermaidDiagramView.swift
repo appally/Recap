@@ -69,6 +69,7 @@ struct MermaidDiagramView: UIViewRepresentable {
         var pendingSource: String?      // ready 前暂存的初始 source（外层 makeUIView 写入）
         private var renderTask: Task<Void, Never>?
         var lastForceToken: Int = 0
+        var allowsZoom: Bool = false    // 内联 false / 全屏 true，决定渲染 mode（HTML CSS 分流）
 
         init(height: Binding<CGFloat>, onError: ((String) -> Void)?) {
             self.height = height
@@ -109,10 +110,11 @@ struct MermaidDiagramView: UIViewRepresentable {
             renderedSource = source
             renderedTheme = theme
             renderTask?.cancel()
+            let mode = allowsZoom ? "fullscreen" : "inline"
             renderTask = Task { @MainActor [weak webView] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 guard !Task.isCancelled, let webView else { return }
-                webView.evaluateJavaScript("renderMermaid(\(quoted), '\(theme)')", completionHandler: nil)
+                webView.evaluateJavaScript("renderMermaid(\(quoted), '\(theme)', '\(mode)')", completionHandler: nil)
             }
         }
 
@@ -150,6 +152,7 @@ struct MermaidDiagramView: UIViewRepresentable {
         if let html = Bundle(for: Coordinator.self).url(forResource: "MermaidBridge", withExtension: "html") {
             webView.loadFileURL(html, allowingReadAccessTo: html.deletingLastPathComponent())
         }
+        coordinator.allowsZoom = allowsZoom
         coordinator.pendingSource = source   // ready 信号到达后首渲
         return container
     }
@@ -158,6 +161,7 @@ struct MermaidDiagramView: UIViewRepresentable {
         let coordinator = context.coordinator
         let webView = container.webView
         coordinator.update(onError: onError)
+        coordinator.allowsZoom = allowsZoom
         if container.zoomEnabled != allowsZoom {
             container.applyZoom(allowsZoom)
         }

@@ -387,6 +387,31 @@ public enum AskMarkdownRenderer {
 
 // MARK: - 视图
 
+/// 流式吐字落字光标：电光青/极光平滑 Sin 呼吸波度游标。
+public struct StreamingCaret: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    public init() {}
+
+    public var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let pulse = reduceMotion ? 0.8 : (0.35 + 0.65 * (0.5 + 0.5 * sin(t * 7.5)))
+            Capsule(style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [.recapAICyan, .recapAITeal],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 2.5, height: 16)
+                .opacity(pulse)
+                .padding(.leading, 2)
+        }
+    }
+}
+
 /// 助手气泡 Markdown 视图：块级排版（段落 / 标题 / 列表 / 引用 / 代码块），
 /// 流式 ≥50ms 防抖，结束立即终解析。
 public struct AskMarkdownText: View {
@@ -406,8 +431,16 @@ public struct AskMarkdownText: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                blockView(block)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                let isLast = (index == blocks.count - 1)
+                if isLast && isStreaming {
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        blockView(block)
+                        StreamingCaret()
+                    }
+                } else {
+                    blockView(block)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

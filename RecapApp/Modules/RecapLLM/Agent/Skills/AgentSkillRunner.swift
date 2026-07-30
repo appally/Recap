@@ -70,12 +70,17 @@ public enum AgentSkillRunner {
         minutesTldr: String?,
         hint: String?,
         momentsSummary: String? = nil,
-        handwritingSummary: String? = nil
+        handwritingSummary: String? = nil,
+        userProfile: UserProfile? = nil
     ) -> String {
         var parts: [String] = [
             "【会议】\(meetingTitle)",
             "【技能】\(skill.name)",
         ]
+        // 用户身份档案（全局）--注入 user payload（caching 安全），仅非空时产出。
+        if let profile = userProfile?.promptSummary {
+            parts.append(profile)
+        }
         if let hint = hint?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty {
             parts.append("【补充说明】\(hint)")
         }
@@ -105,9 +110,10 @@ public enum AgentSkillRunner {
         skill: AgentSkill,
         context: AgentToolContext,
         hint: String? = nil,
+        userProfile: UserProfile? = nil,
         onProgress: (@Sendable (AgentSkillRunProgress) -> Void)? = nil
     ) async throws -> String {
-        try await runDetailed(skill: skill, context: context, hint: hint, onProgress: onProgress).text
+        try await runDetailed(skill: skill, context: context, hint: hint, userProfile: userProfile, onProgress: onProgress).text
     }
 
     public static func runDetailed(
@@ -116,6 +122,7 @@ public enum AgentSkillRunner {
         hint: String? = nil,
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
+        userProfile: UserProfile? = nil,
         onProgress: (@Sendable (AgentSkillRunProgress) -> Void)? = nil
     ) async throws -> AgentSkillRunOutcome {
         guard MinutesPipelineSmoke.canRunMinutesPipeline else {
@@ -136,7 +143,8 @@ public enum AgentSkillRunner {
             minutesTldr: context.currentMinutes?.tldr,
             hint: hint,
             momentsSummary: momentsSummary,
-            handwritingSummary: handwritingSummary
+            handwritingSummary: handwritingSummary,
+            userProfile: userProfile
         )
         var budget = AgentBudget.skill(maxSteps: skill.maxSteps)
         if let remain = context.remainingWallClock {

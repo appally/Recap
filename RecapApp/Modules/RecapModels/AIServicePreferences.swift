@@ -4,9 +4,11 @@ import Foundation
 
 /// 大模型 / 云端 ASR 的计费与凭证来源。
 public enum AIServiceMode: String, CaseIterable, Sendable, Identifiable {
-    /// Recap 官方网关：订阅代付，用户无需自配 Key。
+    /// Recap 官方网关：Pro 订阅代付（云端 ASR + 强模型），用户无需自配 Key。
     case recapCloud
-    /// 自备密钥（BYOK）：Key 仅存本机 Keychain。
+    /// 免费体验：端侧 ASR + 平台 Flash LLM 滴灌（按次限量，无需配置）。
+    case freeTrial
+    /// 自备密钥（BYOK）：Key 仅存本机 Keychain（需解锁）。
     case byok
 
     public var id: String { rawValue }
@@ -14,13 +16,15 @@ public enum AIServiceMode: String, CaseIterable, Sendable, Identifiable {
     public var title: String {
         switch self {
         case .recapCloud: return "Recap 会员"
+        case .freeTrial: return "Recap 免费"
         case .byok: return "自备密钥"
         }
     }
 
     public var subtitle: String {
         switch self {
-        case .recapCloud: return "开通即用，无需配置 API Key"
+        case .recapCloud: return "Pro 订阅代付，云端高保真 + 强模型"
+        case .freeTrial: return "每月少量 AI 纪要，无需配置 API Key"
         case .byok: return "使用你自己的厂商密钥，费用自理"
         }
     }
@@ -30,7 +34,7 @@ public enum AIServiceMode: String, CaseIterable, Sendable, Identifiable {
     public static var current: AIServiceMode {
         get {
             guard let raw = UserDefaults.standard.string(forKey: defaultsKey),
-                  let value = AIServiceMode(rawValue: raw) else { return .byok }
+                  let value = AIServiceMode(rawValue: raw) else { return .freeTrial }
             return value
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey) }
@@ -192,6 +196,31 @@ public enum RecapAccountStore {
     public static func deleteAccountPreferences() {
         current = .guest
         AIServiceMode.current = .byok
+        appleTransactionID = nil
+    }
+
+    // MARK: - Apple 交易 ID（供云网关服务端验签；仅有效 Pro 时有值）
+
+    private static let appleTxnKey = "account.appleTransactionID"
+
+    /// 当前有效 Pro 订阅的 StoreKit2 Transaction.id。客户端发往 /v1/issue 的 X-Apple-Transaction-Id；
+    /// 后端凭此调 App Store Server API 权威校验（替代可伪造的 X-Recap-Pro 头）。
+    public static var appleTransactionID: String? {
+        get {
+            let v = UserDefaults.standard.string(forKey: appleTxnKey)
+            return (v?.isEmpty == false) ? v : nil
+        }
+        set { UserDefaults.standard.set(newValue, forKey: appleTxnKey) }
+    }
+
+    // MARK: - 设备 ID（免费档配额键：首次访问生成并持久化；卸载重置）
+
+    private static let deviceIDKey = "account.deviceID"
+    public static var deviceID: String {
+        if let stored = UserDefaults.standard.string(forKey: deviceIDKey), !stored.isEmpty { return stored }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: deviceIDKey)
+        return id
     }
 }
 
@@ -372,17 +401,17 @@ public enum AskPreferences {
 
 public enum RecapLegal {
     /// 上架前替换为真实托管地址；设置内另有摘要页可供审核查看。
-    public static let privacyURL = URL(string: "https://recap.app/privacy")!
-    public static let termsURL = URL(string: "https://recap.app/terms")!
-    public static let supportURL = URL(string: "https://recap.app/support")!
-    public static let supportEmail = "support@recap.app"
+    public static let privacyURL = URL(string: "https://recap.manymind.chat/privacy")!
+    public static let termsURL = URL(string: "https://recap.manymind.chat/terms")!
+    public static let supportURL = URL(string: "https://recap.manymind.chat/support")!
+    public static let supportEmail = "support@manymind.chat"
 
     public static let privacySummary = """
     Recap 会在你的设备上处理会议录音。选择端侧转写时，语音在本机完成识别，音频不会因转写上传。
 
     若你启用云端转写（如阿里 Fun-ASR、火山 Seed-ASR）或云端大模型，相关音频片段或转写文本将发送至你所选服务商，用于识别与纪要生成。使用「自备密钥」时，请求直接发往你配置的厂商，Recap 不中转密钥。
 
-    使用「Recap 会员」云服务时，请求经 Recap 网关转发至模型供应商，用于提供订阅内的转写与整理能力；我们会按隐私政策最小化留存必要的用量与账户信息。
+    使用「Recap 会员」云服务时，Recap 服务器仅签发一个短期访问凭证（数分钟有效），你的音频与请求由设备直接发送至供应商（阿里云），不经 Recap 服务器中转或存储；用于提供订阅内的转写与整理能力，并按隐私政策最小化留存必要的用量与账户信息。
 
     会议数据默认保存在本机。你可以随时在设置中清除本机数据或删除账户相关信息。我们不会将 API Key 写入日志或 iCloud 备份。
     """

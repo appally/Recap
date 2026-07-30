@@ -20,4 +20,13 @@ public enum ASRFeatureFlags {
         get { UserDefaults.standard.bool(forKey: vadGateKey) }
         set { UserDefaults.standard.set(newValue, forKey: vadGateKey) }
     }
+
+    private static let fluidDiarizerKey = "asr.fluidDiarizerEnabled"
+
+    /// 会后说话人分离引擎切换：开启则用 FluidAudio DiarizerManager（pyannote+WeSpeaker，路径 C·POC），
+    /// 否则回退 SpeakerKit。默认关——关闭时现有行为零变化，真机 POC 验证后再考虑默认开。
+    public static var fluidDiarizerEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: fluidDiarizerKey) }
+        set { UserDefaults.standard.set(newValue, forKey: fluidDiarizerKey) }
+    }
 }

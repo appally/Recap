@@ -32,13 +32,15 @@ public enum RecapSymbol {
     public static let play = "play.fill"
     public static let pause = "pause.fill"
     public static let scrollToLatest = "arrow.down"
+    /// 搜索（独立搜索界面入口）。
+    public static let search = "magnifyingglass"
 
     // 资料动作
     public static let scan = "doc.viewfinder"
     public static let paste = "doc.on.clipboard"
     public static let importFile = "square.and.arrow.down"
     public static let linkPrior = "link"
-    public static let research = "sparkles.magnifyingglass"
+    public static let research = "doc.text.magnifyingglass"
     public static let researchProgress = "arrow.triangle.2.circlepath"
     public static let researchDraft = "lightbulb"
 
@@ -50,11 +52,8 @@ public enum RecapSymbol {
     public static let roleNotes = "note.text"
     public static let roleLinked = "link"
 
-    // Ask / Skills
-    public static let skills = "wand.and.stars"
+    // Ask
     public static let web = "globe"
-    public static let revise = "pencil"
-    public static let newChat = "square.and.pencil"
     public static let send = "arrow.up"
 
     // 其它
@@ -63,6 +62,8 @@ public enum RecapSymbol {
     public static let account = "person"
     public static let person = "person"
     public static let info = "info.circle"
+    /// 设置 / 关于与合规入口（顶栏齿轮，区别于首页 account 的人像）。
+    public static let settings = "gearshape"
 }
 
 // MARK: - 顶栏 glass 圆钮（统一视觉）
@@ -77,7 +78,63 @@ public enum RecapToolbarIconMetrics {
     public static let dotOffset = CGSize(width: -7, height: 9)
 }
 
-/// 纪要顶栏圆形入口：资料 / Ask / 回听 / 分享 等共用。
+/// 顶栏图标的裸像：SF Symbol + 统一字重 / 墨色 + 44pt 圆形命中区，不带任何玻璃。
+/// 既供玻璃圆钮 `RecapToolbarIconLabel` 复用，也供胶囊内裸图标（如「分享·更多」共胶囊时）复用——
+/// 胶囊里再套玻璃圆会造成双像，故共胶囊段用裸像，玻璃统一由外层胶囊提供。
+public struct RecapToolbarIconImage: View {
+    public var systemName: String
+    public var emphasized: Bool
+
+    public init(_ systemName: String, emphasized: Bool = false) {
+        self.systemName = systemName
+        self.emphasized = emphasized
+    }
+
+    public var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: RecapToolbarIconMetrics.pointSize, weight: RecapToolbarIconMetrics.weight))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(
+                emphasized
+                    ? Color.recapCeladon
+                    : Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity)
+            )
+            .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)
+            .contentShape(Circle())
+    }
+}
+
+/// 顶栏圆形图标的统一标签 = `RecapToolbarIconImage` + Liquid Glass 圆（+ 可选角标）。
+/// 与底栏 `RecapGlassAuxIcon` 同材质；作为 `Button` / `ShareLink` / `Menu` 的 label 复用，
+/// 让首页 toolbar 项与纪要顶栏独立角图标同形 · 同材 · 同尺寸。
+public struct RecapToolbarIconLabel: View {
+    public var systemName: String
+    public var emphasized: Bool
+    public var hasBadge: Bool
+
+    public init(_ systemName: String, emphasized: Bool = false, hasBadge: Bool = false) {
+        self.systemName = systemName
+        self.emphasized = emphasized
+        self.hasBadge = hasBadge
+    }
+
+    public var body: some View {
+        ZStack(alignment: .topTrailing) {
+            RecapToolbarIconImage(systemName, emphasized: emphasized)
+                .glassEffect(.regular.interactive(), in: .circle)
+            if hasBadge {
+                Circle()
+                    .fill(Color.recapCinnabar)
+                    .frame(width: RecapToolbarIconMetrics.dot, height: RecapToolbarIconMetrics.dot)
+                    .offset(x: RecapToolbarIconMetrics.dotOffset.width,
+                            y: RecapToolbarIconMetrics.dotOffset.height)
+            }
+        }
+    }
+}
+
+/// 顶栏圆形入口按钮：资料 / Ask / 搜索 / 账户 等共用。视觉走 `RecapToolbarIconLabel`（Liquid Glass 圆）。
+/// 用于 toolbar 项时，配 `.sharedBackgroundVisibility(.hidden)` 关掉系统玻璃，只留此处自绘玻璃，避免双像。
 public struct RecapToolbarIcon: View {
     public var systemName: String
     public var emphasized: Bool = false
@@ -104,25 +161,7 @@ public struct RecapToolbarIcon: View {
 
     public var body: some View {
         Button(action: action) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: systemName)
-                    .font(.system(size: RecapToolbarIconMetrics.pointSize, weight: RecapToolbarIconMetrics.weight))
-                    .symbolRenderingMode(.monochrome)
-                    .foregroundStyle(
-                        emphasized
-                            ? Color.recapCeladon
-                            : Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity)
-                    )
-                    .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)
-                    .contentShape(Circle())
-                if hasBadge {
-                    Circle()
-                        .fill(Color.recapCinnabar)
-                        .frame(width: RecapToolbarIconMetrics.dot, height: RecapToolbarIconMetrics.dot)
-                        .offset(x: RecapToolbarIconMetrics.dotOffset.width,
-                                y: RecapToolbarIconMetrics.dotOffset.height)
-                }
-            }
+            RecapToolbarIconLabel(systemName, emphasized: emphasized, hasBadge: hasBadge)
         }
         .buttonStyle(RecapPressStyle())
         .accessibilityLabel(accessibilityLabel)

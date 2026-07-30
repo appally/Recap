@@ -40,6 +40,8 @@ public enum LLMPresets {
     public static let deepSeekBaseURL = "https://api.deepseek.com"
     public static let deepSeekFlash = "deepseek-v4-flash"   // 日常/会中问答/短任务
     public static let deepSeekPro = "deepseek-v4-pro"       // 纪要/待办/调研(thinking)
+    /// 平台云端免费档 Flash 模型（纪要滴灌；服务端按次计量）。
+    public static let cloudFlashModel = "qwen-turbo"
     /// 与 `LLMProviderTemplate.deepseek.keychainAccount` 对齐。
     public static let deepSeekKeychainAccount = "llm.deepseek.apikey"
 }
@@ -59,11 +61,6 @@ public enum ASRPresets {
     public static let funRealtimeModel = "fun-asr-realtime"
     /// 旧域名仍可用，用户只需 API Key，无需 WorkspaceId。
     public static let funRealtimeWSURL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"
-
-    // 火山 Seed-ASR（可选备）
-    public static let volcAppKeyAccount = "asr.volc.appKey"
-    public static let volcAccessKeyAccount = "asr.volc.accessKey"
-    public static let volcResourceId = "volc.seedasr.sauc.duration"
 }
 
 /// 集中式 os.Logger 入口：摘要 / LLM 链路用它记录关键节点，让"静默失败"可观测。

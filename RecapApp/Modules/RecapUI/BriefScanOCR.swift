@@ -21,6 +21,27 @@ enum BriefScanOCR {
         return String(joined.prefix(20_000))
     }
 
+    /// 手写识别专用：直接逐行 OCR，跳过 `recognizeDocument`。
+    ///
+    /// 文档结构识别（`RecognizeDocumentsRequest`）是为扫描件的表格/列表/段落设计的，
+    /// 对自由手写反而会扰乱行序与分组，降低识别率。手写只走逐行识别，
+    /// 复用与照片 OCR 相同的 `.accurate` + 中文/英文 语言配置（见 `recognizeLines`）。
+    /// 失败静默返回空串（与 `HandwritingRecognitionService` 的「空串终态」语义一致）。
+    static func extractHandwriting(from image: UIImage) async -> String {
+        guard let cgImage = image.cgImage else {
+            #if DEBUG
+            print("[HW-OCR] extractHandwriting: image.cgImage == nil")
+            #endif
+            return ""
+        }
+        let text = (try? await recognizeLines(cgImage)) ?? ""
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        #if DEBUG
+        print("[HW-OCR] recognizeLines result len=\(trimmed.count) preview='\(trimmed.prefix(40))'")
+        #endif
+        return trimmed
+    }
+
     private static func recognizeDocument(_ cgImage: CGImage) async throws -> String {
         let request = RecognizeDocumentsRequest()
         let observations = try await request.perform(on: cgImage)

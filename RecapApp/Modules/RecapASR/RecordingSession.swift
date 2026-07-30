@@ -36,6 +36,16 @@ public final class RecordingSession: ObservableObject {
         }
         await Task.yield()
 
+        // Pro 托管(recapCloud):先确保 Recap 云凭证就绪。ASR/LLM 都依赖后端签发的
+        // 阿里临时 token(≤30min);warmup 失败不阻断启动,回落链(端侧/BYOK)兜底。
+        if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
+            do {
+                try await RecapCredentialProvider.shared.ensureFresh()
+            } catch {
+                self.onError?("Recap 云凭证准备失败,将尝试其他引擎…")
+            }
+        }
+
         // 引擎解析放到非主线程，避免 Speech/Keychain 探测卡住首帧
         let resolved: any AsrEngine
         do {

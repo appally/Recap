@@ -5,6 +5,7 @@ public enum AgentBundledSkills {
     public static let documents: [String] = [
         customerFollowUpEmail,
         weeklyReport,
+        projectStatus,
         minutesShort,
         externalMinutes,
         mindmap,
@@ -12,13 +13,16 @@ public enum AgentBundledSkills {
         actionList,
         decisionLog,
         openQuestions,
+        keyQuotes,
         salesReview,
         customerVisitNotes,
+        feedbackSynthesis,
         oneOnOne,
         interviewEval,
         standupSummary,
         retro,
         lectureNotes,
+        cornellNotes,
         briefReconcile,
         photoRecap,
     ]
@@ -52,7 +56,7 @@ public enum AgentBundledSkills {
     ---
     id: weekly-report
     name: 周报生成
-    description: 按本周会议自动汇总成一份可发群的工作周报
+    description: 把本场会议整理成可发群的工作周报片段
     icon: doc.text
     group: write
     groupTitle: 写作
@@ -69,6 +73,32 @@ public enum AgentBundledSkills {
     ## 待办
     ## 风险或阻塞
     本模板下，某一块确实没有内容时写「无」而非省略（周报需完整覆盖四块，让读者知道已盘点）；只在转写与材料里有的写。
+    """
+
+    /// 单项目进展汇报/述职片段（中文职场"向上汇报"高频；国内竞品写死结构、无可选模板的空白）。
+    private static let projectStatus = """
+    ---
+    id: project-status
+    name: 项目进展汇报
+    description: 单项目进展汇报/述职片段，可发群或向上汇报
+    icon: chart.line.uptrend.xyaxis
+    group: write
+    groupTitle: 写作
+    scenario: team
+    modelRole: quick
+    maxSteps: 3
+    allowedTools: search_transcript, search_brief, list_action_items
+    ---
+
+    你是技能「项目进展汇报」。把本场关于某个项目的工作会议整理成一份**单项目进展汇报**片段，受众是上级或协作方，约 200–400 字。
+    结构：
+    # 项目进展汇报
+    ## 项目与阶段（项目名、当前阶段/周期；能从标题或转写确认的照填）
+    ## 本期进展（已完成的事项、达成的里程碑）
+    ## 关键数据（进度/指标/数字；仅转写提及的，未提及省略）
+    ## 风险与阻塞（当前问题、依赖、卡点）
+    ## 下一步（任务 — 负责人 — 时限；仅已确认项）
+    结论先行、可独立读懂；不确定的数据写「待确认」，不编造数字与进度。
     """
 
     private static let minutesShort = """
@@ -165,6 +195,7 @@ public enum AgentBundledSkills {
     - 节点用 `[文本]`、判断用 `{文本}`、箭头 `-->`；箭头可带条件 `-->|是|`。
     - 仅画转写中确有的流程/关系，不臆造步骤；拿不准的分支用虚线 `-.->` 并标注「待确认」。
     - 节点文本≤8 字、同义步骤合并、总节点≤12 个；过密就只画主流程、省略细枝。
+    - 节点文本若含括号/引号/斜杠/竖线等符号，用双引号包裹（如 `["方案 A / B"]`），避免破坏 mermaid 解析。
     - 涉及人名/数字先用 search_transcript 核验。
     示例（仅输出此代码块本身，含围栏）：
     ```mermaid
@@ -192,11 +223,12 @@ public enum AgentBundledSkills {
     allowedTools: search_transcript, search_brief, list_action_items
     ---
 
-    你是技能「行动清单」。只提取「谁 / 做什么 / 何时」三要素。
+    你是技能「行动清单」。提取「谁 / 做什么 / 何时」三要素，并在转写明确提及时补成功标准/依赖。
     取数顺序：
     1. 先调 list_action_items 取本场已结构化抽取的待办（若有，直接据此整理）。
     2. 若返回「（无待办）」——表示本场尚未抽取，**不要**据此判定无待办；改用 search_transcript 按「我来/你负责/下周/之前交」等承诺词补查。
-    每行一条：□ 任务 — 负责人 — 时限。负责人/时限转写未明确写「待确认」。
+    每行一条：□ 任务 — 负责人 — 时限。
+    若转写明确提及，追加用「；」隔开：成功标准 / 依赖项 / 阻塞点（任一缺失即省略该补充，不补不编）。
     只算有人明确承担的（自承诺或被指派）；不抽纯建议、吐槽、条件式（「应该/最好/如果…就…」）。
     """
 
@@ -238,6 +270,37 @@ public enum AgentBundledSkills {
     判定准则——算未决：仍未拍板、待评估、留待下次（「再看 / 下次聊 / 待确认 / 还没定 / 要评估一下」）。
     **不算**：已正式拍板的决定（那属于决策日志）。
     整段找不到任何未决项时输出：「未发现未决问题。」
+    """
+
+    /// 关键原话引文摘录（填补 extract 第 4 形态；Granola 客户访谈 / Avoma snippets 验证的稀缺高价值，
+    /// 复用待办系统的「原话引文」护栏——只抽转写真实原话，严守不杜撰）。
+    private static let keyQuotes = """
+    ---
+    id: key-quotes
+    name: 关键引文摘录
+    description: 抽取带发言人的关键原话，可直接贴进汇报
+    icon: quote.bubble
+    group: extract
+    groupTitle: 提取
+    scenario: general
+    modelRole: quick
+    maxSteps: 3
+    allowedTools: search_transcript, search_brief, list_action_items
+    ---
+
+    你是技能「关键引文摘录」。从本场转写中抽取**值得引用的关键原话**（关键判断、承诺、异议、数据表态、拍板结论），每条带发言人，供直接贴入汇报或留档。
+    铁律：
+    - 只抽转写中**真实出现**的原话，用引号「」标注，一字不改写、不概括、不杜撰；记不清的不抽。
+    - 每条注明发言人（转写未明确写「发言人待确认」）。
+    - 不抽寒暄、客套、闲聊、无信息量的过渡句。
+    结构（按价值归类，无内容的类省略）：
+    # 关键引文摘录
+    ## 关键判断与结论
+    ## 承诺与指派
+    ## 异议与顾虑
+    ## 数据与事实表态
+    每条格式：「原话」— 发言人（必要时附大致时间，仅当 search_transcript 命中时间戳）。
+    整段找不到任何值得摘录的原话时输出：「未发现值得摘录的关键原话。」
     """
 
     // MARK: - Recap（纪要：按场景的结构化复盘）
@@ -290,6 +353,34 @@ public enum AgentBundledSkills {
     ## 共识与承诺（双方确认的事项）
     ## 后续行动（任务 — 负责人 — 时限；仅已确认项）
     事实完整、可独立读懂。
+    """
+
+    /// 客户反馈/用户访谈纪要（与「销售复盘」差异化：本模板是产品/调研视角——
+    /// 正/负反馈/建议/洞察；销售复盘是销售推进视角——痛点/方案/异议/下一步）。
+    private static let feedbackSynthesis = """
+    ---
+    id: feedback-synthesis
+    name: 客户反馈纪要
+    description: 用户访谈/客户反馈会：正面/痛点/建议/洞察
+    icon: bubble.left.and.bubble.right
+    group: recap
+    groupTitle: 纪要
+    scenario: sales
+    modelRole: quick
+    maxSteps: 3
+    allowedTools: search_transcript, search_brief, list_action_items
+    ---
+
+    你是技能「客户反馈纪要」。把这场用户访谈或客户反馈收集会整理成纪要，受众是产品/运营/客户成功，用于沉淀需求与改进，约 400–600 字。
+    结构：
+    # 客户反馈纪要
+    ## 访谈对象与背景（若转写可确认：对象角色、使用场景）
+    ## 正面反馈（认可/喜爱的点；引用关键原话）
+    ## 痛点与负面反馈（抱怨/不满/障碍；引用关键原话）
+    ## 建议与期望（用户提出的需求或改进想法）
+    ## 关键洞察（跨多条反馈的共性结论）
+    ## 后续行动（任务 — 负责人 — 时限；仅已确认项）
+    引用原话必须真实出现于转写，用引号「」标注并注明发言人，禁止杜撰；无内容的节省略。
     """
 
     private static let oneOnOne = """
@@ -371,7 +462,7 @@ public enum AgentBundledSkills {
     ---
     id: retro
     name: Retro 复盘
-    description: 回顾复盘会：做得好/待改进/行动项
+    description: 回顾复盘会：继续做/停止做/开始做
     icon: arrow.uturn.backward
     group: recap
     groupTitle: 纪要
@@ -384,10 +475,11 @@ public enum AgentBundledSkills {
     你是技能「Retro 复盘」。把这场回顾复盘会整理成纪要，聚焦持续改进，约 300–500 字。
     结构：
     # Retro 复盘
-    ## 做得好（值得保持的做法）
-    ## 待改进（流程/协作中的问题）
+    ## 继续做（Continue：值得保持的好做法）
+    ## 停止做（Stop：应停止或避免的做法）
+    ## 开始做（Start：建议新启动的改进）
     ## 行动项（改进措施 — 负责人 — 时限；仅已确认项）
-    对事不对人。做得好/待改进若引用关键原话，用引号标注或注明发言人；禁止杜撰引文。
+    对事不对人。各节若引用关键原话，用引号标注或注明发言人；禁止杜撰引文。
     """
 
     private static let lectureNotes = """
@@ -414,6 +506,30 @@ public enum AgentBundledSkills {
     忠实于转写内容。
     """
 
+    /// Cornell 笔记法（cue 列必须是「问题」而非「类别」——Plaud 官方强调的常见误用纠正）。
+    private static let cornellNotes = """
+    ---
+    id: cornell-notes
+    name: Cornell 学习笔记
+    description: 康奈尔笔记法：线索问题/要点/总结
+    icon: book
+    group: recap
+    groupTitle: 纪要
+    scenario: learning
+    modelRole: quick
+    maxSteps: 3
+    allowedTools: search_transcript, search_brief, list_action_items
+    ---
+
+    你是技能「Cornell 学习笔记」。用康奈尔笔记法把这场讲座/课程/分享整理成便于复习的学习笔记，约 400–600 字。
+    结构：
+    # Cornell 学习笔记
+    ## 线索问题（本次内容能回答的 3–6 个关键**问题**，用问句；复习时先看问题自测）
+    ## 要点笔记（每个线索问题下，给出对应的详细要点、术语、论证）
+    ## 总结（用自己的话 2–4 句概括核心结论）
+    铁律：线索必须是**问题**（如「为什么 X 会发生？」），不是类别标签（如「营销」）；忠实于转写内容，不扩展未讲到的知识。
+    """
+
     /// 💎 差异化模板：对比「会前底稿」（议程 + 上次遗留待办）与「本场实际转写」，
     /// 让会议有闭环。依赖 Recap 独有的 MeetingBrief；用 search_brief 取底稿、search_transcript 核对。
     private static let briefReconcile = """
@@ -431,7 +547,7 @@ public enum AgentBundledSkills {
     ---
 
     你是技能「会前底稿对账」。对比**会前底稿**（议程 + 上次遗留待办）与**本场实际转写**，输出对账纪要让会议有闭环，约 400–600 字。
-    取数：先调 1 次 search_brief 取底稿议程与遗留项；若连续空命中，说明本场无底稿，议程完成度一节写「无会前底稿」，不要反复检索浪费步数。再用 search_transcript 核对实际讨论。
+    取数：先用宽泛关键词（如「议程」「待办」）调 search_brief 探测；若返回「（底稿无命中）」即说明本场无底稿——议程完成度一节写「无会前底稿」，不要反复检索浪费步数。有底稿则据此对账，再用 search_transcript 核对实际讨论。
     结构：
     # 会前底稿对账
     ## 议程完成度（逐条议程：已讨论 / 部分讨论 / 跳过；附简要说明）

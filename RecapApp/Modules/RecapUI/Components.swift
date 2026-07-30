@@ -2,6 +2,19 @@ import SwiftUI
 import UIKit
 import RecapModels
 
+// MARK: - 复制
+
+/// 通用「复制到剪贴板」菜单项：写入 UIPasteboard + 成功触感。
+/// 供 contextMenu / 溢出菜单复用——菜单关闭即以触感反馈，不另建 toast（契合克制取向）。
+func recapCopyButton(_ title: String = "复制", fragment: String) -> some View {
+    Button {
+        UIPasteboard.general.string = fragment
+        Haptics.notify(.success)
+    } label: {
+        Label(title, systemImage: "doc.on.doc")
+    }
+}
+
 // MARK: - 发言块
 
 public struct SpeakerBlockView: View {
@@ -11,20 +24,28 @@ public struct SpeakerBlockView: View {
     public var isListening: Bool
     /// LIVE：把收音波形挂在当前字幕行，而不是漂在底栏。
     public var showLiveMeter: Bool
+    /// 该块说话人是否为「我」（跨录音声纹身份匹配，Phase 3）：名字显示为朱砂「我」。
+    public var isMe: Bool
     public var onSeek: (() -> Void)?
+    /// 「标记为我自己」入口（仅 REVIEW 转写传入）：点说话人名触发，经声纹同意门后登记。
+    public var onMarkMe: (() -> Void)?
 
     public init(
         block: TranscriptBlock,
         isCurrent: Bool,
         isListening: Bool = false,
         showLiveMeter: Bool = false,
-        onSeek: (() -> Void)? = nil
+        isMe: Bool = false,
+        onSeek: (() -> Void)? = nil,
+        onMarkMe: (() -> Void)? = nil
     ) {
         self.block = block
         self.isCurrent = isCurrent
         self.isListening = isListening
         self.showLiveMeter = showLiveMeter
+        self.isMe = isMe
         self.onSeek = onSeek
+        self.onMarkMe = onMarkMe
     }
 
     public var body: some View {
@@ -37,10 +58,6 @@ public struct SpeakerBlockView: View {
             VStack(alignment: .leading, spacing: 6) {
                 header
                 polishedLine
-                // 未润色时 polished == raw，只显示一行，避免粗体与正文重复
-                if hasDistinctRaw {
-                    rawLine
-                }
             }
         }
         .padding(.vertical, Spacing.md)
@@ -63,7 +80,8 @@ public struct SpeakerBlockView: View {
         return Color.clear
     }
 
-    private var hasDistinctRaw: Bool {
+    /// 是否已润色成稿（polished 与原话不同）：润色后用更重字型呈现优化稿。
+    private var isPolished: Bool {
         let raw = block.raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let polished = block.polished.trimmingCharacters(in: .whitespacesAndNewlines)
         return !raw.isEmpty && raw != polished
@@ -84,14 +102,29 @@ public struct SpeakerBlockView: View {
                 LiveDots()
                     .accessibilityHidden(true)
             } else if showsSpeakerIdentity {
-                Text(block.speaker.name)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.recapTea)
+                speakerNameView
             }
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(headerAccessibilityLabel)
+    }
+
+    /// 说话人名：isMe 时显示朱砂「我」；onMarkMe 提供时（REVIEW）可点按标记。
+    @ViewBuilder
+    private var speakerNameView: some View {
+        let display = isMe ? "我" : block.speaker.name
+        let styled = Text(display)
+            .font(.system(size: 13, weight: isMe ? .bold : .medium))
+            .tracking(-0.1)
+            .foregroundStyle(isMe ? Color.recapCinnabar : Color.recapTea)
+        if let onMarkMe {
+            Button(action: onMarkMe) { styled }
+                .buttonStyle(.plain)
+                .accessibilityHint(isMe ? "已标记为我自己" : "标记为我自己")
+        } else {
+            styled
+        }
     }
 
     @ViewBuilder
@@ -118,7 +151,7 @@ public struct SpeakerBlockView: View {
         if showLiveMeter {
             parts.append("正在收音")
         } else if showsSpeakerIdentity {
-            parts.append(block.speaker.name)
+            parts.append(isMe ? "我" : block.speaker.name)
         }
         return parts.joined(separator: "，")
     }
@@ -133,20 +166,13 @@ public struct SpeakerBlockView: View {
                     + Text("▎").foregroundStyle(Color.recapCinnabar.opacity(0.7))
             }
         }
-        // 单行流式字幕用 medium；有润色/原话双行时润色行用 semibold 拉开层级
-        .font(hasDistinctRaw ? .recapPolished : .recapTranscript)
-        .lineSpacing(5)
+        // 已润色成稿用 semibold 拉开权重；未润色原话用 medium
+        .font(isPolished ? .recapPolished : .recapTranscript)
+        .lineSpacing(5.5)
         .tracking(-0.15)
         .foregroundStyle(Color.recapInk.opacity(showLiveMeter || isCurrent ? 1 : 0.92))
     }
 
-    private var rawLine: some View {
-        Text(block.raw)
-            .font(.recapRaw)
-            .lineSpacing(4)
-            .tracking(-0.1)
-            .foregroundStyle(Color.recapTea)
-    }
 }
 
 // MARK: - TL;DR
@@ -157,9 +183,10 @@ public struct TldrCard: View {
 
     public var body: some View {
         Text(text)
-            .font(.system(size: 16, weight: .regular))
+            .font(.recapTldr)
+            .tracking(-0.15)
             .foregroundStyle(Color.recapInk)
-            .lineSpacing(6)
+            .lineSpacing(6.5)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
@@ -212,9 +239,7 @@ public struct ActionItemCard: View {
                 HStack(alignment: .top, spacing: Spacing.sm) {
                     title
                     Spacer(minLength: 0)
-                    if onResearchFollowUp != nil {
-                        researchMenu
-                    }
+                    actionCluster
                 }
                 if let quote = item.evidenceQuote?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -224,16 +249,6 @@ public struct ActionItemCard: View {
                         .foregroundStyle(Color.recapTea)
                         .lineLimit(2)
                 }
-                if hasResearchDraft {
-                    Button {
-                        onOpenResearchDraft?()
-                    } label: {
-                        Text("已生成调研草稿 ▸")
-                            .font(.recapMeta.weight(.semibold))
-                            .foregroundStyle(Color.recapCeladon)
-                    }
-                    .buttonStyle(RecapPressStyle())
-                }
                 metaRow
             }
         }
@@ -241,6 +256,9 @@ public struct ActionItemCard: View {
         .background(cardFill)
         .overlay(cardBorder)
         .opacity(item.isLowConfidence ? 0.65 : 1.0)
+        .contextMenu {
+            recapCopyButton("复制待办", fragment: item.clipboardLine)
+        }
         .alert("分发失败", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
@@ -251,52 +269,101 @@ public struct ActionItemCard: View {
         }
     }
 
+    /// 卡片右上动作簇：🔔 加入提醒事项 · ✦ AI 调研。
+    /// 两个「对外/对内」同级动作并列可见，不再一藏一露（原 ellipsis 菜单只装 AI 一项）。
     @ViewBuilder
-    private var researchMenu: some View {
-        Menu {
-            Button {
-                onResearchFollowUp?()
-            } label: {
-                Label("让 AI 跟进", systemImage: RecapSymbol.research)
+    private var actionCluster: some View {
+        HStack(spacing: Spacing.xs) {
+            dispatchButton
+            if onResearchFollowUp != nil {
+                researchButton
             }
-            if hasResearchInProgress {
-                Button {
-                    onOpenResearchProgress?()
-                } label: {
-                    Label("查看调研进度", systemImage: RecapSymbol.researchProgress)
-                }
-            }
-            if hasResearchDraft {
-                Button {
-                    onOpenResearchDraft?()
-                } label: {
-                    Label("查看调研草稿", systemImage: RecapSymbol.researchDraft)
-                }
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.recapTea)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(RecapPressStyle())
     }
 
-    /// 已真实分发后可勾选完成；其它状态不可用勾选伪装「已发」。
+    /// 🔔 写入系统提醒事项（EventKit）。已写入→实心铃铛作状态指示（不重复分发）；
+    /// 低置信 / 已完成态不显示，保持原有 gating（先确认、done 不再分发）。
+    @ViewBuilder
+    private var dispatchButton: some View {
+        if item.isLowConfidence || item.status == .done {
+            EmptyView()
+        } else if item.isReallyDispatched {
+            Image(systemName: "bell.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.recapCeladon)
+                .frame(width: 28, height: 28)
+                .accessibilityLabel("已加入提醒事项")
+        } else {
+            // 脏数据（dispatched 但无 EventKit id）用赭石提示「需重新加入」。
+            Button {
+                Task { await dispatch() }
+            } label: {
+                Image(systemName: isDispatching ? "bell.badge" : "bell")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(item.status == .dispatched ? Color.recapOchre : Color.recapTea)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(RecapPressStyle())
+            .disabled(isDispatching)
+            .accessibilityLabel(item.status == .dispatched ? "需重新加入提醒事项" : "加入提醒事项")
+            .accessibilityHint("写入系统提醒事项 App")
+        }
+    }
+
+    /// ✦ AI 调研：单入口按状态智能路由——
+    /// 有草稿→看草稿（celadon + 小圆点提示「有结果待看」，取代原文字链）·
+    /// 进行中→看进度 · 否则→开始调研。
+    @ViewBuilder
+    private var researchButton: some View {
+        Button {
+            if hasResearchDraft {
+                onOpenResearchDraft?()
+            } else if hasResearchInProgress {
+                onOpenResearchProgress?()
+            } else {
+                onResearchFollowUp?()
+            }
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: RecapSymbol.research)
+                    .font(.system(size: 14, weight: .semibold))
+                    // 待发起=AI 青色（与 AskBar/AgentInvokeSheet 同谱），明示「这是 AI 入口」、与中性 🔔 拉开；
+                    // 已有草稿=celadon(墨)+小圆点，状态对比清晰。
+                    .foregroundStyle(hasResearchDraft ? Color.recapCeladon : Color.recapAITeal)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+                if hasResearchDraft {
+                    Circle()
+                        .fill(Color.recapCeladon)
+                        .frame(width: 6, height: 6)
+                        .offset(x: -2, y: 2)
+                }
+            }
+        }
+        .buttonStyle(RecapPressStyle())
+        .accessibilityLabel(hasResearchDraft ? "查看调研草稿" : (hasResearchInProgress ? "查看调研进度" : "AI 调研"))
+        .accessibilityHint("让 AI 拆解并拟定方案")
+    }
+
+    /// 完成开关：解耦于「分发」——任何已确认 / 已分发待办都可就地勾完成，无需先写入提醒事项。
+    /// 低置信待办仍需先「确认」（保持 HITL：系统拿不准是不是真待办时，先让人确认存在）。
+    /// 取消完成回到先前开放态：曾分发→dispatched，否则→confirmed（不重弹「确认」）。
     private var checkbox: some View {
         Button {
-            guard item.isReallyDispatched || item.status == .done else { return }
             Haptics.selection()
             withAnimation(.recapSoft) {
-                item.status = (item.status == .done) ? .dispatched : .done
+                if item.status == .done {
+                    item.status = (item.externalReminderId != nil) ? .dispatched : .confirmed
+                } else {
+                    item.status = .done
+                }
             }
         } label: {
             ZStack {
                 Circle()
                     .strokeBorder(
-                        (item.isReallyDispatched || item.status == .done)
-                            ? Color.recapCeladon : Color.recapTea.opacity(0.5),
+                        item.status == .done ? Color.recapCeladon : Color.recapTea,
                         lineWidth: 1.8
                     )
                     .frame(width: 22, height: 22)
@@ -313,7 +380,9 @@ public struct ActionItemCard: View {
             }
         }
         .buttonStyle(RecapPressStyle())
-        .disabled(!(item.isReallyDispatched || item.status == .done))
+        .disabled(item.isLowConfidence)
+        .accessibilityLabel("完成")
+        .accessibilityValue(item.status == .done ? "已完成" : "未完成")
     }
 
     private var title: some View {
@@ -328,47 +397,13 @@ public struct ActionItemCard: View {
             assigneeBadge
             if item.isLowConfidence {
                 confirmButton
-            } else {
-                if let due = item.dueText {
-                    Text(due)
-                        .font(.recapMeta)
-                        .foregroundStyle(item.dueUrgent ? Color.recapCinnabar : Color.recapTea)
-                }
-                dispatchStatus
+            } else if let due = item.dueText {
+                Text(due)
+                    .font(.recapMeta)
+                    .foregroundStyle(item.dueUrgent ? Color.recapCinnabar : Color.recapTea)
             }
             Spacer(minLength: Spacing.sm)
             sourcePill
-        }
-    }
-
-    @ViewBuilder private var dispatchStatus: some View {
-        if item.isReallyDispatched {
-            Text("已发 提醒事项")
-                .font(.recapMeta)
-                .foregroundStyle(Color.recapCeladon)
-        } else if item.status == .dispatched {
-            // 脏数据：曾标 dispatched 但无 EventKit id
-            Button {
-                Task { await dispatch() }
-            } label: {
-                Text(isDispatching ? "分发中…" : "需重新分发 ▸")
-                    .font(.recapMeta.weight(.semibold))
-                    .foregroundStyle(Color.recapOchre)
-            }
-            .buttonStyle(RecapPressStyle())
-            .disabled(isDispatching)
-        } else if item.status == .done {
-            EmptyView()
-        } else {
-            Button {
-                Task { await dispatch() }
-            } label: {
-                Text(isDispatching ? "分发中…" : "分发 ▸")
-                    .font(.recapMeta.weight(.semibold))
-                    .foregroundStyle(Color.recapCeladon)
-            }
-            .buttonStyle(RecapPressStyle())
-            .disabled(isDispatching)
         }
     }
 
@@ -665,10 +700,12 @@ public struct AvatarGroup: View {
 
 public struct RecordingButton: View {
     public let action: () -> Void
-    /// 仅空状态 / 引导时脉冲；有列表后静止，反馈交给按压。
+    /// 仅空状态轻呼吸引导；有列表后静止，反馈交给按压。
     public var allowsPulse: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulse = false
+
+    private let size: CGFloat = 64
 
     public init(allowsPulse: Bool = false, action: @escaping () -> Void) {
         self.allowsPulse = allowsPulse
@@ -680,22 +717,15 @@ public struct RecordingButton: View {
             Haptics.impact(.medium)
             action()
         } label: {
-            ZStack {
-                Circle()
-                    .fill(Color(light: 0x111614, dark: 0xF0F2EE))
-                    .frame(width: 62, height: 62)
-                    .overlay(
-                        Circle()
-                            .stroke(Color(light: 0xFFFFFF, dark: 0x2C3036).opacity(0.2), lineWidth: 1)
-                    )
-
-                Image(systemName: "sparkle")
-                    .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(Color(light: 0xFFFFFF, dark: 0x111614))
-            }
-            .scaleEffect(reduceMotion || !allowsPulse ? 1 : (pulse ? 1.04 : 1.0))
-            .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: 6)
-            .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
+            Image(systemName: "waveform")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(Color.recapCinnabar, in: Circle())
+                .scaleEffect(reduceMotion || !allowsPulse ? 1 : (pulse ? 1.05 : 1.0))
+                // 两层柔影撑起浮感：近影给重量，远影给环境光。
+                .shadow(color: .black.opacity(0.10), radius: 4, x: 0, y: 2)
+                .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 7)
         }
         .buttonStyle(RecapPressStyle())
         .accessibilityLabel("新会议")
@@ -713,7 +743,7 @@ public struct RecordingButton: View {
             return
         }
         guard !pulse else { return }
-        withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
+        withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
             pulse = true
         }
     }
