@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import RecapModels
 import RecapLLM
+import RecapASR
 
 /// 把一次技能执行落库为 `AIOutput(.note)` 的 UI 层写入器。
 ///
@@ -20,8 +21,16 @@ public enum SkillNoteWriter {
         context: AgentToolContext,
         meeting: Meeting,
         modelContext: ModelContext,
+        preferredId: UUID,
+        meSpeakerLabel: String? = nil,
         onProgress: (@Sendable (AgentSkillRunProgress) -> Void)? = nil
     ) async throws -> UUID {
+        // 「你的发言」身份：调用方（picker）可显式指定（覆盖 SpeakerKit 等 voiceprintId 为 nil 的场景）；
+        // 缺省时自动解析（标记我优先·单发言人退化·多未标记 nil→模板诚实降级）。
+        let resolvedLabel = meSpeakerLabel ?? AgentSkillRunner.meSpeakerLabel(
+            speakers: meeting.speakers,
+            meVoiceprintId: VoiceprintGallery.shared.meVoiceprintId
+        )
         let outcome = try await AgentSkillRunner.runDetailed(
             skill: skill,
             context: context,
@@ -29,6 +38,7 @@ public enum SkillNoteWriter {
             momentsSummary: meeting.momentsPromptSummary,
             handwritingSummary: meeting.handwritingPromptSummary,
             userProfile: UserProfile.current,
+            meSpeakerLabel: resolvedLabel,
             onProgress: onProgress
         )
 
@@ -56,6 +66,7 @@ public enum SkillNoteWriter {
         }
 
         let output = AIOutput(
+            id: preferredId,
             kind: .note,
             payloadData: payloadData,
             modelId: outcome.modelId,

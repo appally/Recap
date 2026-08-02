@@ -55,6 +55,7 @@ final class BenchViewModel: ObservableObject {
         switch k {
         case .fluidSenseVoice: return FluidAudioEngine(kind: .fluidSenseVoice)
         case .fluidParaformer: return FluidAudioEngine(kind: .fluidParaformer)
+        case .fluidDiarizer:   return DiarizerEngine()
         case .speechAnalyzer:
             guard #available(iOS 26, *) else { return nil }
             return SpeechAnalyzerEngine()
@@ -150,14 +151,20 @@ struct ResultRow: View {
     }
 
     private var grid: some View {
-        let items: [(String, String)] = [
+        var items: [(String, String)] = [
             ("RTFx", String(format: "%.1f×", record.rtfx)),
             ("内存峰值", String(format: "%.0f MB", record.peakMemoryMB)),
             ("热档", record.peakThermal.label),
             ("掉电", record.batteryDeltaPct >= 0 ? String(format: "%.1f%%", record.batteryDeltaPct) : "—"),
-            ("首字延迟", record.firstTokenLatencyMs.map { String(format: "%.0f ms", $0) } ?? "—"),
-            ("分块", "\(record.chunkCount)")
         ]
+        if let sc = record.speakerCount {
+            // 分离引擎：显示说话人数 / 分离段（替代 ASR 的首字延迟 / 分块）。
+            items.append(("说话人", "\(sc)"))
+            items.append(("分离段", "\(record.segmentCount ?? 0)"))
+        } else {
+            items.append(("首字延迟", record.firstTokenLatencyMs.map { String(format: "%.0f ms", $0) } ?? "—"))
+            items.append(("分块", "\(record.chunkCount)"))
+        }
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 3),
                          alignment: .leading, spacing: 4) {
             ForEach(items, id: \.0) { kv in

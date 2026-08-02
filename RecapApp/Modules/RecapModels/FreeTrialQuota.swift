@@ -37,4 +37,15 @@ public enum FreeTrialQuota {
         let cur = UserDefaults.standard.integer(forKey: countKeyPrefix + m)
         UserDefaults.standard.set(cur + 1, forKey: countKeyPrefix + m)
     }
+
+    /// 与服务端 FREE_PER_ISSUE_SECONDS 对齐(免费档每次签发固定扣额)。
+    public static let perIssueSeconds = 120
+
+    /// 网关签发返回 remaining_seconds 后,把本地计数锚定到服务端权威值(纠正漂移/跨设备)。
+    public static func syncFromServerSeconds(_ remainingSeconds: Int) {
+        let used = max(0, monthlyLimit - remainingSeconds / perIssueSeconds)
+        let m = currentMonth()
+        UserDefaults.standard.set(m, forKey: monthKey)
+        UserDefaults.standard.set(used, forKey: countKeyPrefix + m)
+    }
 }

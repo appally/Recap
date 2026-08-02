@@ -27,7 +27,7 @@ enum MomentOwnershipDiagnostics {
         var flaggedRows: [String] { inconsistentRows + orphanRows }
 
         var plainText: String {
-            var lines: [String] = ["Recap 时刻归属体检",
+            var lines: [String] = ["时刻归属体检",
                                    "total=\(total) orphan=\(orphan) inconsistent=\(inconsistent) noPath=\(noPath)"]
             if !inconsistentRows.isEmpty {
                 lines.append(""); lines.append("[inconsistent] path ≠ relation")

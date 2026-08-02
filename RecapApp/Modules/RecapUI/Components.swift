@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Network
 import RecapModels
 
 // MARK: - 复制
@@ -65,18 +66,19 @@ public struct SpeakerBlockView: View {
         .padding(.horizontal, isListening ? Spacing.sm : 0)
         .background(
             isListening
-                ? Color.recapCeladon.opacity(0.06)
+                ? Color.recapInk.opacity(0.06)
                 : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .opacity(block.isFinal ? 1.0 : (showLiveMeter ? 0.92 : 0.62))
+        .animation(.recapSoft, value: block.isFinal)
         .animation(.recapSoft, value: isListening)
         .animation(.recapSoft, value: showLiveMeter)
     }
 
     private var railColor: Color {
         if isCurrent || showLiveMeter { return Color.recapCinnabar }
-        if isListening { return Color.recapCeladon }
+        if isListening { return Color.recapInk }
         return Color.clear
     }
 
@@ -115,8 +117,8 @@ public struct SpeakerBlockView: View {
     private var speakerNameView: some View {
         let display = isMe ? "我" : block.speaker.name
         let styled = Text(display)
-            .font(.system(size: 13, weight: isMe ? .bold : .medium))
-            .tracking(-0.1)
+            .font(.recapMeta.weight(isMe ? .bold : .medium))
+            .tracking(Tracking.body)
             .foregroundStyle(isMe ? Color.recapCinnabar : Color.recapTea)
         if let onMarkMe {
             Button(action: onMarkMe) { styled }
@@ -132,14 +134,14 @@ public struct SpeakerBlockView: View {
         if let onSeek {
             Button(action: onSeek) {
                 Text(block.timestamp)
-                    .font(.system(size: 13, weight: .regular, design: .monospaced))
-                    .foregroundStyle(isListening ? Color.recapCeladon : Color.recapTea)
+                    .font(.recapMono)
+                    .foregroundStyle(isListening ? Color.recapInk : Color.recapTea)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("从 \(block.timestamp) 回听")
         } else {
             Text(block.timestamp)
-                .font(.system(size: 13, weight: .regular, design: .monospaced))
+                .font(.recapMono)
                 .foregroundStyle(
                     showLiveMeter ? Color.recapCinnabar.opacity(0.85) : Color.recapTea.opacity(0.85)
                 )
@@ -168,8 +170,8 @@ public struct SpeakerBlockView: View {
         }
         // 已润色成稿用 semibold 拉开权重；未润色原话用 medium
         .font(isPolished ? .recapPolished : .recapTranscript)
-        .lineSpacing(5.5)
-        .tracking(-0.15)
+        .lineSpacing(Leading.body)
+        .tracking(Tracking.body)
         .foregroundStyle(Color.recapInk.opacity(showLiveMeter || isCurrent ? 1 : 0.92))
     }
 
@@ -183,10 +185,10 @@ public struct TldrCard: View {
 
     public var body: some View {
         Text(text)
-            .font(.recapTldr)
-            .tracking(-0.15)
+            .font(.recapBody)
+            .tracking(Tracking.body)
             .foregroundStyle(Color.recapInk)
-            .lineSpacing(6.5)
+            .lineSpacing(Leading.relaxed)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
@@ -209,6 +211,8 @@ public struct ActionItemCard: View {
 
     @State private var isDispatching = false
     @State private var errorMessage: String?
+    @State private var dispatchAccessDenied = false
+    @Environment(\.openURL) private var openURL
 
     public init(
         item: ActionItem,
@@ -260,10 +264,19 @@ public struct ActionItemCard: View {
             recapCopyButton("复制待办", fragment: item.clipboardLine)
         }
         .alert("分发失败", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
+            get: { errorMessage != nil || dispatchAccessDenied },
+            set: { if !$0 { errorMessage = nil; dispatchAccessDenied = false } }
         )) {
-            Button("好", role: .cancel) { errorMessage = nil }
+            if dispatchAccessDenied {
+                Button("打开设置") {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        openURL(url)
+                    }
+                }
+                Button("好", role: .cancel) { errorMessage = nil; dispatchAccessDenied = false }
+            } else {
+                Button("好", role: .cancel) { errorMessage = nil }
+            }
         } message: {
             Text(errorMessage ?? "")
         }
@@ -290,7 +303,7 @@ public struct ActionItemCard: View {
         } else if item.isReallyDispatched {
             Image(systemName: "bell.fill")
                 .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.recapCeladon)
+                .foregroundStyle(Color.recapInk)
                 .frame(width: 28, height: 28)
                 .accessibilityLabel("已加入提醒事项")
         } else {
@@ -328,14 +341,14 @@ public struct ActionItemCard: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: RecapSymbol.research)
                     .font(.system(size: 14, weight: .semibold))
-                    // 待发起=AI 青色（与 AskBar/AgentInvokeSheet 同谱），明示「这是 AI 入口」、与中性 🔔 拉开；
+                    // 待发起=中性茶色（与 🔔 一致，保持优雅简洁、统一设计语言不杂色）；
                     // 已有草稿=celadon(墨)+小圆点，状态对比清晰。
-                    .foregroundStyle(hasResearchDraft ? Color.recapCeladon : Color.recapAITeal)
+                    .foregroundStyle(hasResearchDraft ? Color.recapInk : Color.recapTea)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
                 if hasResearchDraft {
                     Circle()
-                        .fill(Color.recapCeladon)
+                        .fill(Color.recapInk)
                         .frame(width: 6, height: 6)
                         .offset(x: -2, y: 2)
                 }
@@ -363,13 +376,13 @@ public struct ActionItemCard: View {
             ZStack {
                 Circle()
                     .strokeBorder(
-                        item.status == .done ? Color.recapCeladon : Color.recapTea,
+                        item.status == .done ? Color.recapInk : Color.recapTea,
                         lineWidth: 1.8
                     )
                     .frame(width: 22, height: 22)
                 if item.status == .done {
                     Circle()
-                        .fill(Color.recapCeladon)
+                        .fill(Color.recapInk)
                         .frame(width: 22, height: 22)
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .bold))
@@ -387,7 +400,7 @@ public struct ActionItemCard: View {
 
     private var title: some View {
         Text(item.task)
-            .font(.recapTask)
+            .font(.recapBodyS.weight(.medium))
             .foregroundStyle(Color.recapInk)
             .strikethrough(item.status == .done, color: Color.recapTea)
     }
@@ -415,7 +428,7 @@ public struct ActionItemCard: View {
                 ZStack {
                     Circle().fill(Color.speaker(colorIndex).opacity(0.18))
                     Text(initial)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.recapCaption)
                         .foregroundStyle(Color.speaker(colorIndex))
                 }
                 .frame(width: 20, height: 20)
@@ -443,7 +456,7 @@ public struct ActionItemCard: View {
                 Image(systemName: "arrow.up.right")
                     .font(.system(size: 9, weight: .semibold))
                 Text(time)
-                    .font(.recapTimestamp)
+                    .font(.recapMono)
             }
             .foregroundStyle(Color.recapTea)
             .padding(.horizontal, Spacing.sm)
@@ -476,7 +489,13 @@ public struct ActionItemCard: View {
             }
             Haptics.notify(.success)
         } catch {
-            errorMessage = error.localizedDescription
+            if case ReminderDispatchError.accessDenied = error {
+                dispatchAccessDenied = true
+                errorMessage = "请在系统设置中允许「纪要」访问提醒事项，然后返回重试"
+            } else {
+                dispatchAccessDenied = false
+                errorMessage = error.localizedDescription
+            }
             Haptics.notify(.error)
         }
     }
@@ -505,7 +524,7 @@ public struct AgentPresenceBar: View {
     public var body: some View {
         HStack(spacing: Spacing.sm) {
             Circle()
-                .fill(Color.recapCeladon.opacity(0.85))
+                .fill(Color.recapInk.opacity(0.85))
                 .frame(width: 6, height: 6)
             Text("已记 \(todoCount) 条待办")
                 .font(.recapMeta)
@@ -514,6 +533,78 @@ public struct AgentPresenceBar: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("已记 \(todoCount) 条待办")
+    }
+}
+
+// MARK: - 方言口音提示（LIVE 顶部常驻：端侧误识方言时告知「会后自动云端精转」）
+
+/// LIVE 中端侧 SpeechAnalyzer 误识方言为乱码时，顶部常驻告知用户：实时字幕可能不准、
+/// 结束后会自动云端重转。仅 `.speechAnalyzer` 路径触发（云端直出已支持方言）。
+/// 状态驱动常驻（非 timer auto-dismiss），由 `MeetingSession.liveDialectSuspected` 驱动出入。
+public struct DialectHintBar: View {
+    public init() {}
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("检测到可能的方言口音")
+                .font(.recapMeta.weight(.medium))
+                .foregroundStyle(Color.recapOchre)
+            Text("实时字幕可能不准，结束后会自动用云端重新精转")
+                .font(.recapCaption)
+                .foregroundStyle(Color.recapTea)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.sm)
+        .background(Color.recapOchre.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - 网络连通性（云端能力可用性提示）
+
+/// 全局网络连通监测（NWPathMonitor）。云端转写/纪要/Ask/搜索依赖网络；端侧 ASR 离线可用。
+/// 单例：首次访问即启动，App 生命周期常驻。@Published.isConnected 供 UI 观察。
+@MainActor
+public final class ConnectivityMonitor: ObservableObject {
+    public static let shared = ConnectivityMonitor()
+    @Published public private(set) var isConnected: Bool = true
+
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "com.recap.connectivity", qos: .utility)
+
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            let connected = path.status == .satisfied
+            Task { @MainActor in self?.isConnected = connected }
+        }
+        monitor.start(queue: queue)
+    }
+}
+
+/// 离线横幅：未联网时提示「云端能力暂不可用」（非阻断，端侧录音仍可保存）。
+/// 已联网时渲染空视图（0 高度，作 safeAreaInset 时不占位）。
+public struct OfflineBanner: View {
+    @ObservedObject private var monitor = ConnectivityMonitor.shared
+
+    public init() {}
+
+    public var body: some View {
+        Group {
+            if !monitor.isConnected {
+                HStack(spacing: Spacing.xs) {
+                    Image(systemName: "wifi.slash")
+                    Text("未联网·云端转写与纪要暂不可用，录音仍可保存")
+                        .lineLimit(1)
+                }
+                .font(.recapCaption)
+                .foregroundStyle(Color.recapPaper)
+                .padding(.horizontal, Spacing.md)
+                .padding(.vertical, Spacing.xs)
+                .background(Color.recapInk.opacity(0.92), in: Capsule())
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .animation(.recapSoft, value: monitor.isConnected)
     }
 }
 
@@ -653,8 +744,7 @@ public struct LiveSonicCapsule: View {
             }
 
             Text(elapsedTimeText)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .monospacedDigit()
+                .font(.recapMono)
                 .foregroundStyle(isPaused ? Color.recapTea : Color.recapInk)
         }
         .padding(.horizontal, 13)
@@ -687,7 +777,7 @@ public struct AvatarGroup: View {
                     Circle().fill(Color.speaker(m.1).opacity(0.2))
                     Circle().strokeBorder(Color.recapBg, lineWidth: 2)
                     Text(m.0)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.recapCaption)
                         .foregroundStyle(Color.speaker(m.1))
                 }
                 .frame(width: 22, height: 22)

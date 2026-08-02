@@ -142,4 +142,35 @@ final class TemplateRecommenderTests: XCTestCase {
         )
         XCTAssertTrue(recs.contains { $0.id == "cornell-notes" })
     }
+
+    func testBoostsSpeechCoachOnSingleOrZeroSpeaker() throws {
+        // 单/零发言人（语音备忘、独白、单人录制）→ 推发言复盘（自我视角：唯一发言人即你）。
+        let recsOne = TemplateRecommender.recommend(
+            title: "会议·7/30 09:00",
+            durationSeconds: 600,
+            speakerCount: 1,
+            hasMoments: false,
+            catalog: try catalog()
+        )
+        XCTAssertTrue(recsOne.contains { $0.id == "speech-coach" }, "单发言人 → 推发言复盘")
+
+        let recsZero = TemplateRecommender.recommend(
+            title: "会议·7/30 09:00",
+            durationSeconds: 600,
+            speakerCount: 0,
+            hasMoments: false,
+            catalog: try catalog()
+        )
+        XCTAssertTrue(recsZero.contains { $0.id == "speech-coach" }, "零发言人 → 推发言复盘")
+    }
+
+    func testScenarioInferenceByTitle() {
+        XCTAssertEqual(TemplateScenario.infer(title: "客户拜访·ACME"), .sales)
+        XCTAssertEqual(TemplateScenario.infer(title: "前端工程师面试"), .hiring)
+        XCTAssertEqual(TemplateScenario.infer(title: "SwiftUI 讲座"), .learning)
+        XCTAssertEqual(TemplateScenario.infer(title: "本周周会"), .team)
+        XCTAssertEqual(TemplateScenario.infer(title: "1on1 with 小明"), .team)
+        XCTAssertEqual(TemplateScenario.infer(title: "随便聊聊"), .general)
+        XCTAssertEqual(TemplateScenario.infer(title: ""), .general)
+    }
 }

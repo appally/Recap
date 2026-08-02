@@ -224,4 +224,43 @@ final class AskMarkdownRendererTests: XCTestCase {
         let decoded = (try? JSONSerialization.jsonObject(with: data) as? [String])?.first
         XCTAssertEqual(decoded, raw, "JSON 解码应还原原文：\(quoted)")
     }
+
+    // MARK: - mermaid 源码归一化（防御层：剥误嵌套围栏 + 修剪空行，不改语法）
+
+    /// 模型误嵌套的额外围栏（双围栏）须被剥掉，否则 mermaid.render 解析失败。
+    func testMermaidNormalizerStripsDoubleFence() {
+        let doubleFenced = "```mermaid\ngraph TD\nA-->B\n```"
+        XCTAssertEqual(MermaidSourceNormalizer.normalize(doubleFenced), "graph TD\nA-->B")
+    }
+
+    /// 首尾空行 + 尾随围栏须一并修剪。
+    func testMermaidNormalizerTrimsFenceAndBlanks() {
+        let src = "\n\n```mermaid\ngraph TD\nA-->B\n```\n\n"
+        XCTAssertEqual(MermaidSourceNormalizer.normalize(src), "graph TD\nA-->B")
+    }
+
+    /// 合法源码（无围栏）原样保留，仅修剪首尾空行；内部缩进不动。
+    func testMermaidNormalizerPreservesValidSource() {
+        let src = "graph TD\n  A[\"需求评审\"] --> B{\"方案可行?\"}"
+        XCTAssertEqual(MermaidSourceNormalizer.normalize(src),
+                       "graph TD\n  A[\"需求评审\"] --> B{\"方案可行?\"}")
+    }
+
+    /// 多重嵌套围栏须被全部剥掉。
+    func testMermaidNormalizerStripsNestedFences() {
+        let src = "```mermaid\n```\ngraph TD\nA-->B"
+        XCTAssertEqual(MermaidSourceNormalizer.normalize(src), "graph TD\nA-->B")
+    }
+
+    /// 波浪号围栏同样识别。
+    func testMermaidNormalizerHandlesTildeFence() {
+        let src = "~~~mermaid\ngraph TD\nA-->B\n~~~"
+        XCTAssertEqual(MermaidSourceNormalizer.normalize(src), "graph TD\nA-->B")
+    }
+
+    /// 空输入安全返回空。
+    func testMermaidNormalizerEmptySafe() {
+        XCTAssertEqual(MermaidSourceNormalizer.normalize(""), "")
+        XCTAssertEqual(MermaidSourceNormalizer.normalize("\n  \n"), "")
+    }
 }

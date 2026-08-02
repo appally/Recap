@@ -30,6 +30,12 @@ public struct AgentInvokeSheet: View {
     /// 底栏发问时为 true：sheet 一出现即自动发送 initialInput、不抢焦点（让用户直接看回答）。
     /// 从「问 Recap」按钮进来时 prefill 为空，自动落到聚焦分支。
     public let autoSendInitial: Bool
+    /// 调研入口：从待办卡 ✦ 进来时携带的目标；onAppear 自动发起一轮深度调研。
+    public let initialResearchItem: ActionItemSnapshot?
+    /// 深链：从待办卡 / switcher 打开已完成草稿时，滚动定位到该消息。
+    public let initialScrollToMessageID: UUID?
+    /// 草稿气泡「结构化视图」chip 回调：呈现 ResearchDraftSheet。
+    public var onOpenDraft: ((UUID) -> Void)?
     @Binding public var isPresented: Bool
 
     @State private var model: AskConversationModel
@@ -40,6 +46,8 @@ public struct AgentInvokeSheet: View {
     @State private var didLoadL2 = false
     /// auto-send once 守卫：防止 onAppear 多次触发重复发送。
     @State private var didAutoSend = false
+    /// 深链滚动 once 守卫。
+    @State private var didScrollToInitial = false
     @FocusState private var inputFocused: Bool
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -64,6 +72,9 @@ public struct AgentInvokeSheet: View {
         onMinutesUpdated: ((MeetingSummary) -> Void)? = nil,
         initialInput: String = "",
         autoSendInitial: Bool = false,
+        initialResearchItem: ActionItemSnapshot? = nil,
+        initialScrollToMessageID: UUID? = nil,
+        onOpenDraft: ((UUID) -> Void)? = nil,
         isPresented: Binding<Bool>
     ) {
         self.meeting = meeting
@@ -91,6 +102,9 @@ public struct AgentInvokeSheet: View {
         self.onMinutesUpdated = onMinutesUpdated
         self.initialInput = initialInput
         self.autoSendInitial = autoSendInitial
+        self.initialResearchItem = initialResearchItem
+        self.initialScrollToMessageID = initialScrollToMessageID
+        self.onOpenDraft = onOpenDraft
         self._isPresented = isPresented
         self._model = State(initialValue: AskConversationModel(
             phase: phase,
@@ -242,13 +256,37 @@ public struct AgentInvokeSheet: View {
             grabber
             topBar
             conversation
+
+            if model.isResearchStreaming {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.recapTea)
+                    Text("深度调研进行中，请保持应用在前台；下拉可最小化，调研在后台继续。")
+                        .font(.recapCaption)
+                        .foregroundStyle(Color.recapInk.opacity(0.7))
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, Spacing.xl)
+                .padding(.vertical, Spacing.sm)
+                .background(Color.recapInk.opacity(0.03))
+            }
+
             bottomDock
         }
         .background(Color.recapBg.ignoresSafeArea(.container, edges: .bottom))
         .onAppear {
             model.onMinutesUpdated = onMinutesUpdated
             syncLiveContext()
-            if autoSendInitial, !initialInput.isEmpty, !didAutoSend {
+            if !didAutoSend, autoSendInitial, let item = initialResearchItem {
+                // 调研入口（待办卡 ✦）：attach 完即发起一轮深度调研，对话窗直接进入 streaming。
+                if let meeting {
+                    model.attach(meeting: meeting, modelContext: modelContext)
+                }
+                didAutoSend = true
+                model.startResearch(actionItem: item)
+            } else if autoSendInitial, !initialInput.isEmpty, !didAutoSend {
                 // 底栏发问：attach 完即发送（依赖 modelContext/meeting，必须同步）——
                 // 让对话窗一出现就「有问有答」，不再需要手工重输重发。
                 if let meeting {
@@ -339,15 +377,34 @@ public struct AgentInvokeSheet: View {
         GlassEffectContainer(spacing: Spacing.sm) {
             HStack(spacing: Spacing.sm) {
                 HStack(spacing: Spacing.sm) {
-                    Text("问 Recap")
-                        .font(.system(size: 17, weight: .semibold, design: .default))
+                    Text("提问")
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.recapInk)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
-                .accessibilityLabel("问 Recap")
+                .accessibilityLabel("提问")
 
                 Spacer(minLength: 0)
+
+                if model.isResearchStreaming {
+                    Button {
+                        model.cancelResearch()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("停止")
+                                .font(.recapMeta.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.recapInk)
+                        .padding(.horizontal, Spacing.sm + 2)
+                        .padding(.vertical, 5)
+                        .background(Color.recapInk.opacity(0.06), in: Capsule())
+                    }
+                    .buttonStyle(RecapPressStyle())
+                    .accessibilityLabel("停止调研")
+                }
 
                 Menu {
                     Toggle(isOn: Binding(
@@ -400,17 +457,17 @@ public struct AgentInvokeSheet: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Spacing.lg) {
-                    if model.messages.isEmpty {
+                    if model.displayMessages.isEmpty {
                         emptyState
                             .padding(.top, Spacing.xl)
                             .transition(.opacity)
                     } else {
-                        ForEach(model.messages) { message in
+                        ForEach(model.displayMessages) { message in
                             messageRow(message)
                                 .id(message.id)
                                 .transition(.opacity)
                         }
-                        if model.isThinking, model.messages.last?.role == .user {
+                        if model.isThinking, model.displayMessages.last?.role == .user {
                             thinkingRow
                                 .id("thinking")
                                 .transition(.opacity)
@@ -435,7 +492,7 @@ public struct AgentInvokeSheet: View {
                 .frame(height: 28)
                 .allowsHitTesting(false)
             }
-            .onChange(of: model.messages) { _, new in
+            .onChange(of: model.displayMessages) { _, new in
                 guard let last = new.last else { return }
                 if last.isStreaming {
                     proxy.scrollTo(last.id, anchor: .bottom)
@@ -444,6 +501,13 @@ public struct AgentInvokeSheet: View {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
+            }
+            .onChange(of: model.messages.count) { _, _ in
+                // 深链：从待办卡 / switcher 打开已完成草稿时，会话载入后一次性定位到该消息。
+                guard !didScrollToInitial, let id = initialScrollToMessageID,
+                      !model.messages.isEmpty else { return }
+                didScrollToInitial = true
+                proxy.scrollTo(id, anchor: .center)
             }
             .onChange(of: model.isThinking) { _, thinking in
                 guard thinking else { return }
@@ -457,7 +521,7 @@ public struct AgentInvokeSheet: View {
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: Spacing.xl) {
             Text(emptyHeadline)
-                .font(.system(size: 18, weight: .semibold, design: .default))
+                .font(.recapTitleS)
                 .foregroundStyle(Color.recapInk)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -467,7 +531,7 @@ public struct AgentInvokeSheet: View {
                     Button { ask(chip) } label: {
                         HStack(spacing: 8) {
                             Text(chip)
-                                .font(.system(size: 14, weight: .medium, design: .default))
+                                .font(.recapBodyS.weight(.medium))
                                 .foregroundStyle(Color.recapInk.opacity(0.88))
                                 .multilineTextAlignment(.leading)
                                 .lineLimit(2)
@@ -501,8 +565,8 @@ public struct AgentInvokeSheet: View {
             HStack {
                 Spacer(minLength: 56)
                 Text(message.text)
-                    .font(.system(size: 15, weight: .regular, design: .default))
-                    .lineSpacing(3.5)
+                    .font(.recapBodyS)
+                    .lineSpacing(Leading.body)
                     .foregroundStyle(Color.recapInk)
                     .textSelection(.enabled)
                     .padding(.horizontal, 14)
@@ -529,7 +593,7 @@ public struct AgentInvokeSheet: View {
 
                 if message.isDegraded, !message.isStreaming {
                     Text("已降级为本地问答")
-                        .font(.system(size: 11, weight: .medium, design: .default))
+                        .font(.recapCaption.weight(.medium))
                         .foregroundStyle(Color.recapTea)
                 }
 
@@ -539,6 +603,28 @@ public struct AgentInvokeSheet: View {
 
                 if !message.citations.isEmpty, !message.isStreaming {
                     citationRow(message.citations)
+                }
+
+                if let draftID = message.draftOutputId, !message.isStreaming {
+                    Button {
+                        onOpenDraft?(draftID)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: RecapSymbol.research)
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("结构化视图")
+                                .font(.recapMeta.weight(.medium))
+                        }
+                        .foregroundStyle(Color.recapInk.opacity(0.85))
+                        .padding(.horizontal, Spacing.sm + 2)
+                        .padding(.vertical, 5)
+                        .background(Color.recapInk.opacity(0.04), in: Capsule())
+                        .overlay(
+                            Capsule().stroke(Color.recapInk.opacity(0.08), lineWidth: 0.5)
+                        )
+                    }
+                    .buttonStyle(RecapPressStyle())
+                    .accessibilityLabel("查看结构化调研草稿")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -564,11 +650,11 @@ public struct AgentInvokeSheet: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.recapInk.opacity(0.65))
                     Text("思考与工具调用 (\(message.steps.count) 步)")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.recapMeta.weight(.medium))
                         .foregroundStyle(Color.recapInk.opacity(0.85))
                     if let timeStr {
                         Text("· \(timeStr)")
-                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .font(.recapMono)
                             .foregroundStyle(Color.recapTea)
                     }
                     Image(systemName: "chevron.down")
@@ -599,7 +685,7 @@ public struct AgentInvokeSheet: View {
                 ForEach(citations) { cite in
                     Button { handleCitationTap(cite) } label: {
                         Text(citationLabel(cite))
-                            .font(.system(size: 11, weight: .medium, design: .default))
+                            .font(.recapCaption.weight(.medium))
                             .foregroundStyle(citationTint(cite.kind))
                             .padding(.horizontal, Spacing.sm)
                             .padding(.vertical, 4)
@@ -630,7 +716,7 @@ public struct AgentInvokeSheet: View {
         switch kind {
         case .transcript: return Color.recapCinnabar
         case .brief: return Color.recapOchre
-        case .web: return Color.recapCeladon
+        case .web: return Color.recapInk
         }
     }
 
@@ -668,7 +754,7 @@ public struct AgentInvokeSheet: View {
             Text(MinutesPipelineSmoke.canRunMinutesPipeline
                  ? (model.statusLabel ?? "正在深度思考与推理…")
                  : "未配置可用密钥")
-                .font(.system(size: 13, weight: .medium, design: .default))
+                .font(.recapMeta.weight(.medium))
                 .foregroundStyle(Color.recapInk.opacity(0.9))
             Spacer(minLength: 0)
         }
@@ -697,12 +783,12 @@ public struct AgentInvokeSheet: View {
     private func approvalSheet(_ approval: AgentApprovalRequest) -> some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
             Text("确认操作")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.recapTitleS)
             Text(approval.humanSummary)
-                .font(.system(size: 15))
+                .font(.recapBodyS)
                 .foregroundStyle(Color.recapInk)
             Text(approval.toolName)
-                .font(.system(size: 12))
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
             HStack {
                 Button("拒绝") {
@@ -714,7 +800,7 @@ public struct AgentInvokeSheet: View {
                     Task { await model.approve(approval.id, approved: true) }
                 }
                 .buttonStyle(RecapPressStyle())
-                .foregroundStyle(Color.recapCeladon)
+                .foregroundStyle(Color.recapInk)
             }
         }
         .padding(Spacing.xl)
@@ -759,7 +845,7 @@ public struct AgentInvokeSheet: View {
                     axis: .vertical
                 )
                 .textFieldStyle(.plain)
-                .font(.recapRaw)
+                .font(.recapBodyS)
                 .foregroundStyle(Color.recapInk)
                 .lineLimit(inputLineLimit)
                 .frame(height: inputFieldHeight, alignment: .center)
@@ -834,7 +920,7 @@ private struct TypingDots: View {
             HStack(spacing: 5) {
                 ForEach(0..<3, id: \.self) { i in
                     Circle()
-                        .fill(Color.recapCeladon)
+                        .fill(Color.recapInk)
                         .frame(width: 5, height: 5)
                         .opacity(reduceMotion ? 0.5 : Self.waveOpacity(t: t, index: i))
                 }
@@ -935,14 +1021,14 @@ private struct AgentStepTimelineView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .center, spacing: 6) {
                             Text(step.name)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .font(.recapMono)
                                 .foregroundStyle(Color.recapInk)
 
                             Spacer(minLength: 0)
 
                             if let ms = step.durationMs, ms > 0 {
                                 Text(ms >= 1000 ? String(format: "%.1fs", Double(ms) / 1000) : "\(ms)ms")
-                                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                                    .font(.recapMono)
                                     .foregroundStyle(Color.recapTea)
                             }
 
@@ -953,14 +1039,14 @@ private struct AgentStepTimelineView: View {
 
                         if !step.summary.isEmpty {
                             Text(step.summary)
-                                .font(.system(size: 11, weight: .regular))
+                                .font(.recapCaption.weight(.regular))
                                 .foregroundStyle(Color.recapTea)
                                 .lineLimit(3)
                         }
 
                         if let err = step.errorText, !err.isEmpty {
                             Text(err)
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.recapCaption.weight(.medium))
                                 .foregroundStyle(Color.recapCinnabar)
                         }
                     }
@@ -1010,7 +1096,7 @@ private struct AgentStepTimelineView: View {
         }()
 
         Text(label)
-            .font(.system(size: 10, weight: .medium))
+            .font(.recapCaption.weight(.medium))
             .foregroundStyle(fg)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)

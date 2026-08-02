@@ -90,6 +90,21 @@ public final class VoiceprintGallery: @unchecked Sendable {
         UserDefaults.standard.set(voiceprintId, forKey: Self.meIdKey)
     }
 
+    /// 主动登记用的稳定 meId（跨重录一致；区别于会议分离产出的引擎 id）。
+    private static let meStableId = "recap.me"
+
+    /// 用提取的声纹 embedding 主动登记「我」（proactive enrollment，不依赖会议分离结果）。
+    /// 复用稳定 meId，重复录入即覆盖更新。须在 `VoiceprintConsent.granted` 后调用（声纹=生物特征）。
+    /// embedding 经 FluidAudio `Speaker` init 内部 L2 归一化。
+    @discardableResult
+    public func enrollAsMe(embedding: [Float], name: String = "我") -> String {
+        let speaker = Speaker(id: Self.meStableId, name: name,
+                              currentEmbedding: embedding, isPermanent: true)
+        upsert(speaker)
+        UserDefaults.standard.set(Self.meStableId, forKey: Self.meIdKey)
+        return Self.meStableId
+    }
+
     /// 清空全部声纹 + 「我」标记（= 撤回声纹数据）。配合 ``VoiceprintConsent/reset()`` 撤回同意。
     public func clearAll() {
         lock.lock()

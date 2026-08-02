@@ -29,7 +29,8 @@ public enum SpeakerAligner {
                 startSeconds: seg.startSeconds,
                 endSeconds: ends[seg.id] ?? max(seg.endSeconds, seg.startSeconds + 1),
                 speakerId: seg.speakerId,
-                text: seg.text
+                text: seg.text,
+                confidence: seg.confidence
             )
         }
     }
@@ -49,7 +50,8 @@ public enum SpeakerAligner {
                 startSeconds: seg.startSeconds,
                 endSeconds: seg.endSeconds,
                 speakerId: "\(speakerIdPrefix)\(idx)",
-                text: seg.text
+                text: seg.text,
+                confidence: seg.confidence
             )
         }
     }

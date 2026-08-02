@@ -37,12 +37,12 @@ public struct MinutesDiffSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.lg) {
                     Text("确认纪要修改")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.recapInk)
 
                     if changedDiffs.isEmpty {
                         Text("没有可预览的改动。")
-                            .font(.system(size: 15))
+                            .font(.recapBodyS)
                             .foregroundStyle(Color.recapTea)
                     } else {
                         ForEach(Array(changedDiffs.enumerated()), id: \.element.id) { index, diff in
@@ -72,7 +72,7 @@ public struct MinutesDiffSheet: View {
                         dismiss()
                     }
                     .buttonStyle(RecapPressStyle())
-                    .foregroundStyle(Color.recapCeladon)
+                    .foregroundStyle(Color.recapInk)
                     .disabled(selected.isEmpty)
                 }
                 .padding(.horizontal, Spacing.xl)
@@ -105,33 +105,33 @@ public struct MinutesDiffSheet: View {
             )) {
                 HStack {
                     Text(diff.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.recapHeading)
                     if !diff.evidenceBacked {
                         Text("⚠︎ 无转写依据")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.recapCaption)
                             .foregroundStyle(Color.recapOchre)
                     }
                 }
             }
-            .tint(Color.recapCeladon)
+            .tint(Color.recapInk)
 
             if let note = diff.note, !note.isEmpty {
                 Text(note)
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(diff.before.enumerated()), id: \.offset) { _, line in
                     Text(line)
-                        .font(.system(size: 13))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapCinnabar.opacity(0.85))
                         .strikethrough()
                 }
                 ForEach(Array(diff.after.enumerated()), id: \.offset) { _, line in
                     Text(line)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.recapCeladon)
+                        .font(.recapMeta)
+                        .foregroundStyle(Color.recapInk)
                 }
             }
         }

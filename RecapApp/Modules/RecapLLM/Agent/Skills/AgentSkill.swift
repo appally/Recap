@@ -15,6 +15,9 @@ public struct AgentSkill: Sendable, Hashable, Identifiable {
     public let allowedTools: Set<String>
     public let modelRole: AgentModelRole
     public let maxSteps: Int
+    /// 采样温度覆盖（nil = 用 AgentKernel 默认 0.2）。结构化产出技能（如 mermaid-flowchart）
+    /// 可设 0.0 以降低语法飘移。仅是请求参数，不进 system prompt，不影响 prompt caching。
+    public let temperature: Double?
 
     public init(
         id: String,
@@ -27,7 +30,8 @@ public struct AgentSkill: Sendable, Hashable, Identifiable {
         systemPrompt: String,
         allowedTools: Set<String>,
         modelRole: AgentModelRole = .quick,
-        maxSteps: Int = 3
+        maxSteps: Int = 3,
+        temperature: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -40,6 +44,7 @@ public struct AgentSkill: Sendable, Hashable, Identifiable {
         self.allowedTools = allowedTools
         self.modelRole = modelRole
         self.maxSteps = min(max(maxSteps, 1), 6)
+        self.temperature = temperature
     }
 }
 

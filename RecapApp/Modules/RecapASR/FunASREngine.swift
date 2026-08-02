@@ -18,6 +18,8 @@ public actor FunASREngine: AsrEngine {
     private let wsURL = URL(string: ASRPresets.funRealtimeWSURL)!
     private var session: URLSession?
     private var apiKey: String = ""
+    /// 当前会话使用的 ASR 模型(从 cred.asrModel 拿,BYOK 路径用 ASRPresets.funRealtimeModel 兜底)。runTask 协议用。
+    private var model: String = ""
 
     private var wsBox: WSTaskBox?
     private var recvTask: Task<Void, Never>?
@@ -35,6 +37,11 @@ public actor FunASREngine: AsrEngine {
     private var taskStarted = false
     private var taskFinished = false
     private var taskFailedMessage: String?
+    /// task-started / task-failed 信号等待方：waitUntilTaskStarted 挂起于此，事件到达即唤醒，
+    /// 替代 50ms 轮询。Never：超时/失败由调用方在返回后查 taskStarted/taskFailedMessage 决断（保持现有控制流）。
+    private var taskStartCont: CheckedContinuation<Void, Never>?
+    /// waitUntilTaskStarted 的超时 Task：事件先到则取消之，避免旧超时误唤醒新会话的等待方。
+    private var taskStartTimeoutTask: Task<Void, Never>?
     private var finalizedSegments: [TranscriptSegment] = []
     /// sentence_id → finalizedSegments 下标（同句多次 end 时 upsert）
     private var sentenceIndex: [Int: Int] = [:]
@@ -49,17 +56,23 @@ public actor FunASREngine: AsrEngine {
 
     public func prepare() async throws {
         let key: String
-        if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
-            // Pro 托管:用 Recap 网关签发的阿里临时 token(不碰 BYOK key)。
-            // 协议/喂流零改动——仅 key 来源不同。缓存由 RecordingSession.start 的 warmup 预热。
-            key = try RecapCredentialProvider.shared.current().token
+        let cred: RecapIssuedCredential?
+        if RecapCredentialProvider.shared.isActiveCloud {
+            // 托管凭证(Pro 或 免费档):用 Recap 网关签发的阿里临时 token(不碰 BYOK key)。
+            // 模型名走服务端下发(cred.asrModel);改服务端 wrangler vars + deploy,30min 内全网续签生效。
+            // 缓存由 RecordingSession.start 的 warmup 预热。
+            let c = try RecapCredentialProvider.shared.current()
+            cred = c
+            key = c.token
         } else {
+            cred = nil
             guard let k = KeychainStore.get(ASRPresets.funApiKeyAccount), !k.isEmpty else {
                 throw FunASRError.missingCredentials
             }
             key = k
         }
         apiKey = key
+        model = cred?.asrModel ?? ASRPresets.funRealtimeModel
         session = URLSession(configuration: .default)
     }
 
@@ -99,7 +112,17 @@ public actor FunASREngine: AsrEngine {
 
         recvTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let msg = try? await box.task.receive() else { break }
+                let msg: URLSessionWebSocketTask.Message
+                do {
+                    msg = try await box.task.receive()
+                } catch {
+                    // 主动 stop 走 recvTask.cancel()（Task.isCancelled=true）或 shouldStopReceiving；
+                    // 此处仅处理「仍在流式却收到失败」的意外断连（典型：Pro 托管 token 30min 过期
+                    // 被服务端断开，或网络瞬断）。上报清晰可操作错误；音频仍独立落盘，结束后可重转恢复。
+                    if Task.isCancelled { break }
+                    await self?.handleUnexpectedDisconnect()
+                    break
+                }
                 switch msg {
                 case .string(let text):
                     await self?.handleServerText(text)
@@ -114,7 +137,7 @@ public actor FunASREngine: AsrEngine {
             }
         }
 
-        try await sendJSON(FunASRProtocol.runTask(taskId: String(taskId)), box: box)
+        try await sendJSON(FunASRProtocol.runTask(taskId: String(taskId), model: self.model), box: box)
         try await waitUntilTaskStarted(timeoutSeconds: 8)
 
         if let failed = taskFailedMessage {
@@ -177,7 +200,13 @@ public actor FunASREngine: AsrEngine {
             pendingBeforeStart.append(contentsOf: int16)
             return
         }
-        pcmBuffer.append(int16)
+        if pcmBuffer.append(int16) {
+            // 弱网/断连致 sender 落后超缓冲上限（丢最旧 ~2min）：不静默哑录。
+            // 设 sendError 让后续 feed() 抛出、经 onError 上报；音频仍由 AudioRecorder 独立落盘，会后可重转。
+            let msg = "网络较慢，实时字幕已暂停；录音仍在保存，结束后可重转"
+            if taskFailedMessage == nil { taskFailedMessage = msg }
+            sendError = FunASRError.sendFailed(msg)
+        }
         wakeCont?.yield(())   // 唤醒后台 sender 排空整包；feed 永不 await 网络
     }
 
@@ -195,8 +224,11 @@ public actor FunASREngine: AsrEngine {
         }
 
         if let recvTask {
+            // recvTask 收尾超时压到 4s（原 8s）：这是 stop 收尾的主导延迟项。
+            // 4s 足够服务端正常回传末段，且短于 RecordingSession.stop 的 withTimeout(5s)，
+            // 让收尾在超时窗内干净返回 TranscribeResult，而非超时丢弃 + release 串行等待叠加。
             let timeout = Task {
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .seconds(4))
                 recvTask.cancel()
             }
             await recvTask.value
@@ -232,6 +264,156 @@ public actor FunASREngine: AsrEngine {
         return result
     }
 
+    // MARK: - 长音频批处理（会后重转专用）
+
+    /// 会后重转覆盖协议默认实现（单会话流式）：长音频按静音边界切段、多会话转写、
+    /// 时间戳偏移拼接。规避单 WS 长会话的 token 过期 / 无 keepalive / 内存峰值风险。
+    public func transcribe(samples: [Float],
+                           sampleRate: Double,
+                           onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult {
+        guard !samples.isEmpty else {
+            return TranscribeResult(segments: [], firstTokenLatencyMs: nil, chunkCount: 0)
+        }
+        var opts = AudioSilenceChunker.Options()
+        opts.targetSeconds = 90
+        opts.maxSeconds = 120
+        let chunks = AudioSilenceChunker.plan(samples: samples, sampleRate: sampleRate, options: opts)
+        guard !chunks.isEmpty else {
+            return TranscribeResult(segments: [], firstTokenLatencyMs: nil, chunkCount: 0)
+        }
+
+        var allSegments: [TranscriptSegment] = []
+        var firstTokenMs: Double?
+        for (i, chunk) in chunks.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            // Pro 托管 token ≤30min：段间续签，避免长会议重转跨过期
+            try await refreshApiKeyIfNeeded()
+            let chunkSamples = Array(samples[chunk])
+            let offsetSeconds = Double(chunk.lowerBound) / sampleRate
+            do {
+                let chunkResult = try await transcribeChunkWithRetry(
+                    chunkSamples, sampleRate: sampleRate, offsetSeconds: offsetSeconds, onPartial: onPartial
+                )
+                if firstTokenMs == nil { firstTokenMs = chunkResult.firstTokenLatencyMs }
+                allSegments.append(contentsOf: chunkResult.segments)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // 单段重试耗尽：跳过该段，保留已转部分（部分结果优于全失败）
+                RecapLog.session.error("dialect-retranscribe chunk \(i)/\(chunks.count) failed after retries, skipped: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return TranscribeResult(segments: allSegments, firstTokenLatencyMs: firstTokenMs, chunkCount: allSegments.count)
+    }
+
+    /// mmap 流式重转：长音频按静音边界切段，每段仅物化单段 `[Float]`（~5.8MB/90s）喂 WS，
+    /// 避免整文件常驻（60min≈230MB，峰值 460MB）。逻辑与 `transcribe(samples:)` 等价，仅数据源换 Data。
+    public func transcribe(audioData: Data,
+                           sampleRate: Double,
+                           onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult {
+        guard audioData.count >= MemoryLayout<Float>.size else {
+            return TranscribeResult(segments: [], firstTokenLatencyMs: nil, chunkCount: 0)
+        }
+        var opts = AudioSilenceChunker.Options()
+        opts.targetSeconds = 90
+        opts.maxSeconds = 120
+        let chunks = AudioSilenceChunker.plan(audioData: audioData, sampleRate: sampleRate, options: opts)
+        guard !chunks.isEmpty else {
+            return TranscribeResult(segments: [], firstTokenLatencyMs: nil, chunkCount: 0)
+        }
+
+        let bytesPerSample = MemoryLayout<Float>.size
+        var allSegments: [TranscriptSegment] = []
+        var firstTokenMs: Double?
+        for (i, chunk) in chunks.enumerated() {
+            if Task.isCancelled { throw CancellationError() }
+            // Pro 托管 token ≤30min：段间续签，避免长会议重转跨过期
+            try await refreshApiKeyIfNeeded()
+            // 仅物化本段样本（mmap 切片 -> 小 [Float]），不全量常驻
+            let byteRange = (chunk.lowerBound * bytesPerSample)..<(chunk.upperBound * bytesPerSample)
+            let chunkSamples: [Float] = audioData[byteRange].withUnsafeBytes { raw in
+                Array(raw.bindMemory(to: Float.self))
+            }
+            let offsetSeconds = Double(chunk.lowerBound) / sampleRate
+            do {
+                let chunkResult = try await transcribeChunkWithRetry(
+                    chunkSamples, sampleRate: sampleRate, offsetSeconds: offsetSeconds, onPartial: onPartial
+                )
+                if firstTokenMs == nil { firstTokenMs = chunkResult.firstTokenLatencyMs }
+                allSegments.append(contentsOf: chunkResult.segments)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // 单段重试耗尽：跳过该段，保留已转部分（部分结果优于全失败）
+                RecapLog.session.error("dialect-retranscribe chunk \(i)/\(chunks.count) failed after retries, skipped: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return TranscribeResult(segments: allSegments, firstTokenLatencyMs: firstTokenMs, chunkCount: allSegments.count)
+    }
+
+    /// 单段（一个 WS 会话）转写并施加时间偏移；失败重试最多 3 次。
+    private func transcribeChunkWithRetry(_ chunkSamples: [Float],
+                                          sampleRate: Double,
+                                          offsetSeconds: Double,
+                                          onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult {
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                if Task.isCancelled { throw CancellationError() }
+                let events = try await startStreaming(sampleRate: sampleRate)
+                let consumer = Task {
+                    for await event in events {
+                        if case .partial(let text) = event { onPartial?(text) }
+                    }
+                }
+                do {
+                    defer { consumer.cancel() }
+                    if !chunkSamples.isEmpty {
+                        try await feed(chunkSamples)
+                    }
+                    let result = try await stopStreaming()
+                    await consumer.value
+                    let offsetSegs = result.segments.map { seg in
+                        TranscriptSegment(
+                            id: seg.id,
+                            startSeconds: seg.startSeconds + offsetSeconds,
+                            endSeconds: seg.endSeconds + offsetSeconds,
+                            speakerId: seg.speakerId,
+                            text: seg.text
+                        )
+                    }
+                    return TranscribeResult(
+                        segments: offsetSegs,
+                        firstTokenLatencyMs: result.firstTokenLatencyMs,
+                        chunkCount: offsetSegs.count
+                    )
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                lastError = error
+                // 失败后显式清旧连接：feed/stop 失败时 isStreaming 仍为 true，旧 WS + recvTask 残留。
+                // 此处不等 graceful stopStreaming（会吃 recvTask 4s 超时），直接 teardown 立即干净，
+                // 下一轮 startStreaming 直通而非先 stop。teardownStream 幂等，已 teardown 亦安全。
+                teardownStream(cancelWS: true)
+                // 指数退避 + 抖动：400/800/1600ms + [0,200) 抖动，封顶 4s。比线性 500/1000/1500
+                // 对持续网络故障更友好，抖动避免多客户端同步重试风暴。
+                let baseDelay = 400.0
+                let jitter = Double.random(in: 0..<200)
+                let backoff = min(baseDelay * pow(2.0, Double(attempt)) + jitter, 4000)
+                try? await Task.sleep(for: .milliseconds(backoff))
+            }
+        }
+        throw lastError ?? FunASRError.sendFailed("chunk transcribe failed after retries")
+    }
+
+    /// 托管 token ≤30min：段间续签阿里临时 token(按 ASR 用途计量)。BYOK 跳过。
+    private func refreshApiKeyIfNeeded() async throws {
+        guard RecapCredentialProvider.shared.isActiveCloud else { return }
+        try await RecapCredentialProvider.shared.ensureFresh(usage: .asr)
+        apiKey = try RecapCredentialProvider.shared.current().token
+    }
+
     public func release() async {
         if isStreaming {
             _ = try? await stopStreaming()
@@ -245,6 +427,22 @@ public actor FunASREngine: AsrEngine {
 
     private func shouldStopReceiving() -> Bool {
         taskFinished || taskFailedMessage != nil
+    }
+
+    /// LIVE 中 WS 意外断连（非主动 stop）：上报清晰可操作错误。
+    ///
+    /// 背景：Pro 托管 token ≤30min，长会议到期被服务端断开后 recvTask 静默退出，字幕停止且无提示。
+    /// 此处设 `sendError` 让后续 feed() 抛出该消息 -> RecordingSession.onError 上报 UI。
+    /// 音频由 AudioRecorder 独立落盘（feed 失败不中断录音循环），结束后走重转（分块+段间续签）可恢复完整字幕。
+    ///
+    /// 注：完整 LIVE 断连重连需跨 LiveTranscriptMerger.prepareForResume 协调 timelineOffset，
+    /// 无真机 POC 前不冒险（错偏移会把新会话段砸到会议起始）。当前为「可见可恢复」兜底。
+    private func handleUnexpectedDisconnect() {
+        guard isStreaming else { return }
+        let msg = "实时转写连接已中断（录音继续，结束后可重转恢复完整字幕）"
+        if taskFailedMessage == nil { taskFailedMessage = msg }
+        sendError = FunASRError.sendFailed(msg)
+        RecapLog.session.error("FunASR LIVE WS 意外断连：\(msg, privacy: .public)")
     }
 
     /// 同 sentence_id 覆盖；无 id 时按 startSeconds 覆盖；否则 append。
@@ -268,11 +466,26 @@ public actor FunASREngine: AsrEngine {
     }
 
     private func waitUntilTaskStarted(timeoutSeconds: Double) async throws {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while Date() < deadline {
-            if taskStarted || taskFailedMessage != nil { return }
-            try await Task.sleep(for: .milliseconds(50))
+        // 快速路径：事件已先于等待到达（task-started/task-failed 已置位）。
+        if taskStarted || taskFailedMessage != nil { return }
+        try await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            taskStartCont = cont
+            taskStartTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                guard !Task.isCancelled else { return }
+                await self?.resumeTaskStartIfNeeded()
+            }
         }
+        // 事件先到：取消未触发的超时 Task，避免它残留到下一会话误唤醒。
+        taskStartTimeoutTask?.cancel()
+        taskStartTimeoutTask = nil
+    }
+
+    /// 唤醒等待方（若有）。nil-out 在 resume 前，保证单次 resume。
+    private func resumeTaskStartIfNeeded() {
+        guard let cont = taskStartCont else { return }
+        taskStartCont = nil
+        cont.resume()
     }
 
     private func handleServerText(_ text: String) {
@@ -284,6 +497,7 @@ public actor FunASREngine: AsrEngine {
         switch event {
         case "task-started":
             taskStarted = true
+            resumeTaskStartIfNeeded()
 
         case "result-generated":
             guard let payload = obj["payload"] as? [String: Any],
@@ -348,6 +562,7 @@ public actor FunASREngine: AsrEngine {
                 ?? "unknown"
             taskFailedMessage = msg
             taskFinished = true
+            resumeTaskStartIfNeeded()
 
         default:
             break
@@ -403,6 +618,10 @@ public actor FunASREngine: AsrEngine {
         sentenceIndex.removeAll(keepingCapacity: false)
         currentSentenceId = nil
         currentBeginSeconds = nil
+        // 兜底：若 teardown 发生在 task-started 到达前（如失败/取消），唤醒等待方防 continuation 泄漏。
+        taskStartTimeoutTask?.cancel()
+        taskStartTimeoutTask = nil
+        resumeTaskStartIfNeeded()
     }
 }
 
@@ -416,7 +635,7 @@ final class WSTaskBox: @unchecked Sendable {
 }
 
 enum FunASRProtocol {
-    static func runTask(taskId: String) -> [String: Any] {
+    static func runTask(taskId: String, model: String = ASRPresets.funRealtimeModel) -> [String: Any] {
         [
             "header": [
                 "action": "run-task",
@@ -427,7 +646,7 @@ enum FunASRProtocol {
                 "task_group": "audio",
                 "task": "asr",
                 "function": "recognition",
-                "model": ASRPresets.funRealtimeModel,
+                "model": model,
                 "parameters": [
                     "format": "pcm",
                     "sample_rate": 16000,

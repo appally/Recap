@@ -2,6 +2,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 import RecapModels
+import RecapPersistence
 
 /// 路由：用 UUID，避免 @Model 不能 Hashable。
 public enum MeetingRoute: Hashable {
@@ -27,11 +28,14 @@ public struct MeetingListView: View {
     @Query(sort: \Meeting.startedAt, order: .reverse) private var meetings: [Meeting]
     @State private var path = NavigationPath()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @State private var showSettings = false
     /// 冷启动入场门控：仅驱动位移（offset），不用 opacity——opacity 从 0 起的淡入会产生
     /// 至少一帧空白（onAppear 晚于首帧 commit），曾被感知为「列表先出、标题后出」的卡顿。
     /// 本视图生命周期内只播一次，pop 回首页不重播。
     @State private var appeared = false
+    @State private var showMigrationAlert = false
+    @State private var didShowMigrationAlert = false
     /// FAB 入场门控：独立于 appeared，单独走 ambient withAnimation——
     /// 不能用隐式 .animation(value:)，会包住 RecordingButton 内部的 repeatForever 呼吸，
     /// 两套动画叠加导致按钮从错误位置飞入。pop 回首页不重播（同 appeared 守卫）。
@@ -103,13 +107,13 @@ public struct MeetingListView: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         header
                             .padding(.bottom, Spacing.xxxl)
-                            .offset(y: appeared ? 0 : enterOffset(8))
+                            .offset(y: appeared ? 0 : enterOffset(14))
                             .animation(enterAnimation(0), value: appeared)
 
                         if meetings.isEmpty {
                             emptyState
                                 .padding(.top, Spacing.xl)
-                                .offset(y: appeared ? 0 : enterOffset(10))
+                                .offset(y: appeared ? 0 : enterOffset(14))
                                 .animation(enterAnimation(0.04), value: appeared)
                         } else {
                             if !todayMeetings.isEmpty {
@@ -144,10 +148,13 @@ public struct MeetingListView: View {
                     startLiveMeeting()
                 }
                 .padding(.bottom, Spacing.xxl)
-                .offset(y: fabEntered ? 0 : enterOffset(12))
+                .offset(y: fabEntered ? 0 : enterOffset(18))
             }
             .overlay(alignment: .top) {
                 topFadeBackdrop
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                OfflineBanner()
             }
             .navigationDestination(for: MeetingRoute.self) { route in
                 destination(for: route)
@@ -155,8 +162,8 @@ public struct MeetingListView: View {
             .toolbar {
                 // 贴顶紧凑标题：随折叠进度淡入（hero 滚走时接管），居中如原生 inline 标题。
                 ToolbarItem(placement: .principal) {
-                    Text("全部记录")
-                        .font(.system(size: 17, weight: .semibold, design: .default))
+                    Text("纪要")
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.recapInk)
                         // 滞后于背板：hero 被遮罩盖住后再淡入，做交叉淡入而非双像。
                         .opacity(max(0, (collapseProgress - 0.35) / 0.65))
@@ -199,6 +206,16 @@ public struct MeetingListView: View {
                     Text(deleteMessage(for: pending))
                 }
             }
+            .alert("无法读取此前的数据", isPresented: $showMigrationAlert) {
+                Button("联系支持") {
+                    if let url = URL(string: "mailto:support@manymind.chat") {
+                        openURL(url)
+                    }
+                }
+                Button("知道了", role: .cancel) {}
+            } message: {
+                Text("此前的会议数据无法读取，已自动备份保留在设备中。可通过支持邮箱联系我们协助恢复。")
+            }
             .onAppear {
                 Haptics.prepare()
                 consumeDeepLinkIfNeeded()
@@ -207,6 +224,12 @@ public struct MeetingListView: View {
                 // 隐式动画安全）。FAB 内部有呼吸 repeatForever，单独走 ambient withAnimation 驱动位移，
                 // 避免隐式 .animation(value:) 与 repeatForever 叠加导致飞入。
                 appeared = true
+                recoverOrphanedLiveMeetings()
+                // 迁移失败兜底：make() 走备份降级时置位；首次进入提示用户（数据已备份，可联系支持恢复）。
+                if !didShowMigrationAlert, RecapDataContainer.dataMigrationFailed {
+                    didShowMigrationAlert = true
+                    showMigrationAlert = true
+                }
                 if reduceMotion {
                     fabEntered = true
                 } else {
@@ -257,7 +280,7 @@ public struct MeetingListView: View {
             )
             .frame(width: geo.size.width, height: total)
             // 背板领先于内联标题达到全不透：先把滚入的 hero 盖死，再让贴顶标题淡入，
-            // 避免两者用同一斜率同步爬升造成的中段叠影（双「全部记录」）。
+            // 避免两者用同一斜率同步爬升造成的中段叠影（双「纪要」）。
             .opacity(min(collapseProgress * 1.8, 1))
         }
         .ignoresSafeArea(edges: .top)
@@ -268,21 +291,26 @@ public struct MeetingListView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("全部记录")
-                .font(.recapHeroTitle)
-                .tracking(-0.5)
+            Text("纪要")
+                .font(.recapHero)
+                .tracking(Tracking.hero)
                 .foregroundStyle(Color.recapInk)
+                // 冷启动首帧 NavigationStack+ScrollView 会先以 0 宽度 commit 一帧布局，
+                // 纯 Text 此时可用宽度≈0、逐字换行成竖排。fixedSize 让标题按 ideal 宽度横排，
+                // 规避这一瞬错乱；正常状态下内容短、左对齐，视觉无变化。
+                .fixedSize(horizontal: true, vertical: false)
 
             if !meetings.isEmpty {
                 Text(statsLine)
-                    .font(.system(size: 13, weight: .regular, design: .default))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Spacing.lg)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(meetings.isEmpty ? "全部记录" : "全部记录，\(statsLine)")
+        .accessibilityLabel(meetings.isEmpty ? "纪要" : "纪要，\(statsLine)")
     }
 
     private var statsLine: String {
@@ -310,7 +338,7 @@ public struct MeetingListView: View {
             }
         }
         .padding(.bottom, Spacing.xxxl)
-        .offset(y: appeared ? 0 : enterOffset(8))
+        .offset(y: appeared ? 0 : enterOffset(14))
         .animation(enterAnimation(0.04), value: appeared)
     }
 
@@ -331,7 +359,7 @@ public struct MeetingListView: View {
             }
         }
         .padding(.bottom, Spacing.xxxl)
-        .offset(y: appeared ? 0 : enterOffset(8))
+        .offset(y: appeared ? 0 : enterOffset(14))
         .animation(enterAnimation(0.08), value: appeared)
     }
 
@@ -426,8 +454,8 @@ public struct MeetingListView: View {
     private func sectionEyebrow(_ title: String) -> some View {
         HStack(spacing: Spacing.sm) {
             Text(title)
-                .font(.recapSection)
-                .tracking(1.4)
+                .font(.recapEyebrow)
+                .tracking(Tracking.eyebrow)
                 .foregroundStyle(Color.recapTea)
             Spacer(minLength: 0)
         }
@@ -448,16 +476,16 @@ public struct MeetingListView: View {
 
             VStack(alignment: .leading, spacing: Spacing.xs) {
                 Text("把一场对话\n收成可行动的纪要")
-                    .font(.system(size: 28, weight: .semibold, design: .default))
-                    .tracking(-0.6)
+                    .font(.recapHero)
+                    .tracking(Tracking.hero)
                     .foregroundStyle(Color.recapInk)
-                    .lineSpacing(4)
+                    .lineSpacing(Leading.body)
                     .fixedSize(horizontal: false, vertical: true)
 
                 Text("转写、整理、待办，在同一条时间线里长出来。")
-                    .font(.system(size: 15, weight: .regular, design: .default))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapTea)
-                    .lineSpacing(4)
+                    .lineSpacing(Leading.body)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: 300, alignment: .leading)
             }
@@ -496,6 +524,15 @@ public struct MeetingListView: View {
                 Text("会议不存在").foregroundStyle(Color.recapTea)
             }
         }
+    }
+
+    /// 冷启动恢复：进程被杀后残留的 `.live` 会议（录音进程不可能跨进程重启存活）转 `.review`。
+    /// 否则首页误以为还在录音、详情页进 .live 试图恢复不存在的录音流；音频 PCM 在盘，进 review 后可用「重转」恢复字幕。
+    private func recoverOrphanedLiveMeetings() {
+        let orphaned = meetings.filter { $0.phase == .live }
+        guard !orphaned.isEmpty else { return }
+        for m in orphaned { m.phase = .review }
+        try? modelContext.save()
     }
 
     /// 首页红钮：直接建会进 LIVE，不弹半窗；开麦留给会中播放钮。
@@ -547,7 +584,7 @@ private struct LiveMeetingCard: View {
                             .fill(Color.recapTea)
                             .frame(width: 5, height: 5)
                         Text("草稿")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.recapCaption)
                             .foregroundStyle(Color.recapTea)
                     }
                     .padding(.horizontal, 7)
@@ -556,21 +593,14 @@ private struct LiveMeetingCard: View {
 
                     if meeting.durationSeconds > 0 {
                         Text(meeting.durationText)
-                            .font(.recapMeta)
-                            .monospacedDigit()
-                            .foregroundStyle(Color.recapTea)
-                    }
-
-                    if meeting.attendeeCount > 0 {
-                        Text("· \(meeting.attendeeCount) 人")
-                            .font(.recapMeta)
+                            .font(.recapMono)
                             .foregroundStyle(Color.recapTea)
                     }
                 }
 
                 Text(meeting.title)
-                    .font(.system(size: 17, weight: .semibold, design: .default))
-                    .tracking(-0.2)
+                    .font(.recapTitleS)
+                    .tracking(Tracking.titleS)
                     .foregroundStyle(Color.recapInk)
                     .lineLimit(1)
             }
@@ -580,7 +610,7 @@ private struct LiveMeetingCard: View {
             // 极简微胶囊「接上 ›」
             HStack(spacing: 3) {
                 Text("接上")
-                    .font(.system(size: 13, weight: .semibold, design: .default))
+                    .font(.recapMeta.weight(.semibold))
                 Image(systemName: "arrow.right")
                     .font(.system(size: 11, weight: .bold))
             }
@@ -603,7 +633,7 @@ private struct LiveMeetingCard: View {
 private func joinedMeta(_ parts: [Text?]) -> Text? {
     let nonNil = parts.compactMap { $0 }
     guard let first = nonNil.first else { return nil }
-    let separator = Text(" · ").foregroundColor(Color.recapTea.opacity(0.55))
+    let separator = Text(" · ").foregroundColor(Color.recapTea.opacity(0.6))
     return nonNil.dropFirst().reduce(first) { result, part in result + separator + part }
 }
 
@@ -614,26 +644,34 @@ private struct MeetingListRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(meeting.title)
-                .font(.system(size: 17, weight: .semibold, design: .default))
-                .tracking(-0.2)
-                .foregroundStyle(Color.recapInk)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .center, spacing: 8) {
+                Text(meeting.title)
+                    .font(.recapTitleS)
+                    .tracking(Tracking.titleS)
+                    .foregroundStyle(Color.recapInk)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                // 处理中状态：标题行尾独立胶囊，不混入底栏灰文，避免被读成普通上下文
+                if meeting.phase == .processing {
+                    processingBadge
+                        .layoutPriority(1)
+                }
+            }
 
             if let preview = meeting.tldrPreview {
                 Text(preview)
-                    .font(.system(size: 14, weight: .regular, design: .default))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapTea)
                     .lineLimit(2)
-                    .lineSpacing(3)
+                    .lineSpacing(Leading.tight)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if let meta = metaText {
                 meta
                     .lineLimit(1)
-                    // 中间省略：保留首段时刻与尾部信号（待办 / 整理中），只压缩中间地点/时长
+                    // 中间省略：优先保留时刻，时长被压缩
                     .truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -644,35 +682,29 @@ private struct MeetingListRow: View {
         .contentShape(Rectangle())
     }
 
-    /// 单行 meta：上下文（时刻 · 地点 · 时长 · 人数）统一灰，尾部信号用 accent。
+    /// 单行 meta：仅「时刻 · 时长」。地点 / 人数 / 待办已移出本行，避免单行堆叠过载；
+    /// 处理中状态见标题行尾的 `整理中` 胶囊。
     private var metaText: Text? {
         var parts: [Text?] = []
-        parts.append(Text(whenText).foregroundColor(.recapTea).font(.recapMeta).monospacedDigit())
+        parts.append(Text(whenText).foregroundColor(.recapTea).font(.recapMono))
 
-        if let location = meeting.locationDisplay {
-            parts.append(
-                Text(Image(systemName: "location"))
-                    .foregroundColor(.recapTea.opacity(0.85))
-                    .font(.system(size: 11, weight: .regular))
-                + Text(" \(location)").foregroundColor(.recapTea).font(.recapMeta)
-            )
-        }
-
-        parts.append(Text(meeting.durationText).foregroundColor(.recapTea).font(.recapMeta).monospacedDigit())
-
-        if meeting.attendeeCount > 0 {
-            parts.append(Text("\(meeting.attendeeCount) 人").foregroundColor(.recapTea).font(.recapMeta))
-        }
-
-        if meeting.todoCount > 0 {
-            parts.append(Text("待办 \(meeting.todoCount)").foregroundColor(.recapCeladon).font(.system(size: 13, weight: .semibold)))
-        }
-
-        if meeting.phase == .processing {
-            parts.append(Text("整理中").foregroundColor(.recapOchre).font(.system(size: 13, weight: .semibold)))
+        // 零时长（异常会议）返回「-」，不展示比露出破折号更干净
+        if meeting.durationSeconds > 0 {
+            parts.append(Text(meeting.durationText).foregroundColor(.recapTea).font(.recapMono))
         }
 
         return joinedMeta(parts)
+    }
+
+    /// 处理中状态胶囊：标题行尾，赭石软底；仅 phase == .processing 出现，提示纪要尚未就绪。
+    private var processingBadge: some View {
+        Text("整理中")
+            .font(.recapCaption)
+            .foregroundStyle(Color.recapOchre)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Color.recapOchre.opacity(0.12), in: Capsule())
+            .accessibilityLabel("纪要整理中")
     }
 }
 
@@ -765,7 +797,7 @@ private struct SwipeableMeetingRow<Content: View>: View {
                 Image(systemName: "trash")
                     .font(.system(size: 16, weight: .semibold))
                 Text("删除")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.recapCaption)
             }
             .foregroundStyle(.white)
             .frame(width: actionWidth)
@@ -921,11 +953,15 @@ private struct HorizontalSwipeBridge: UIViewRepresentable {
                 if view is UIScrollView { break }
                 let w = view.bounds.width
                 let h = view.bounds.height
-                // 行高通常在标题+摘要范围内；过大说明是分组/列表容器
-                if w >= 100, h >= 36, h <= 240 {
+                // 不设上限：从 sentinel 向上走，第一个「全宽 + ≥最小高度」的视图就是行宿主——
+                // 更高的祖先（LazyVStack cell / 分组容器）永远轮不到（首个即返回）。
+                // 旧版 h<=240 上限会让未来的高行（长摘要 2 行 + 整理中胶囊 + 草稿卡）落空回退甚至误挂，
+                // 是 note-tab-redesign 重构里最易踩的回归点。最小高度只用来跳过 sentinel 与行宿主之间
+                // 零高度的 SwiftUI 间质包裹层。
+                if w >= 100, h >= 36 {
                     return view
                 }
-                if w >= 100, h >= 28, h <= 240 {
+                if w >= 100, h >= 28 {
                     fallback = fallback ?? view
                 }
                 current = view.superview

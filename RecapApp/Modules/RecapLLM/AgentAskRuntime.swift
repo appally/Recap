@@ -49,7 +49,9 @@ public enum AgentAskRuntime {
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
         phase: MeetingPhase = .review,
-        retrievalQuery: String? = nil
+        retrievalQuery: String? = nil,
+        meSpeakerLabel: String? = nil,
+        userProfile: UserProfile? = nil
     ) -> AnswerContext {
         let intent = AskQueryIntentClassifier.classify(query)
         let searchQuery = {
@@ -143,6 +145,10 @@ public enum AgentAskRuntime {
         """
 
         var userParts: [String] = []
+        // 用户身份档案（全局；与技能路径 makeUserPrompt 同构，user-payload 侧·caching 安全）。
+        if let profile = userProfile?.promptSummary {
+            userParts.append(profile)
+        }
         if !briefCoordBlock.isEmpty {
             userParts.append("【会前底稿】\n\(briefCoordBlock)")
         }
@@ -159,6 +165,10 @@ public enum AgentAskRuntime {
         // 会中手写笔记（Apple Pencil 识别文字）。
         if let handwriting = handwritingSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !handwriting.isEmpty {
             userParts.append("【会中手写笔记】\n\(handwriting)")
+        }
+        // 「你的发言」身份标记（与技能路径同构；标记我/单发言人可解析时产出，让"我的待办/我的承诺"可答）。
+        if let meLabel = meSpeakerLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !meLabel.isEmpty {
+            userParts.append("【你的发言】本场转写中「\(meLabel)」是你（用户本人）的发言。")
         }
         userParts.append("【检索片段】\n\(transcriptBlock)")
         if !briefEvidenceBlock.isEmpty {
@@ -218,7 +228,9 @@ public enum AgentAskRuntime {
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
         phase: MeetingPhase = .review,
-        retrievalQuery: String? = nil
+        retrievalQuery: String? = nil,
+        meSpeakerLabel: String? = nil,
+        userProfile: UserProfile? = nil
     ) -> AnswerContext {
         prepareLocal(
             query: query,
@@ -232,7 +244,9 @@ public enum AgentAskRuntime {
             momentsSummary: momentsSummary,
             handwritingSummary: handwritingSummary,
             phase: phase,
-            retrievalQuery: retrievalQuery
+            retrievalQuery: retrievalQuery,
+            meSpeakerLabel: meSpeakerLabel,
+            userProfile: userProfile
         )
     }
 }

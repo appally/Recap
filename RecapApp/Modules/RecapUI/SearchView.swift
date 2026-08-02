@@ -48,7 +48,7 @@ struct SearchView: View {
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(Color.recapTea)
                 TextField("搜索会议、纪要、转写、待办", text: $query)
-                    .font(.system(size: 15, weight: .regular))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapInk)
                     .focused($queryFieldFocused)
                     .submitLabel(.search)
@@ -92,7 +92,7 @@ struct SearchView: View {
         ScrollView {
             LazyVStack(spacing: Spacing.sm) {
                 Text("\(results.count) 场相关")
-                    .font(.system(size: 13))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, Spacing.md)
@@ -149,10 +149,10 @@ struct SearchView: View {
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(Color.recapTea.opacity(0.5))
             Text("没有找到「\(trimmedQuery)」相关的内容")
-                .font(.system(size: 15))
+                .font(.recapBodyS)
                 .foregroundStyle(Color.recapTea)
             Text("试试换个关键词，或用更短的词")
-                .font(.system(size: 13))
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea.opacity(0.7))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -205,12 +205,12 @@ struct SearchView: View {
     private func sectionHeader(_ title: String, onClear: (() -> Void)?) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.recapMeta.weight(.semibold))
                 .foregroundStyle(Color.recapTea)
             Spacer()
             if let onClear {
                 Button("清除", action: onClear)
-                    .font(.system(size: 13))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
             }
         }
@@ -229,17 +229,17 @@ private struct MeetingSearchCard: View {
             NavigationLink(value: MeetingRoute.meeting(result.meetingId)) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(result.title)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.recapInk)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     HStack(spacing: 6) {
                         Text(result.startedAt, format: .dateTime.month().day().hour().minute().locale(Locale(identifier: "zh_CN")))
-                            .font(.system(size: 12))
+                            .font(.recapMeta)
                             .foregroundStyle(Color.recapTea)
                         if !result.speakerNames.isEmpty {
                             Text("· " + result.speakerNames.prefix(3).joined(separator: " "))
-                                .font(.system(size: 12))
+                                .font(.recapMeta)
                                 .foregroundStyle(Color.recapTea)
                                 .lineLimit(1)
                         }
@@ -252,7 +252,7 @@ private struct MeetingSearchCard: View {
             if let preview = result.hits.first {
                 NavigationLink(value: route(for: preview)) {
                     HighlightedText(text: preview.snippet, keywords: keywords)
-                        .font(.system(size: 13))
+                        .font(.recapMeta)
                         .lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -266,11 +266,11 @@ private struct MeetingSearchCard: View {
                 NavigationLink(value: route(for: hit)) {
                     HStack(alignment: .top, spacing: 6) {
                         Text(hit.kind.label)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.recapCaption)
                             .foregroundStyle(Color.recapTea)
                             .frame(width: 26, alignment: .leading)
                         HighlightedText(text: hit.snippet, keywords: keywords)
-                            .font(.system(size: 12))
+                            .font(.recapMeta)
                             .lineLimit(2)
                     }
                 }
@@ -341,7 +341,7 @@ private struct HitChips: View {
             ForEach(SearchHitKind.allCases, id: \.self) { kind in
                 if let n = countByKind[kind], n > 0 {
                     Text(n > 1 ? "\(kind.label)×\(n)" : kind.label)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.recapCaption)
                         .foregroundStyle(Color.recapTea)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2.5)
@@ -360,12 +360,12 @@ private struct RecentMeetingRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(meeting.title)
-                .font(.system(size: 15, weight: .medium))
+                .font(.recapBodyS.weight(.medium))
                 .foregroundStyle(Color.recapInk)
                 .lineLimit(1)
             if let tldr = meeting.tldrPreview {
                 Text(tldr)
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
                     .lineLimit(1)
             }
@@ -391,7 +391,7 @@ private struct HistoryTags: View {
                 ForEach(tags, id: \.self) { tag in
                     Button { onTap(tag) } label: {
                         Text(tag)
-                            .font(.system(size: 13))
+                            .font(.recapMeta)
                             .foregroundStyle(Color.recapInk)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)

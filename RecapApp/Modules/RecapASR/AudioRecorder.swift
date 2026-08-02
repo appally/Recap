@@ -8,11 +8,13 @@ public actor AudioRecorder {
     public enum RecorderError: Error, LocalizedError, Sendable {
         case permissionDenied
         case invalidInputFormat
+        case diskWriteFailed
 
         public var errorDescription: String? {
             switch self {
             case .permissionDenied:    return "麦克风权限被拒"
             case .invalidInputFormat:  return "输入格式无效"
+            case .diskWriteFailed:     return "存储空间不足或录音写入失败"
             }
         }
     }
@@ -41,6 +43,15 @@ public actor AudioRecorder {
     public func setOnAudioPower(_ handler: (@Sendable (Float) -> Void)?) {
         onAudioPower = handler
     }
+
+    /// 落盘写入失败（如磁盘满/IO 错）回调；触发后停止继续写盘并上报，避免「哑录」（isRunning 真却无 PCM）。
+    private var onError: (@Sendable (RecorderError) -> Void)?
+
+    public func setOnError(_ handler: (@Sendable (RecorderError) -> Void)?) {
+        onError = handler
+    }
+
+    public init() {}
 
     /// - Parameter fileURL: 若非 nil，将 16k mono Float32 PCM 追加写入该路径（与喂 ASR 同一缓冲）。
     public func start(targetSampleRate: Double = 16000, fileURL: URL? = nil) async throws -> AsyncStream<[Float]> {
@@ -91,7 +102,15 @@ public actor AudioRecorder {
         installTap(format: inFormat)
 
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            // start() 抛错：摘 tap、关已开的 fileHandle，避免 FD 泄漏 + tap 残留。
+            engine.inputNode.removeTap(onBus: 0)
+            closeFileHandle()
+            continuation = nil
+            throw error
+        }
         isRunning = true
         registerSessionObservers()
         return stream
@@ -204,8 +223,15 @@ public actor AudioRecorder {
         let out = resample(samples, from: inSampleRate, to: outSampleRate)
         guard !out.isEmpty else { return }
         if let fileHandle {
-            out.withUnsafeBufferPointer { buf in
-                fileHandle.write(Data(buffer: buf))
+            // 旧版用非 throwing FileHandle.write(_:)：磁盘满(ENOSPC)/IO 错时抛 Obj-C NSException，
+            // Swift do/catch 无法拦截 → 必崩或静默哑录。改 throwing write(contentsOf:)，失败即关句柄、
+            // 停止继续写盘，并经 onError 上报（LIVE 字幕仍可继续，仅丢失本地 PCM 安全网）。
+            let data = out.withUnsafeBufferPointer { Data(buffer: $0) }
+            do {
+                try fileHandle.write(contentsOf: data)
+            } catch {
+                closeFileHandle()
+                onError?(.diskWriteFailed)
             }
         }
         yieldCount += 1

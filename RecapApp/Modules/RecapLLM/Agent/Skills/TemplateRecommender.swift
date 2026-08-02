@@ -58,6 +58,10 @@ public enum TemplateRecommender {
         if hasMoments {
             boosted += ["photo-recap"]
         }
+        // 单/零发言人（语音备忘、独白、单人录制）→ 发言复盘（自我视角：唯一发言人即你）。
+        if speakerCount <= 1 {
+            boosted += ["speech-coach"]
+        }
 
         // 通用实用性兜底（常驻好用），已命中信号的不重复加入。
         let base = ["action-list", "decision-log", "external-minutes",

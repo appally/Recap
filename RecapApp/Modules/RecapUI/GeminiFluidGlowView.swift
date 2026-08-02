@@ -26,7 +26,9 @@ public struct GeminiFluidGlowView: View {
     }
 
     public var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: reduceMotion)) { context in
+        // 30fps：慢速极光（完整周期 ~12s）30fps 与 60fps 视觉无差，GPU 占用减半；与同场景
+        // ProcessStageCanvas / TranscriptStreamFlowView 的 1/30s 动态层对齐（motion-design-stance 低幅慢速）。
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
             FluidGlowCanvas(t: context.date.timeIntervalSinceReferenceDate, intensity: intensity)
         }
         .ignoresSafeArea(.all, edges: .bottom)

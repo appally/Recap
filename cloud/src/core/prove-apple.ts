@@ -12,6 +12,10 @@ export function isProProductId(id?: string): boolean {
 /** App Store Server API 生产主机(沙盒见 env.APPLE_STOREKIT_HOST)。 */
 const DEFAULT_STOREKIT_HOST = 'https://api.storekit.it.com';
 
+/** Pro 判定内存缓存(5min TTL,省 Apple 查询;per-isolate,冷启动失效可接受)。 */
+const PRO_CACHE_TTL_MS = 5 * 60 * 1000;
+const proCache = new Map<string, { userId: string; isPro: boolean; exp: number }>();
+
 /**
  * 生产验证:App Store Server API v1 —— getTransactionInfo。
  *
@@ -27,7 +31,19 @@ export async function verifyProApple(req: Request, env: Env): Promise<{ userId: 
   const keyPem = env.APPLE_PRIVATE_KEY;
   const keyId = env.APPLE_KEY_ID;
   if (!txnId || !keyPem || !keyId || !env.APPLE_ISSUER_ID || !env.APPLE_BUNDLE_ID) {
+    // 诊断:区分「请求未带 txnId」与「服务端 secrets 未配全」——两者都静默 isPro=false,此前无法分辨。
+    console.log('[prove-apple] missing auth/secrets', {
+      hasTxn: !!txnId, hasKey: !!keyPem, hasKeyId: !!keyId,
+      hasIssuer: !!env.APPLE_ISSUER_ID, hasBundle: !!env.APPLE_BUNDLE_ID,
+    });
     return { userId: '', isPro: false };
+  }
+
+  // 命中缓存(5min 内)直接返回,省 Apple App Store Server API 往返。
+  const cached = proCache.get(txnId);
+  if (cached && cached.exp > Date.now()) {
+    console.log('[prove-apple] cache hit', { isPro: cached.isPro });
+    return { userId: cached.userId, isPro: cached.isPro };
   }
 
   const ecKey = await importPKCS8(keyPem, 'ES256');
@@ -44,11 +60,23 @@ export async function verifyProApple(req: Request, env: Env): Promise<{ userId: 
   const host = (env.APPLE_STOREKIT_HOST ?? DEFAULT_STOREKIT_HOST).replace(/\/$/, '');
   const endpoint = `${host}/v1/transactions/${txnId}`;
   const res = await fetch(endpoint, { headers: { Authorization: `Bearer ${jwt}` } });
-  if (!res.ok) return { userId: '', isPro: false };
+  if (!res.ok) {
+    // 诊断核心盲点:host=生产(api.storekit.it.com) 查不到沙盒/TestFlight 交易 → 404;
+    // .p8 四元组错或已 revoke → 401。打 status+host+body 一锤定音(定位后可降级日志)。
+    const errBody = await res.text().catch(() => '');
+    console.log('[prove-apple] Apple API non-ok', {
+      status: res.status, host, txnId,
+      errBody: errBody.slice(0, 200),
+    });
+    return { userId: '', isPro: false };
+  }
 
   const body = (await res.json()) as { data?: { signedTransactionInfo?: string } };
   const jws = body.data?.signedTransactionInfo;
-  if (!jws) return { userId: '', isPro: false };
+  if (!jws) {
+    console.log('[prove-apple] no signedTransactionInfo in response', { txnId });
+    return { userId: '', isPro: false };
+  }
 
   const payload = decodeJwt(jws) as {
     productId?: string;
@@ -60,5 +88,17 @@ export async function verifyProApple(req: Request, env: Env): Promise<{ userId: 
     isProProductId(payload.productId) &&
     (payload.expiresDate ?? 0) > Date.now();
 
-  return { userId: payload.originalTransactionId ?? txnId, isPro };
+  // 诊断:productId 不在白名单 / expiresDate 已过,都能从此处看清(此前全静默 isPro=false)。
+  console.log('[prove-apple] verify', {
+    productId: payload.productId,
+    expiresDate: payload.expiresDate,
+    now: Date.now(),
+    expired: (payload.expiresDate ?? 0) <= Date.now(),
+    isPro,
+  });
+
+  const result = { userId: payload.originalTransactionId ?? txnId, isPro };
+  proCache.set(txnId, { ...result, exp: Date.now() + PRO_CACHE_TTL_MS });
+  if (proCache.size > 2000) proCache.clear(); // 防无界增长
+  return result;
 }

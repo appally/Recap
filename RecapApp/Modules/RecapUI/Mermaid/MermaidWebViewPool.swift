@@ -33,14 +33,12 @@ public final class MermaidWebViewPool {
     /// 保留 webView 以保活进程；用户首图创建时进程已热，省 ~2.17s 冷启动。
     func preheat() {
         guard warmWebView == nil else { return }
-        let config = WKWebViewConfiguration()
-        config.preferences.javaScriptCanOpenWindowsAutomatically = false
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: .zero, configuration: MermaidResourceSchemeHandler.makeWebViewConfiguration())
         webView.isHidden = true                       // 离屏常驻，仅用于保活进程
         webView.navigationDelegate = host             // host 长期持有 delegate，防 webView 回收
-        if let html = Self.bridgeURL() {
-            webView.loadFileURL(html, allowingReadAccessTo: html.deletingLastPathComponent())
-        }
+        // 经 recap-local scheme 加载桥接页：资源在 App 进程内由 handler 提供，WebContent 无需
+        // sandbox extension（旧 loadFileURL 在 jetsam/debug 压力下被拒致 mermaid 永不就绪）。
+        webView.load(URLRequest(url: MermaidResourceSchemeHandler.bridgeURL))
         warmWebView = webView
     }
 
@@ -51,11 +49,6 @@ public final class MermaidWebViewPool {
             warmWebView?.stopLoading()
             warmWebView = nil
         }
-    }
-
-    private static func bridgeURL() -> URL? {
-        // 与 MermaidDiagramView.makeUIView 同源：RecapUI framework bundle 内的 MermaidBridge.html。
-        Bundle(for: MermaidWebViewPool.self).url(forResource: "MermaidBridge", withExtension: "html")
     }
 
     /// warm WebView 的 navigationDelegate 占位 owner。不消费事件（warm WebView 仅保活进程；

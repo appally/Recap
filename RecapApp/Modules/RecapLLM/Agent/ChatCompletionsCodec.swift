@@ -149,11 +149,26 @@ public enum ChatCompletionsCodec {
     }
 
     public static func decodeDelta(_ json: Data) throws -> DeltaFragment {
-        guard let root = try JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let choices = root["choices"] as? [[String: Any]],
+        guard let root = try JSONSerialization.jsonObject(with: json) as? [String: Any] else {
+            throw AgentTransportError.malformedStream("响应帧非 JSON 对象")
+        }
+        // Qwen/百炼等会发无 choices 的控制帧（usage 统计 / keepalive / 首帧）：
+        // 视为可忽略的心跳返回空 delta，而非致命错误——否则整条流被一帧带崩。
+        guard let choices = root["choices"] as? [[String: Any]],
               let first = choices.first
         else {
-            throw AgentTransportError.malformedStream("缺少 choices")
+            // error 帧（内容安全拦截 / 限流等）必须上抛，但要给出真实原因，
+            // 而非误导性的“缺少 choices”。
+            if let error = root["error"] as? [String: Any] {
+                let msg = (error["message"] as? String) ?? "上游返回 error"
+                throw AgentTransportError.malformedStream("上游错误：\(msg)")
+            }
+            // 百炼风格：顶层 code / message 直达。
+            if let code = root["code"] as? String,
+               let message = root["message"] as? String {
+                throw AgentTransportError.malformedStream("上游错误（\(code)）：\(message)")
+            }
+            return DeltaFragment()
         }
 
         let finishReason = first["finish_reason"] as? String

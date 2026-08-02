@@ -28,6 +28,13 @@ public protocol AsrEngine: Sendable {
                     sampleRate: Double,
                     onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult
 
+    /// 批处理（磁盘友好）：转写 mmap 映射的 Float32 PCM `Data`。长音频时引擎可按段切片物化，
+    /// 避免整文件 `[Float]` 常驻（60min≈230MB，峰值 460MB）。默认实现物化后走 `transcribe(samples:)`，
+    /// 支持 mmap 流式的引擎（Fun-ASR / FluidAudio）override 以按段物化（单段 ~6MB）。
+    func transcribe(audioData: Data,
+                    sampleRate: Double,
+                    onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult
+
     /// 流式：打开会话并返回事件流。随后反复 `feed`，最后 `stopStreaming`。
     func startStreaming(sampleRate: Double) async throws -> AsyncStream<AsrStreamEvent>
 
@@ -75,6 +82,20 @@ extension AsrEngine {
             throw error
         }
     }
+
+    /// 默认实现：物化为 [Float] 后走 transcribe(samples:)。未 override 的引擎（如 SpeechAnalyzer）
+    /// 仍一次性物化--零回归，仅未享 mmap 省内存收益。
+    public func transcribe(audioData: Data,
+                           sampleRate: Double,
+                           onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult {
+        guard audioData.count >= MemoryLayout<Float>.size else {
+            return TranscribeResult(segments: [], firstTokenLatencyMs: nil, chunkCount: 0)
+        }
+        let samples: [Float] = audioData.withUnsafeBytes { raw in
+            Array(raw.bindMemory(to: Float.self))
+        }
+        return try await transcribe(samples: samples, sampleRate: sampleRate, onPartial: onPartial)
+    }
 }
 
 /// 引擎工厂。
@@ -85,7 +106,6 @@ public enum AsrEngineFactory {
         case .speechAnalyzer:  SpeechAnalyzerEngine()
         case .funASR:          FunASREngine()
         case .fluidSenseVoice: FluidAudioEngine(kind: .fluidSenseVoice)
-        case .fluidParaformer: FluidAudioEngine(kind: .fluidParaformer)
         }
     }
 }

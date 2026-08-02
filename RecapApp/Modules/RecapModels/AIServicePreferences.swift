@@ -4,7 +4,7 @@ import Foundation
 
 /// 大模型 / 云端 ASR 的计费与凭证来源。
 public enum AIServiceMode: String, CaseIterable, Sendable, Identifiable {
-    /// Recap 官方网关：Pro 订阅代付（云端 ASR + 强模型），用户无需自配 Key。
+    /// Recap 官方网关：Pro 订阅代付（云端 ASR + 智能纪要），用户无需自配 Key。
     case recapCloud
     /// 免费体验：端侧 ASR + 平台 Flash LLM 滴灌（按次限量，无需配置）。
     case freeTrial
@@ -15,15 +15,15 @@ public enum AIServiceMode: String, CaseIterable, Sendable, Identifiable {
 
     public var title: String {
         switch self {
-        case .recapCloud: return "Recap 会员"
-        case .freeTrial: return "Recap 免费"
+        case .recapCloud: return "官方云端"
+        case .freeTrial: return "免费档"
         case .byok: return "自备密钥"
         }
     }
 
     public var subtitle: String {
         switch self {
-        case .recapCloud: return "Pro 订阅代付，云端高保真 + 强模型"
+        case .recapCloud: return "Pro 订阅代付，云端高保真 + 智能纪要"
         case .freeTrial: return "每月少量 AI 纪要，无需配置 API Key"
         case .byok: return "使用你自己的厂商密钥，费用自理"
         }
@@ -59,7 +59,7 @@ public enum MembershipTier: String, CaseIterable, Sendable, Identifiable {
     public var tagline: String {
         switch self {
         case .free: return "端侧转写 + 端侧整理，真实免费"
-        case .pro: return "云端高保真转写 + 强模型纪要"
+        case .pro: return "云端高保真转写 + 智能纪要"
         }
     }
 }
@@ -115,7 +115,7 @@ public enum RecapAccountStore {
             }
             return RecapAccount(
                 isSignedIn: true,
-                displayName: UserDefaults.standard.string(forKey: nameKey) ?? "Recap 用户",
+                displayName: UserDefaults.standard.string(forKey: nameKey) ?? "新用户",
                 email: UserDefaults.standard.string(forKey: emailKey),
                 tier: tier,
                 userID: UserDefaults.standard.string(forKey: userIDKey),
@@ -285,7 +285,7 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
     public var defaultModel: String {
         switch self {
         case .deepseek: return LLMPresets.deepSeekFlash
-        case .qwen: return "qwen-plus"
+        case .qwen: return "qwen3.7-plus"
         case .glm: return "glm-4-flash"
         case .kimi: return "moonshot-v1-128k"
         case .doubao: return "doubao-pro-32k"
@@ -302,7 +302,7 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
     public var summaryModel: String {
         switch self {
         case .deepseek: return LLMPresets.deepSeekPro
-        case .qwen: return "qwen-plus"
+        case .qwen: return "qwen3.7-plus"
         case .glm: return "glm-4-flash"
         case .kimi: return "moonshot-v1-128k"
         case .doubao: return "doubao-pro-32k"
@@ -407,17 +407,17 @@ public enum RecapLegal {
     public static let supportEmail = "support@manymind.chat"
 
     public static let privacySummary = """
-    Recap 会在你的设备上处理会议录音。选择端侧转写时，语音在本机完成识别，音频不会因转写上传。
+    「纪要」会在你的设备上处理会议录音。选择端侧转写时，语音在本机完成识别，音频不会因转写上传。
 
-    若你启用云端转写（如阿里 Fun-ASR、火山 Seed-ASR）或云端大模型，相关音频片段或转写文本将发送至你所选服务商，用于识别与纪要生成。使用「自备密钥」时，请求直接发往你配置的厂商，Recap 不中转密钥。
+    若你启用云端转写（如阿里 Fun-ASR、火山 Seed-ASR）或云端大模型，相关音频片段或转写文本将发送至你所选服务商，用于识别与纪要生成。使用「自备密钥」时，请求直接发往你配置的厂商，「纪要」不中转密钥。
 
-    使用「Recap 会员」云服务时，Recap 服务器仅签发一个短期访问凭证（数分钟有效），你的音频与请求由设备直接发送至供应商（阿里云），不经 Recap 服务器中转或存储；用于提供订阅内的转写与整理能力，并按隐私政策最小化留存必要的用量与账户信息。
+    使用会员云服务时，「纪要」服务器仅签发一个短期访问凭证（数分钟有效），你的音频与请求由设备直接发送至供应商（阿里云），不经「纪要」服务器中转或存储；用于提供订阅内的转写与整理能力，并按隐私政策最小化留存必要的用量与账户信息。
 
     会议数据默认保存在本机。你可以随时在设置中清除本机数据或删除账户相关信息。我们不会将 API Key 写入日志或 iCloud 备份。
     """
 
     public static let termsSummary = """
-    使用 Recap 即表示你同意合理、合法地录制与处理会议内容，并已获得必要参与者同意。
+    使用「纪要」即表示你同意合理、合法地录制与处理会议内容，并已获得必要参与者同意。
 
     自备密钥模式下，你与第三方模型/语音服务商的关系受其服务条款约束，费用由其计费。会员模式下，订阅通过 Apple 内购管理，可在系统订阅设置中取消。
 

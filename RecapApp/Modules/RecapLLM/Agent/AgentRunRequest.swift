@@ -54,6 +54,8 @@ public struct AgentRunRequest: Sendable {
     public var modelRole: AgentModelRole
     public var thinking: AgentThinkingMode
     public var model: String
+    /// 采样温度（默认 0.2）。可由技能 frontmatter `temperature` 覆盖（结构化产出宜更低）。
+    public var temperature: Double
 
     public init(
         systemPrompt: String,
@@ -64,7 +66,8 @@ public struct AgentRunRequest: Sendable {
         budget: AgentBudget,
         modelRole: AgentModelRole,
         thinking: AgentThinkingMode,
-        model: String
+        model: String,
+        temperature: Double = 0.2
     ) {
         self.systemPrompt = systemPrompt
         self.history = history
@@ -75,6 +78,7 @@ public struct AgentRunRequest: Sendable {
         self.modelRole = modelRole
         self.thinking = thinking
         self.model = model
+        self.temperature = temperature
     }
 }
 
@@ -129,6 +133,7 @@ public enum AgentEvent: Sendable {
         uiSummary: String,
         citations: [AskCitation],
         resultChars: Int,
+        resultContent: String,
         errorText: String?
     )
     case awaitingApproval(AgentApprovalRequest)

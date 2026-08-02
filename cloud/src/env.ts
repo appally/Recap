@@ -12,6 +12,12 @@ export interface Env {
   // vars(非敏感配置)
   ASR_WSS: string;
   LLM_BASE: string;
+  /** 服务端统一下发的 ASR 模型(默认 paraformer-realtime-v2：¥0.864/h 比 fun-asr-realtime 省 27% + 18 方言含四川话;
+   *  fun-asr-realtime 作专名强档备选)。改这里 + wrangler deploy,30min 内全网续签生效(缓存凭证 ≤30min 自然灰度)。
+   *  ⚠️ 切换前须在百炼控制台给 DASHSCOPE_API_KEY 子账号白名单加该模型,并用 verify-sts-asr.mjs 验通,否则 st-token 403。 */
+  ASR_MODEL?: string;
+  /** 服务端统一下发的 LLM 模型(默认 qwen-plus;Pro 想用强模型改此)。 */
+  LLM_MODEL?: string;
   /** App Store Server API 主机。生产默认 https://api.storekit.it.com;TestFlight 沙盒用 https://api.storekit-sandbox.it.com。 */
   APPLE_STOREKIT_HOST?: string;
   /** 仅本地 .dev.vars 用:'1' 时回退信任 X-Recap-* 头的 stub(Xcode 本地 StoreKit 测试不经 Apple 服务器)。绝不在生产开启。 */
@@ -34,3 +40,6 @@ export const FREE_ANON_QUOTA_SECONDS = 600;
 export const FREE_MONTHLY_QUOTA_SECONDS = 1800;
 /** 免费档每次签发固定扣额 ≈ 1 次 Flash 纪要。 */
 export const FREE_PER_ISSUE_SECONDS = 120;
+/** 免费档 ASR 兜底(国行/端侧不可用)月度独立配额:匿名 5min(国行无 Apple Intelligence 机型首录兜底),登录后 30min/月。 */
+export const FREE_ANON_ASR_SECONDS = 5 * 60; // 300 — 国行/非 AI 机型首录体验兜底(防刷:量极小)
+export const FREE_MONTHLY_ASR_SECONDS = 30 * 60; // 1800

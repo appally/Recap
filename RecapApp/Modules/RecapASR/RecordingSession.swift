@@ -36,13 +36,14 @@ public final class RecordingSession: ObservableObject {
         }
         await Task.yield()
 
-        // Pro 托管(recapCloud):先确保 Recap 云凭证就绪。ASR/LLM 都依赖后端签发的
+        // 托管凭证(recapCloud+Pro 或 免费档):先确保 Recap 云凭证就绪。ASR 走后端签发的
         // 阿里临时 token(≤30min);warmup 失败不阻断启动,回落链(端侧/BYOK)兜底。
-        if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
+        // 免费档以 usage=.asr 计量,扣独立 ASR 桶(国行/非 AI 机型端侧不可用兜底)。
+        if RecapCredentialProvider.shared.isActiveCloud {
             do {
-                try await RecapCredentialProvider.shared.ensureFresh()
+                try await RecapCredentialProvider.shared.ensureFresh(usage: .asr)
             } catch {
-                self.onError?("Recap 云凭证准备失败,将尝试其他引擎…")
+                self.onError?("云凭证准备失败，将尝试其他引擎…")
             }
         }
 
@@ -50,9 +51,16 @@ public final class RecordingSession: ObservableObject {
         let resolved: any AsrEngine
         do {
             resolved = try await Self.withTimeout(seconds: 12) {
-                try await Task.detached(priority: .userInitiated) {
+                // detached 脱离 MainActor（避免 Speech/Keychain 探测卡首帧），但 detached 不继承父任务取消；
+                // 用 withTaskCancellationHandler 在超时取消时主动 cancel detached，防孤儿任务堆积占资源。
+                let det = Task.detached(priority: .userInitiated) {
                     try await AsrEngineResolver.resolve()
-                }.value
+                }
+                return try await withTaskCancellationHandler {
+                    try await det.value
+                } onCancel: {
+                    det.cancel()
+                }
             }
         } catch is RecordingSessionError {
             throw RecordingSessionError.prepareTimeout
@@ -102,6 +110,15 @@ public final class RecordingSession: ObservableObject {
                         // 清空 UI 中断文案；若恢复失败会再次 began=true
                         self.onError?("")
                     }
+                }
+            }
+
+            await recorder.setOnError { [weak self] recorderError in
+                Task { @MainActor in
+                    guard let self else { return }
+                    let msg = recorderError.errorDescription ?? "录音写入失败"
+                    self.lastError = msg
+                    self.onError?(msg)
                 }
             }
 

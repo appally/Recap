@@ -148,9 +148,13 @@ targets:
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: Recap
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
+        CFBundleDisplayName: 纪要
+        LSApplicationCategoryType: public.app-category.productivity
+        # 用 build setting 变量,build 时 Xcode 展开(同下方 settings.base 的 MARKETING_VERSION / CURRENT_PROJECT_VERSION)。
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # 仅用标准 HTTPS(WSS/HTTPS),属豁免加密,免每次 ASC 弹出口合规问卷。
+        ITSAppUsesNonExemptEncryption: false
         NSMicrophoneUsageDescription: 用于会议录音转写
         NSCameraUsageDescription: 用于会议中拍照记录此刻（白板、想法），以及扫描纸质议程与上场纪要
         NSRemindersFullAccessUsageDescription: 用于把会议待办创建为提醒事项
@@ -178,6 +182,10 @@ targets:
         PRODUCT_NAME: Recap
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "1"
+        # 自动签名：Xcode 据 DEVELOPMENT_TEAM 自动选 Apple Development(Debug)/Apple Distribution(Archive)。
+        # 覆盖 xcodegen 默认的 "iPhone Developer"（遗留值，Release/Archive 非标准且脆弱）。
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
         # 使用 Icon_v3 应用图标 (1024x1024)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

@@ -27,7 +27,7 @@ public actor SpeechAnalyzerEngine: AsrEngine {
     private var eventContinuation: AsyncStream<AsrStreamEvent>.Continuation?
     private var format: AVAudioFormat?
     /// start → (end, text)；end 用于会后说话人对齐，不可丢弃。
-    private var segmentMap: [Double: (end: Double, text: String)] = [:]
+    private var segmentMap: [Double: (end: Double, text: String, confidence: Double?)] = [:]
     /// 端侧热词（人名/公司/术语），注入 AnalysisContext.contextualStrings。
     private var contextualHints: [String] = []
     private var firstTokenMs: Double?
@@ -113,12 +113,21 @@ public actor SpeechAnalyzerEngine: AsrEngine {
                     let text = String(result.text.characters)
                     let start = result.range.start.seconds
                     let end = result.range.end.seconds
+                    // dialect probe: avg transcriptionConfidence across runs (nil if preset lacks it)
+                    let confVals = result.text.runs.compactMap { $0.transcriptionConfidence }
+                    let confidence: Double? = confVals.isEmpty
+                        ? nil
+                        : confVals.reduce(0, +) / Double(confVals.count)
+                    if result.isFinal {
+                        RecapLog.session.info("dialect-probe final=true runs=\(confVals.count, privacy: .public) avg=\(confidence.map { String(format: "%.3f", $0) } ?? "nil", privacy: .public)")
+                    }
                     // SpeechModuleResult.isFinal：volatile=false path → partial
                     await self?.handleResult(
                         text: text,
                         start: start,
                         end: end,
                         isFinal: result.isFinal,
+                        confidence: confidence,
                         startedAt: started
                     )
                 }
@@ -210,6 +219,7 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         start: Double,
         end: Double,
         isFinal: Bool,
+        confidence: Double?,
         startedAt: Date
     ) {
         if firstTokenMs == nil {
@@ -233,15 +243,15 @@ public actor SpeechAnalyzerEngine: AsrEngine {
             segmentMap.removeValue(forKey: key)
         }
 
-        segmentMap[start] = (end: safeEnd, text: text)
+        segmentMap[start] = (end: safeEnd, text: text, confidence: confidence)
         eventContinuation?.yield(.segment(
-            TranscriptSegment(startSeconds: start, endSeconds: safeEnd, text: text)
+            TranscriptSegment(startSeconds: start, endSeconds: safeEnd, text: text, confidence: confidence)
         ))
     }
 
     private func currentSegments() -> [TranscriptSegment] {
         segmentMap.sorted { $0.key < $1.key }
-            .map { TranscriptSegment(startSeconds: $0.key, endSeconds: $0.value.end, text: $0.value.text) }
+            .map { TranscriptSegment(startSeconds: $0.key, endSeconds: $0.value.end, text: $0.value.text, confidence: $0.value.confidence) }
     }
 
     private func teardown() {

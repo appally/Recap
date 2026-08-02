@@ -316,7 +316,7 @@ final class AgentKernelLoopTests: XCTestCase {
             request(prewarm: AgentPrewarm(evidenceBlock: "【检索片段】\n报价 420", citations: [cite]))
         )
         XCTAssertTrue(events.contains {
-            if case .toolFinished(let name, _, _, _, _) = $0 { return name == "prewarm" }
+            if case .toolFinished(let name, _, _, _, _, _) = $0 { return name == "prewarm" }
             return false
         })
         let user = transport.recordedMessages(at: 0)!.compactMap { msg -> String? in

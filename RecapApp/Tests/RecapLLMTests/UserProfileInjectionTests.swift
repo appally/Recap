@@ -105,4 +105,108 @@ final class UserProfileInjectionTests: XCTestCase {
         XCTAssertTrue(withProfile.contains("【我的身份】"))
         XCTAssertTrue(withProfile.contains("【输出偏好】"))
     }
+
+    // MARK: - 「你的发言」身份标记（meSpeakerLabel）
+
+    /// 单发言人会议 → 唯一发言人即你（语音备忘/独白；SpeakerKit 路径仅此可解析）。
+    func testMeSpeakerLabelSingleSpeaker() {
+        let speakers = [Speaker(id: "spk0", name: "发言人1", colorIndex: 0)]
+        XCTAssertEqual(
+            AgentSkillRunner.meSpeakerLabel(speakers: speakers, meVoiceprintId: nil),
+            "发言人1"
+        )
+    }
+
+    /// 标记我（声纹匹配）→ 跨会议稳定身份，优先于单发言人退化。
+    func testMeSpeakerLabelMarkedMeWins() {
+        let speakers = [
+            Speaker(id: "spk0", name: "发言人1", colorIndex: 0, voiceprintId: "vp-A"),
+            Speaker(id: "spk1", name: "发言人2", colorIndex: 1, voiceprintId: "vp-B")
+        ]
+        XCTAssertEqual(
+            AgentSkillRunner.meSpeakerLabel(speakers: speakers, meVoiceprintId: "vp-B"),
+            "发言人2"
+        )
+    }
+
+    /// 多人且未标记 → nil（模板须诚实降级，不猜测）。
+    func testMeSpeakerLabelMultiUnmarkedIsNil() {
+        let speakers = [
+            Speaker(id: "spk0", name: "发言人1", colorIndex: 0),
+            Speaker(id: "spk1", name: "发言人2", colorIndex: 1)
+        ]
+        XCTAssertNil(AgentSkillRunner.meSpeakerLabel(speakers: speakers, meVoiceprintId: nil))
+    }
+
+    /// meId 未命中任何声纹 → 多人则 nil；单人则退回唯一发言人。
+    func testMeSpeakerLabelUnmatchedMeIdFallsBack() {
+        let multi = [
+            Speaker(id: "spk0", name: "发言人1", colorIndex: 0, voiceprintId: "vp-A"),
+            Speaker(id: "spk1", name: "发言人2", colorIndex: 1, voiceprintId: "vp-B")
+        ]
+        XCTAssertNil(AgentSkillRunner.meSpeakerLabel(speakers: multi, meVoiceprintId: "vp-不存在"))
+
+        let single = [Speaker(id: "spk0", name: "发言人1", colorIndex: 0, voiceprintId: "vp-A")]
+        XCTAssertEqual(
+            AgentSkillRunner.meSpeakerLabel(speakers: single, meVoiceprintId: "vp-不存在"),
+            "发言人1"
+        )
+    }
+
+    /// makeUserPrompt：meSpeakerLabel 非空 → 注入【你的发言】；为 nil → 不出现（其它模板零变化）。
+    func testUserPromptInjectsMeSpeakerLabel() throws {
+        let skill = try makeSkill()
+        let withMe = AgentSkillRunner.makeUserPrompt(
+            skill: skill, meetingTitle: "周会", transcriptExcerpt: "发言人2：你好",
+            minutesTldr: nil, hint: nil, meSpeakerLabel: "发言人2"
+        )
+        XCTAssertTrue(withMe.contains("【你的发言】"))
+        XCTAssertTrue(withMe.contains("「发言人2」"))
+
+        let withoutMe = AgentSkillRunner.makeUserPrompt(
+            skill: skill, meetingTitle: "周会", transcriptExcerpt: "发言人2：你好",
+            minutesTldr: nil, hint: nil, meSpeakerLabel: nil
+        )
+        XCTAssertFalse(withoutMe.contains("【你的发言】"))
+    }
+
+    /// caching 契约：meSpeakerLabel 只进 user-payload，不进 system 前缀。
+    func testMeSpeakerLabelDoesNotTouchSystemPrefix() throws {
+        let skill = try makeSkill()
+        let systemPrefix = AgentSkillDocument.preamble + "\n\n---\n\n" + skill.systemPrompt
+        XCTAssertFalse(systemPrefix.contains("【你的发言】"))
+    }
+
+    // MARK: - Ask 路径（AgentAskRuntime.prepareLocal）身份注入
+
+    /// prepareLocal：meSpeakerLabel + userProfile 注入 user payload（让"我的待办"可答）；system 前缀不含（caching 契约）。
+    func testPrepareLocalInjectsMeLabelAndProfile() throws {
+        let speakers = [Speaker(id: "spk1", name: "发言人2", colorIndex: 1, voiceprintId: "vp-B")]
+        let prepared = AgentAskRuntime.prepareLocal(
+            query: "我的待办有哪些？",
+            segments: [],
+            speakers: speakers,
+            fallbackTranscript: "发言人2：我负责发报告",
+            meSpeakerLabel: "发言人2",
+            userProfile: UserProfile(aboutMe: "张三")
+        )
+        XCTAssertTrue(prepared.user.contains("【你的发言】"), "Ask 应注入【你的发言】身份标记")
+        XCTAssertTrue(prepared.user.contains("「发言人2」"))
+        XCTAssertTrue(prepared.user.contains("【我的身份】"), "Ask 应注入用户身份档案")
+        XCTAssertTrue(prepared.user.contains("张三"))
+        XCTAssertFalse(prepared.system.contains("【你的发言】"))
+        XCTAssertFalse(prepared.system.contains("【我的身份】"))
+    }
+
+    /// prepareLocal：meSpeakerLabel 与 userProfile 均缺省 → 不注入（其它路径零变化）。
+    func testPrepareLocalOmitsIdentityWhenAbsent() throws {
+        let prepared = AgentAskRuntime.prepareLocal(
+            query: "会议讲了什么",
+            segments: [],
+            speakers: [],
+            fallbackTranscript: "讨论了方案"
+        )
+        XCTAssertFalse(prepared.user.contains("【你的发言】"))
+        XCTAssertFalse(prepared.user.contains("【我的身份】"))
+    }
 }

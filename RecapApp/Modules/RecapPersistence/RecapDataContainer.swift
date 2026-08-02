@@ -1,30 +1,57 @@
 import Foundation
 import SwiftData
 import UIKit
+import os
 import RecapModels
+
+// MARK: - Versioned Schema
+
+/// 投产 schema V1：会议聚合根 + 转写版本 + LLM 产出 + 待办 + BYOK 配置。
+/// 未来结构性变更（加实体/改关系）时新增 V2 并在 `RecapMigrationPlan.stages` 接入迁移阶段；
+/// 加可选字段等轻量变更由 SwiftData 自动迁移，无需自定义 stage。
+public enum SchemaV1: VersionedSchema {
+    public static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
+
+    public static var models: [any PersistentModel.Type] {
+        [
+            Meeting.self,
+            MeetingBrief.self,
+            TranscriptVersion.self,
+            AIOutput.self,
+            ActionItem.self,
+            Moment.self,
+            HandwritingNote.self,
+            LLMProviderConfig.self,
+            ChatSession.self,
+            ChatMessageRecord.self,
+            AgentStepRecord.self,
+            AgentTask.self,
+        ]
+    }
+}
+
+/// 迁移计划：当前仅 V1；后续 V1 -> V2 的结构变更在此追加 `MigrationStage`。
+public enum RecapMigrationPlan: SchemaMigrationPlan {
+    public static var schemas: [any VersionedSchema.Type] { [SchemaV1.self] }
+    public static var stages: [MigrationStage] { [] }
+}
+
+// MARK: - Container
 
 /// SwiftData ModelContainer 装配 + 首次启动预置数据。
 public enum RecapDataContainer {
 
-    /// 投产 schema：会议聚合根 + 转写版本 + LLM 产出 + 待办 + BYOK 配置。
-    public static let schema = Schema([
-        Meeting.self,
-        MeetingBrief.self,
-        TranscriptVersion.self,
-        AIOutput.self,
-        ActionItem.self,
-        Moment.self,
-        HandwritingNote.self,
-        LLMProviderConfig.self,
-        ChatSession.self,
-        ChatMessageRecord.self,
-        AgentStepRecord.self,
-        AgentTask.self,
-    ])
+    /// 投产 schema（由 VersionedSchema 派生，驱动迁移计划）。
+    public static let schema = Schema(versionedSchema: SchemaV1.self)
 
     /// 全局容器（make() 在 App 启动时单线程写入一次，之后只读；供 AppIntents EntityQuery 等
     /// 无 ModelContext 上下文处复用）。nonisolated(unsafe)：launch-time 一次性写入，随后只读。
     public nonisolated(unsafe) private(set) static var shared: ModelContainer?
+
+    /// 数据迁移失败标志：`make()` 走备份降级时置位，上层可读以一次性提示用户。
+    public nonisolated(unsafe) private(set) static var dataMigrationFailed: Bool = false
+
+    private static let logger = Logger(subsystem: "com.recap.app", category: "Persistence")
 
     /// 创建持久化容器；首次启动写入默认 DeepSeek 配置与示例会议。
     public static func make(inMemory: Bool = false) throws -> ModelContainer {
@@ -53,29 +80,61 @@ public enum RecapDataContainer {
         }
 
         do {
-            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let container = try ModelContainer(
+                for: schema,
+                migrationPlan: RecapMigrationPlan.self,
+                configurations: [configuration]
+            )
             let seedContext = ModelContext(container)
             try seedIfNeeded(in: seedContext)
             Self.shared = container
             return container
         } catch {
-            // 开发期 schema 演进（如新增 MeetingBrief）可能导致旧 store 无法轻量迁移。
-            // 清库重建，避免真机白屏；正式版应改为 VersionedSchema + MigrationPlan。
-            if let storeURL {
-                try? FileManager.default.removeItem(at: storeURL)
-                let container = try ModelContainer(for: schema, configurations: [configuration])
-                let seedContext = ModelContext(container)
-                try seedIfNeeded(in: seedContext)
-                Self.shared = container
-                return container
-            }
-            throw error
+            // schema 不兼容且无法轻量迁移时：绝不静默删库。
+            // 旧库改名备份保留（可恢复/排查），降级 inMemory 容器避免真机白屏。
+            logger.error("ModelContainer 加载失败，走备份降级：\(error.localizedDescription, privacy: .public)")
+            return try fallbackAfterFailure(storeURL: storeURL)
+        }
+    }
+
+    /// 备份旧库 + 降级 inMemory 容器。绝不抹除用户数据。
+    private static func fallbackAfterFailure(storeURL: URL?) throws -> ModelContainer {
+        dataMigrationFailed = true
+        if let storeURL {
+            backupStore(at: storeURL)
+        }
+        let inMemoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(
+            for: schema,
+            migrationPlan: RecapMigrationPlan.self,
+            configurations: [inMemoryConfig]
+        )
+        let seedContext = ModelContext(container)
+        try seedIfNeeded(in: seedContext)
+        Self.shared = container
+        return container
+    }
+
+    /// 把 store 文件及 SQLite 附属（-wal/-shm）改名备份，保留用户数据供恢复/排查。
+    private static func backupStore(at storeURL: URL) {
+        let fm = FileManager.default
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let parent = storeURL.deletingLastPathComponent()
+        let base = storeURL.lastPathComponent
+        for suffix in ["", "-wal", "-shm"] {
+            let src = parent.appendingPathComponent(base + suffix)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            let dst = parent.appendingPathComponent(base + ".failed-" + stamp + suffix)
+            try? fm.moveItem(at: src, to: dst)
         }
     }
 
     public static func seedIfNeeded(in context: ModelContext) throws {
         try seedDefaultProviderIfNeeded(in: context)
+        // 示例会议仅 DEBUG 播种（UI 验收用）；Release 构建不向真实用户注入假数据。
+        #if DEBUG
         try seedSampleMeetingsIfNeeded(in: context)
+        #endif
     }
 
     /// 播种 / 补齐预置 LLM 供应商；已有项不覆盖用户改过的 model。

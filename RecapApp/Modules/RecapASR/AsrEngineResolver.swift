@@ -66,6 +66,9 @@ public enum AsrResolveError: Error, LocalizedError, Sendable {
 public enum AsrEngineResolver {
 
     public static var hasFunCredentials: Bool {
+        // 托管凭证(Pro 或 免费档):网关会签发阿里临时 token,无需 BYOK key。
+        // 免费档在端侧不可用(国行/非 AI 机型)时据此回落云端 Fun-ASR 兜底。
+        if RecapCredentialProvider.shared.isActiveCloud { return true }
         guard let key = KeychainStore.get(ASRPresets.funApiKeyAccount), !key.isEmpty else {
             return false
         }
@@ -81,17 +84,27 @@ public enum AsrEngineResolver {
             return try await prepare(.funASR)
         case .auto:
             // 端侧 → Fun-ASR（火山已下线：无 Pro 网关分支、与 Fun 职责重叠）
-            if let engine = try? await prepare(.speechAnalyzer) { return engine }
-            if let engine = try? await prepare(.funASR) { return engine }
-
-            var reasons: [String] = []
-            reasons.append("SpeechAnalyzer 不可用（需 Apple Intelligence / 中文资源）")
-            if !hasFunCredentials {
-                reasons.append("未配置阿里百炼 API Key")
+            // Pro 会员(recapCloud)：云端高保真优先（已付费），端侧兜底（离线/网络故障）。
+            // 免费/BYOK：端侧优先（省额度/隐私），云端兜底。
+            let proCloud = AIServiceMode.current == .recapCloud
+            if proCloud {
+                if let engine = try? await prepare(.funASR) { return engine }
+                if let engine = try? await prepare(.speechAnalyzer) { return engine }
             } else {
-                reasons.append("Fun-ASR prepare 失败")
+                if let engine = try? await prepare(.speechAnalyzer) { return engine }
+                if let engine = try? await prepare(.funASR) { return engine }
             }
-            throw AsrResolveError.noneAvailable(reasons.joined(separator: "；"))
+
+            // 两种引擎都不可用时给一句可操作的引导，避免泄漏 SpeechAnalyzer/Fun-ASR/百炼 等内部术语。
+            let detail: String
+            if proCloud {
+                detail = "转写服务连接失败，请检查网络后重试；若设备不支持端侧转写（需 Apple Intelligence 机型），请在设置中切换引擎。"
+            } else if !hasFunCredentials {
+                detail = "此设备不支持端侧转写（需 Apple Intelligence 机型），且云端转写尚未就绪。请登录或升级到 Pro 后重试。"
+            } else {
+                detail = "此设备不支持端侧转写（需 Apple Intelligence 机型）；云端转写启动失败，请检查网络后重试。"
+            }
+            throw AsrResolveError.noneAvailable(detail)
         }
     }
 
@@ -99,6 +112,21 @@ public enum AsrEngineResolver {
     @available(iOS 26.0, *)
     public static func resolve(kind: AsrEngineKind) async throws -> any AsrEngine {
         try await prepare(kind)
+    }
+
+    /// 始终云端优先解析（用于「重新转写」单一入口，不暴露引擎名给用户）：
+    /// 托管档(Pro/免费)实际跑 paraformer-realtime-v2(worker 下发)；BYOK fun key 也走云端；
+    /// 无云端凭证时端侧兜底（SpeechAnalyzer → 实验性 FluidAudio，需 flag 开 + 模型已预下载）。
+    @available(iOS 26.0, *)
+    public static func resolveCloudFirst() async throws -> any AsrEngine {
+        if hasFunCredentials, let cloud = try? await prepare(.funASR) { return cloud }
+        if let onDevice = try? await prepare(.speechAnalyzer) { return onDevice }
+        if ASRFeatureFlags.fluidRetranscribeEnabled,
+           FluidAudioBootstrap.modelsPreloaded,
+           let fluid = try? await prepare(.fluidSenseVoice) {
+            return fluid
+        }
+        throw AsrResolveError.noneAvailable("转写服务暂不可用，请检查网络或登录后重试。")
     }
 
     @available(iOS 26.0, *)

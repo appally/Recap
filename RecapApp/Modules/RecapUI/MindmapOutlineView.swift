@@ -41,7 +41,7 @@ public struct MindmapOutlineView: View {
     private func bulletColor(_ depth: Int) -> Color {
         switch depth {
         case 0: return Color.recapCinnabar
-        case 1: return Color.recapCeladon
+        case 1: return Color.recapInk
         default: return Color.recapTea
         }
     }
@@ -64,9 +64,9 @@ public struct MindmapOutlineView: View {
 
     private func textFont(_ depth: Int) -> Font {
         switch depth {
-        case 0: return .system(size: 16, weight: .semibold)
-        case 1: return .system(size: 15, weight: .medium)
-        default: return .system(size: 14, weight: .regular)
+        case 0: return .recapBody.weight(.semibold)
+        case 1: return .recapBodyS.weight(.medium)
+        default: return .recapBodyS
         }
     }
 

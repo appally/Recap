@@ -24,12 +24,12 @@ public struct ResearchDraftSheet: View {
 
                     if draft.isPartial {
                         Text("（部分完成）")
-                            .font(.system(size: 12))
+                            .font(.recapMeta)
                             .foregroundStyle(Color.recapTea)
                     }
 
                     Text(draft.title)
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.recapTitle)
                         .foregroundStyle(Color.recapInk)
 
                     section("结论", draft.conclusion)
@@ -37,16 +37,16 @@ public struct ResearchDraftSheet: View {
                     if !draft.options.isEmpty {
                         VStack(alignment: .leading, spacing: Spacing.md) {
                             Text("备选方案")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.recapHeading)
                             ForEach(Array(draft.options.enumerated()), id: \.offset) { _, opt in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(opt.name)
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.recapBodyS.weight(.medium))
                                     ForEach(opt.pros, id: \.self) { p in
-                                        Text("+ \(p)").font(.system(size: 13)).foregroundStyle(Color.recapCeladon)
+                                        Text("+ \(p)").font(.recapMeta).foregroundStyle(Color.recapInk)
                                     }
                                     ForEach(opt.cons, id: \.self) { c in
-                                        Text("− \(c)").font(.system(size: 13)).foregroundStyle(Color.recapCinnabar)
+                                        Text("− \(c)").font(.recapMeta).foregroundStyle(Color.recapCinnabar)
                                     }
                                 }
                             }
@@ -63,14 +63,14 @@ public struct ResearchDraftSheet: View {
                     if !draft.citations.isEmpty {
                         VStack(alignment: .leading, spacing: Spacing.sm) {
                             Text("来源")
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.recapHeading)
                             ForEach(draft.citations, id: \.id) { cite in
                                 Button {
                                     handleCitation(cite)
                                 } label: {
                                     Text(cite.title)
-                                        .font(.system(size: 13))
-                                        .foregroundStyle(Color.recapCeladon)
+                                        .font(.recapMeta)
+                                        .foregroundStyle(Color.recapInk)
                                         .multilineTextAlignment(.leading)
                                 }
                                 .buttonStyle(.plain)
@@ -97,9 +97,9 @@ public struct ResearchDraftSheet: View {
     private func section(_ title: String, _ body: String) -> some View {
         if !body.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text(title).font(.system(size: 15, weight: .semibold))
+                Text(title).font(.recapHeading)
                 Text(body)
-                    .font(.system(size: 14))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapInk)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -108,10 +108,10 @@ public struct ResearchDraftSheet: View {
 
     private func bulletSection(_ title: String, _ lines: [String]) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text(title).font(.system(size: 15, weight: .semibold))
+            Text(title).font(.recapHeading)
             ForEach(lines, id: \.self) { line in
                 Text("· \(line)")
-                    .font(.system(size: 14))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapInk)
             }
         }

@@ -16,7 +16,7 @@ struct MomentCardView: View {
         HStack(alignment: .top, spacing: Spacing.md) {
             // 左侧青瓷竖条：区别于 LIVE 朱砂「当前块」与回听青瓷高亮，独立标识「时刻照片」。
             RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Color.recapCeladon.opacity(0.55))
+                .fill(Color.recapInk.opacity(0.55))
                 .frame(width: 2)
                 .padding(.top, 4)
 
@@ -26,9 +26,9 @@ struct MomentCardView: View {
                 if let note = moment.noteText?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !note.isEmpty {
                     Text(note)
-                        .font(.recapRaw)
+                        .font(.recapBodyS)
                         .foregroundStyle(Color.recapInk.opacity(0.92))
-                        .lineSpacing(4)
+                        .lineSpacing(Leading.body)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -46,18 +46,18 @@ struct MomentCardView: View {
         HStack(spacing: Spacing.sm) {
             Image(systemName: RecapSymbol.camera)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.recapCeladon)
+                .foregroundStyle(Color.recapInk)
             Text("现场照片")
-                .font(.system(size: 13, weight: .semibold, design: .default))
-                .foregroundStyle(Color.recapCeladon)
+                .font(.recapMeta.weight(.semibold))
+                .foregroundStyle(Color.recapInk)
 
             if moment.photoCount > 1 {
                 Text("\(moment.photoCount) 张")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.recapCeladon)
+                    .font(.recapCaption)
+                    .foregroundStyle(Color.recapInk)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color.recapCeladon.opacity(0.12), in: Capsule())
+                    .background(Color.recapInk.opacity(0.12), in: Capsule())
             }
 
             timePill
@@ -76,7 +76,7 @@ struct MomentCardView: View {
         let r = MomentOwnershipDiagnostics.short6(MomentOwnershipDiagnostics.relationMeetingId(moment))
         let bad = p != r
         return Text("P:\(p) R:\(r)")
-            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .font(.recapCaption)
             .foregroundStyle(.white)
             .padding(.horizontal, 5).padding(.vertical, 2)
             .background(bad ? Color.red.opacity(0.9) : Color.recapInk.opacity(0.30), in: Capsule())
@@ -89,18 +89,18 @@ struct MomentCardView: View {
                 onSeek()
             } label: {
                 Text(moment.sourceTime)
-                    .font(.recapTimestamp)
-                    .tracking(0.2)
-                    .foregroundStyle(Color.recapCeladon)
+                    .font(.recapMono)
+                    .tracking(Tracking.caption)
+                    .foregroundStyle(Color.recapInk)
                     .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.recapCeladon.opacity(0.10), in: Capsule())
+                    .background(Color.recapInk.opacity(0.10), in: Capsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("从 \(moment.sourceTime) 回听")
         } else {
             Text(moment.sourceTime)
-                .font(.recapTimestamp)
-                .foregroundStyle(Color.recapTea.opacity(0.9))
+                .font(.recapMono)
+                .foregroundStyle(Color.recapTea)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Color.recapTea.opacity(0.10), in: Capsule())
         }
@@ -127,7 +127,7 @@ struct MomentCardView: View {
                         Image(systemName: "photo.stack")
                             .font(.system(size: 11, weight: .semibold))
                         Text("共 \(moment.photoCount) 张")
-                            .font(.system(size: 11, weight: .semibold, design: .default))
+                            .font(.recapCaption)
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 10)
@@ -139,7 +139,7 @@ struct MomentCardView: View {
         } else {
             // 占位：照片缺失
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.recapCeladon.opacity(0.08))
+                .fill(Color.recapInk.opacity(0.08))
                 .frame(maxWidth: .infinity)
                 .frame(height: 110)
                 .overlay(
@@ -147,7 +147,7 @@ struct MomentCardView: View {
                         Image(systemName: RecapSymbol.camera)
                             .font(.system(size: 18))
                         Text("照片文件缺失")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.recapMeta.weight(.medium))
                     }
                     .foregroundStyle(Color.recapTea)
                 )
@@ -215,7 +215,7 @@ struct MomentGalleryView: View {
     private var topBar: some View {
         HStack {
             Text("\(index + 1) / \(images.count)")
-                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .font(.recapMono)
                 .foregroundStyle(.white.opacity(0.85))
             Spacer()
             Button {
@@ -237,13 +237,13 @@ struct MomentGalleryView: View {
         HStack(spacing: Spacing.md) {
             Image(systemName: RecapSymbol.listen)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.recapCeladon)
+                .foregroundStyle(Color.recapInk)
             Text("从此刻回听")
-                .font(.system(size: 15, weight: .medium))
+                .font(.recapBodyS.weight(.medium))
                 .foregroundStyle(.white)
             Spacer()
             Text(moment.sourceTime)
-                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .font(.recapMono)
                 .foregroundStyle(.white.opacity(0.7))
         }
         .padding(.horizontal, Spacing.lg)
@@ -262,8 +262,8 @@ struct MomentGalleryView: View {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack {
                     Text("照片文字")
-                        .font(.recapSection)
-                        .foregroundStyle(Color.recapCeladon)
+                        .font(.recapEyebrow)
+                        .foregroundStyle(Color.recapInk)
                     Spacer()
                     Button {
                         UIPasteboard.general.string = ocr
@@ -276,7 +276,7 @@ struct MomentGalleryView: View {
                     } label: {
                         Label(copiedFeedback ? "已复制" : "复制",
                               systemImage: copiedFeedback ? RecapSymbol.check : "doc.on.doc")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(.recapMeta.weight(.medium))
                             .foregroundStyle(.white.opacity(0.85))
                     }
                     .buttonStyle(.plain)
@@ -284,7 +284,7 @@ struct MomentGalleryView: View {
                 // OCR 长文（白板 / PPT）自滚动，限高不再侵吞图片区。
                 ScrollView {
                     Text(ocr)
-                        .font(.recapRaw)
+                        .font(.recapBodyS)
                         .foregroundStyle(.white.opacity(0.8))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }

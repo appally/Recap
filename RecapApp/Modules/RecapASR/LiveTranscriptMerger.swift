@@ -8,19 +8,23 @@ public struct LiveCaptionRow: Equatable, Sendable, Identifiable {
     public var endSeconds: Double
     public var text: String
     public var isFinal: Bool
+    /// 端侧 ASR 置信度（方言检测信号），从 TranscriptSegment 透传；云端/旧数据为 nil。
+    public var confidence: Double?
 
     public init(
         id: String = UUID().uuidString,
         startSeconds: Double,
         endSeconds: Double,
         text: String,
-        isFinal: Bool
+        isFinal: Bool,
+        confidence: Double? = nil
     ) {
         self.id = id
         self.startSeconds = startSeconds
         self.endSeconds = endSeconds
         self.text = text
         self.isFinal = isFinal
+        self.confidence = confidence
     }
 }
 
@@ -32,7 +36,7 @@ public struct LiveCaptionRow: Equatable, Sendable, Identifiable {
 public struct LiveTranscriptMerger: Sendable {
     public private(set) var rows: [LiveCaptionRow] = []
     /// 绝对 startSeconds → rows 下标
-    public private(set) var segmentIndex: [Double: Int] = [:]
+    public private(set) var segmentIndex: [Int64: Int] = [:]
     public private(set) var segmentDriven: Bool = false
     /// 续录时加到引擎相对时间上（018）；017 默认 0
     public var timelineOffset: Double = 0
@@ -47,7 +51,8 @@ public struct LiveTranscriptMerger: Sendable {
                 startSeconds: seg.startSeconds,
                 endSeconds: seg.endSeconds,
                 text: seg.text,
-                isFinal: true
+                isFinal: true,
+                confidence: seg.confidence
             )
         }
         segmentDriven = !rows.isEmpty
@@ -58,8 +63,13 @@ public struct LiveTranscriptMerger: Sendable {
     public mutating func rebuildSegmentIndex() {
         segmentIndex.removeAll(keepingCapacity: true)
         for (i, row) in rows.enumerated() where row.isFinal {
-            segmentIndex[row.startSeconds] = i
+            segmentIndex[Self.quantizeKey(row.startSeconds)] = i
         }
+    }
+
+    /// startSeconds 量化为毫秒整数 key，消除浮点偏移导致的查表漂移。
+    private static func quantizeKey(_ seconds: Double) -> Int64 {
+        Int64((seconds * 1000).rounded())
     }
 
     /// 续录前调用：引擎时间轴将从 0 重启，抬高 offset 避免撞旧键。
@@ -131,21 +141,24 @@ public struct LiveTranscriptMerger: Sendable {
         rows.removeAll { !$0.isFinal }
 
         // 驱逐与新区段重叠的旧定稿（SpeechAnalyzer 假设拆句残留）
+        // 同位段（量化键相等）保留以走 in-place 更新；与 segmentIndex 查表口径一致。
+        let newKey = Self.quantizeKey(absoluteStart)
         rows.removeAll { row in
             guard row.isFinal else { return false }
-            if abs(row.startSeconds - absoluteStart) < 1e-9 { return false }
+            if Self.quantizeKey(row.startSeconds) == newKey { return false }
             return row.endSeconds > absoluteStart && row.startSeconds < absoluteEnd
         }
         rebuildSegmentIndex()
 
-        if let idx = segmentIndex[absoluteStart], rows.indices.contains(idx) {
+        if let idx = segmentIndex[newKey], rows.indices.contains(idx) {
             let keepId = rows[idx].id
             rows[idx] = LiveCaptionRow(
                 id: keepId,
                 startSeconds: absoluteStart,
                 endSeconds: absoluteEnd,
                 text: text,
-                isFinal: true
+                isFinal: true,
+                confidence: seg.confidence
             )
         } else {
             rows.append(
@@ -154,10 +167,11 @@ public struct LiveTranscriptMerger: Sendable {
                     startSeconds: absoluteStart,
                     endSeconds: absoluteEnd,
                     text: text,
-                    isFinal: true
+                    isFinal: true,
+                    confidence: seg.confidence
                 )
             )
-            segmentIndex[absoluteStart] = rows.count - 1
+            segmentIndex[newKey] = rows.count - 1
         }
     }
 
@@ -177,7 +191,8 @@ public struct LiveTranscriptMerger: Sendable {
                 id: UUID(uuidString: row.id) ?? UUID(),
                 startSeconds: row.startSeconds,
                 endSeconds: row.endSeconds,
-                text: row.text
+                text: row.text,
+                confidence: row.confidence
             )
         }
     }

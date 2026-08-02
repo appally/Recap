@@ -73,6 +73,15 @@ public enum MeetingAudioStore {
         }
     }
 
+    /// 以 mmap 懒加载 PCM 文件为 `Data`（页按需 fault-in、可被内核回收），用于会后长音频重转/分离。
+    /// 配合按段切片物化，把 60min≈230MB 的整文件常驻降到单段 ~6MB，规避 jetsam OOM。
+    /// 调用方按 Float32(4B) 解释字节；返回的 Data 生命周期需覆盖整个转写过程（映射在 Data 释放后失效）。
+    public static func loadMappedData(storedPath: String) throws -> Data {
+        let url = try resolveAudioURL(storedPath: storedPath)
+        // .alwaysMapped：文件映射进虚拟地址空间，访问时按页 fault-in；不一次性 malloc 全文常驻。
+        return try Data(contentsOf: url, options: .alwaysMapped)
+    }
+
     public static func deleteMeetingAudio(meetingId: UUID) {
         guard let dir = try? meetingDirectory(meetingId: meetingId) else { return }
         try? FileManager.default.removeItem(at: dir)

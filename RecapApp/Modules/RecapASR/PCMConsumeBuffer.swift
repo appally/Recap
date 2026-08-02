@@ -13,7 +13,8 @@ struct PCMConsumeBuffer: Sendable {
 
     var count: Int { storage.count - start }
 
-    mutating func append<C: Sequence>(_ samples: C) where C.Element == Int16 {
+    @discardableResult
+    mutating func append<C: Sequence>(_ samples: C) -> Bool where C.Element == Int16 {
         storage.append(contentsOf: samples)
         // 超上限：丢弃最旧，保留尾部 maxSamples
         let total = count
@@ -21,8 +22,10 @@ struct PCMConsumeBuffer: Sendable {
             let overflow = total - maxSamples
             start += overflow
             compactIfNeeded(force: true)
+            return true   // 发生丢弃：调用方据此上报（避免静默哑录）
         } else {
             compactIfNeeded(force: false)
+            return false
         }
     }
 

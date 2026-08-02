@@ -38,7 +38,26 @@ public enum AudioSilenceChunker {
     ///   的较早静音边界（≥80% target）；仍无则在 `max` 处强切。
     /// - 尾段 < `minChunk` 且有多段时，并入前一段。
     public static func plan(samples: [Float], sampleRate: Double, options: Options = .init()) -> [Range<Int>] {
-        let count = samples.count
+        guard !samples.isEmpty, sampleRate > 0 else { return [] }
+        return samples.withUnsafeBufferPointer { buf in
+            planSamples(buf, sampleRate: sampleRate, options: options)
+        }
+    }
+
+    /// mmap 友好重载：直接扫描映射的 Float32 PCM 字节，不物化 `[Float]`（长音频省 ~230MB 常驻）。
+    /// 切片返回的是**样本索引** Range；调用方按 `MemoryLayout<Float>.size`（4B）换算字节区间切片 Data。
+    public static func plan(audioData: Data, sampleRate: Double, options: Options = .init()) -> [Range<Int>] {
+        guard !audioData.isEmpty, sampleRate > 0 else { return [] }
+        return audioData.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> [Range<Int>] in
+            let floats = raw.bindMemory(to: Float.self)
+            guard !floats.isEmpty else { return [] }
+            return planSamples(floats, sampleRate: sampleRate, options: options)
+        }
+    }
+
+    /// 分块内核：对 Float 缓冲区原地扫描（数组 / mmap Data 共用，避免双份逻辑漂移）。
+    private static func planSamples(_ s: UnsafeBufferPointer<Float>, sampleRate: Double, options: Options) -> [Range<Int>] {
+        let count = s.count
         guard count > 0, sampleRate > 0 else { return [] }
 
         let frameLen = max(1, Int(options.frameSeconds * sampleRate))
@@ -58,7 +77,7 @@ public enum AudioSilenceChunker {
         var silentFrame = [Bool](repeating: false, count: frameCount)
         for f in 0..<frameCount {
             let base = f * frameLen
-            silentFrame[f] = isSilent(samples, base: base, len: frameLen, threshold: silenceAmp)
+            silentFrame[f] = isSilent(s, base: base, len: frameLen, threshold: silenceAmp)
         }
 
         // ② 静音边界候选 = 每个 ≥minSilenceFrames 静音段的「末尾样本」（语音恢复点，理想切点）
@@ -117,7 +136,7 @@ public enum AudioSilenceChunker {
 
     // MARK: - 内部
 
-    private static func isSilent(_ s: [Float], base: Int, len: Int, threshold: Float) -> Bool {
+    private static func isSilent(_ s: UnsafeBufferPointer<Float>, base: Int, len: Int, threshold: Float) -> Bool {
         // 局部 RMS（不复用 EnergyVAD 私有 static，保持本类型自洽）
         var sum: Float = 0
         var i = base

@@ -17,21 +17,31 @@ struct LLMSettingsView: View {
     @State private var anySearchKeyDraft = ""
     @State private var status = ""
     @State private var account = RecapAccountStore.current
+    /// 锁态来源卡点击 -> 跳会员页解锁/升级。
+    @State private var showMembership = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xxl) {
-                modePicker
-                if mode == .recapCloud {
-                    cloudPanel
-                } else if mode == .freeTrial {
-                    freeTrialPanel
-                } else if membership.byokUnlocked {
-                    byokPanel
+                if membership.byokUnlocked {
+                    // BYOK 已解锁：暴露来源选择与完整技术配置（厂商 / Key / 模型 / 搜索）。
+                    sourcePicker
+                    if mode == .recapCloud {
+                        cloudPanel
+                    } else if mode == .byok {
+                        byokPanel
+                        webSearchPanel
+                    } else {
+                        freeTrialPanel
+                    }
                 } else {
-                    byokLockedCTA
+                    // 非 BYOK：Recap 托管，不暴露 Key/模型/搜索等技术配置，只看状态与升级/管理。
+                    if membership.isPro {
+                        cloudPanel
+                    } else {
+                        freeTrialPanel
+                    }
                 }
-                webSearchPanel
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.md)
@@ -41,37 +51,79 @@ struct LLMSettingsView: View {
         .background(SettingsAmbientBackground())
         .navigationTitle("大模型")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showMembership) {
+            MembershipSettingsView()
+        }
         .onAppear(perform: reload)
     }
 
-    // MARK: - Mode
+    // MARK: - 来源选择（权益与引擎解耦：来源卡按权益门控，锁态就地 CTA）
 
-    private var modePicker: some View {
+    /// 大模型来源：Recap 云端（Pro）/ 自备密钥（BYOK）。免费档为隐式回落，不再作为可主动切换的"模式"。
+    private var sourcePicker: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("服务方式")
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(1.4)
+            Text("大模型来源")
+                .font(.recapEyebrow)
+                .tracking(Tracking.eyebrow)
                 .foregroundStyle(Color.recapTea)
 
-            SettingsSegmentedControl(
-                options: AIServiceMode.allCases.map { ($0, $0.title) },
-                selection: $mode
-            )
-            .onChange(of: mode) { _, newValue in
-                if newValue == .byok && !membership.byokUnlocked {
-                    // 未解锁:仅展示解锁 CTA,引擎保持免费档以免纪要断流。
-                    AIServiceMode.current = .freeTrial
-                    status = "自备密钥需先解锁"
-                } else {
-                    AIServiceMode.current = newValue
-                    status = "已切换到\(newValue.title)"
+            VStack(spacing: Spacing.sm) {
+                SettingsChoiceCard(
+                    icon: "sparkles",
+                    title: "官方云端",
+                    subtitle: "Pro 订阅代付，免配 Key",
+                    badge: membership.isPro ? nil : "需 Pro",
+                    badgeTint: .recapOchre,
+                    selected: mode == .recapCloud
+                ) {
+                    if membership.isPro {
+                        selectMode(.recapCloud)
+                    } else {
+                        showMembership = true
+                    }
+                }
+
+                SettingsChoiceCard(
+                    icon: "key",
+                    title: "自备密钥",
+                    subtitle: "用你自己的厂商 Key，费用自理",
+                    badge: membership.byokUnlocked ? nil : "需解锁",
+                    badgeTint: .recapOchre,
+                    selected: mode == .byok
+                ) {
+                    if membership.byokUnlocked {
+                        selectMode(.byok)
+                    } else {
+                        showMembership = true
+                    }
                 }
             }
 
-            Text(mode.subtitle)
-                .font(.system(size: 13))
-                .foregroundStyle(Color.recapTea)
+            Text(sourceFootnote)
+                .font(.recapMeta)
+                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .lineSpacing(Leading.tight)
+                .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var sourceFootnote: String {
+        switch mode {
+        case .recapCloud:
+            return "当前走官方网关。再次点选可回退到免费档。"
+        case .byok:
+            return "当前使用你配置的厂商密钥。再次点选可回退到免费档。"
+        case .freeTrial:
+            return "当前为免费档：端侧转写 + 平台 Flash 纪要，每月少量额度。开通 Pro 或解锁自备密钥可获得更强能力。"
+        }
+    }
+
+    /// 选来源：再次点选已选来源 = 回退免费档（保留返回路径，无需独立"免费"卡）。
+    private func selectMode(_ newValue: AIServiceMode) {
+        let target: AIServiceMode = (mode == newValue) ? .freeTrial : newValue
+        withAnimation(.recapSoft) { mode = target }
+        AIServiceMode.current = target
+        status = target == .freeTrial ? "已切换到免费档" : "已切换到\(target.title)"
     }
 
     // MARK: - Cloud
@@ -84,11 +136,11 @@ struct LLMSettingsView: View {
                         .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(Color.recapInk)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Recap 云端模型")
-                            .font(.system(size: 17, weight: .semibold))
+                        Text("官方云端模型")
+                            .font(.recapTitleS)
                             .foregroundStyle(Color.recapInk)
                         Text("纪要、待办、问答走官方网关，无需自备 Key")
-                            .font(.system(size: 13))
+                            .font(.recapMeta)
                             .foregroundStyle(Color.recapTea)
                     }
                 }
@@ -98,11 +150,11 @@ struct LLMSettingsView: View {
                 Text(
                     membership.isPro
                         ? "已开通 Pro。云端网关服务可免 Key 直接使用。"
-                        : "开通 Pro 后由 Recap 提供云端模型支持。也可随时改用「自备密钥」。"
+                        : "开通 Pro 后由官方网关提供云端模型支持。也可随时改用「自备密钥」。"
                 )
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.recapTea.opacity(0.85))
-                    .lineSpacing(3)
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .lineSpacing(Leading.tight)
             }
             .padding(.vertical, Spacing.xs)
 
@@ -125,11 +177,11 @@ struct LLMSettingsView: View {
     private var membershipRow: some View {
         HStack {
             Text("当前档位")
-                .font(.system(size: 14))
+                .font(.recapBodyS)
                 .foregroundStyle(Color.recapTea)
             Spacer()
             SettingsStatusPill(
-                text: membership.isPro ? "Pro" : "免费",
+                text: membership.tierLabel,
                 kind: membership.isPro ? .ready : .info
             )
         }
@@ -145,18 +197,18 @@ struct LLMSettingsView: View {
                     .font(.system(size: 20, weight: .regular))
                     .foregroundStyle(Color.recapInk)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Recap 免费")
-                        .font(.system(size: 17, weight: .semibold))
+                    Text("免费档")
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.recapInk)
                     Text("端侧转写 + 平台 Flash 纪要，每月少量额度")
-                        .font(.system(size: 13))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
                 }
             }
 
             HStack {
                 Text("本月剩余")
-                    .font(.system(size: 14))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapTea)
                 Spacer()
                 SettingsStatusPill(
@@ -166,11 +218,11 @@ struct LLMSettingsView: View {
             }
 
             Text(RecapAccountStore.current.isSignedIn
-                 ? "已登录，每月自动续杯。升级 Pro 享云端高保真 + 强模型。"
+                 ? "已登录，每月自动续杯。升级 Pro 享云端高保真 + 智能纪要。"
                  : "登录 Apple 账号后额度升级、按月续杯。")
-                .font(.system(size: 13))
-                .foregroundStyle(Color.recapTea.opacity(0.85))
-                .lineSpacing(3)
+                .font(.recapMeta)
+                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .lineSpacing(Leading.tight)
 
             SettingsDivider()
 
@@ -189,51 +241,13 @@ struct LLMSettingsView: View {
         .padding(.vertical, Spacing.xs)
     }
 
-    // MARK: - BYOK locked
-
-    private var byokLockedCTA: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            HStack(spacing: Spacing.md) {
-                Image(systemName: "key.fill")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(Color.recapInk)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("自备密钥（未解锁）")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.recapInk)
-                    Text("一次性解锁后，用你自己的厂商 Key，费用自理、不限量")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.recapTea)
-                }
-            }
-
-            Button {
-                if let p = membership.byokUnlockProduct { Task { await membership.purchase(p) } }
-            } label: {
-                Text(membership.byokUnlockProduct.map { "解锁自备密钥 · \($0.displayPrice)" } ?? "解锁自备密钥")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(Color.recapInk, in: Capsule())
-            }
-            .buttonStyle(SettingsPressStyle())
-            .disabled(membership.byokUnlockProduct == nil)
-
-            Text("解锁后在此填入厂商 API Key 即可使用。")
-                .font(.system(size: 13))
-                .foregroundStyle(Color.recapTea.opacity(0.85))
-        }
-        .padding(.vertical, Spacing.xs)
-    }
-
     // MARK: - BYOK
 
     private var byokPanel: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
             Text("选择供应商")
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(1.4)
+                .font(.recapEyebrow)
+                .tracking(Tracking.eyebrow)
                 .foregroundStyle(Color.recapTea)
 
             VStack(spacing: Spacing.sm) {
@@ -243,7 +257,7 @@ struct LLMSettingsView: View {
                         title: template.displayName,
                         subtitle: template.subtitle,
                         badge: LLMSelection.hasAPIKey(for: template) ? "Key ✓" : nil,
-                        badgeTint: .recapCeladon,
+                        badgeTint: .recapInk,
                         selected: selected == template
                     ) {
                         select(template)
@@ -255,14 +269,14 @@ struct LLMSettingsView: View {
 
             if !status.isEmpty {
                 Text(status)
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
             }
 
-            Text("API Key 仅保存在本机 Keychain，不会上传 Recap，也不会进入 iCloud 备份。")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.recapTea.opacity(0.9))
-                .lineSpacing(2)
+            Text("API Key 仅保存在本机 Keychain，不会上传至任何服务器，也不会进入 iCloud 备份。")
+                .font(.recapMeta)
+                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .lineSpacing(Leading.tight)
         }
     }
 
@@ -274,7 +288,7 @@ struct LLMSettingsView: View {
                 TextField("https://api.example.com/v1", text: $customBaseURL)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .font(.system(size: 14, design: .monospaced))
+                    .font(.recapMono)
                     .padding(.horizontal, Spacing.md)
                     .padding(.vertical, 12)
                     .background(
@@ -287,7 +301,7 @@ struct LLMSettingsView: View {
             TextField(selected.defaultModel, text: $modelDraft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.system(size: 14, design: .monospaced))
+                .font(.recapMono)
                 .padding(.horizontal, Spacing.md)
                 .padding(.vertical, 12)
                 .background(
@@ -308,8 +322,8 @@ struct LLMSettingsView: View {
 
     private func fieldLabel(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .tracking(1.2)
+            .font(.recapEyebrow)
+            .tracking(Tracking.eyebrow)
             .foregroundStyle(Color.recapTea)
     }
 
@@ -318,14 +332,14 @@ struct LLMSettingsView: View {
     private var webSearchPanel: some View {
         VStack(alignment: .leading, spacing: Spacing.lg) {
             Text("联网搜索")
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(1.4)
+                .font(.recapEyebrow)
+                .tracking(Tracking.eyebrow)
                 .foregroundStyle(Color.recapTea)
 
-            Text("「问 Recap」开启联网后，用 AnySearch 检索公开网页。默认关闭；Key 可选（提高额度），仅存本机 Keychain。")
-                .font(.system(size: 13))
+            Text("「提问」开启联网后，用 AnySearch 检索公开网页。默认关闭；Key 可选（提高额度），仅存本机 Keychain。")
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
-                .lineSpacing(2)
+                .lineSpacing(Leading.tight)
 
             SettingsSecureFieldBlock(
                 title: "AnySearch API Key",
@@ -342,6 +356,18 @@ struct LLMSettingsView: View {
 
     private func reload() {
         mode = .current
+        if !membership.byokUnlocked {
+            // 非 BYOK：模式锁定为权益对应的 Recap 服务（Pro->云端 / 否则->免费），不暴露来源选择。
+            let target: AIServiceMode = membership.isPro ? .recapCloud : .freeTrial
+            if mode != target {
+                mode = target
+                AIServiceMode.current = target
+            }
+        } else if mode == .recapCloud && !membership.isPro {
+            // BYOK 已解锁但停在 recapCloud 而无 Pro：回落免费档，避免锁态来源卡显示为"已选"。
+            mode = .freeTrial
+            AIServiceMode.current = .freeTrial
+        }
         selected = LLMSelection.selectedTemplate
         modelDraft = LLMSelection.selectedModel ?? selected.defaultModel
         account = RecapAccountStore.current

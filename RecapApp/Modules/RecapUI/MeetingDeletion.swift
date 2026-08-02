@@ -12,22 +12,27 @@ import RecapASR
 @MainActor
 final class MinutesTaskRegistry {
     static let shared = MinutesTaskRegistry()
-    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var entries: [UUID: (task: Task<Void, Never>, token: UUID)] = [:]
 
-    func register(_ task: Task<Void, Never>, for meetingID: UUID) {
-        tasks[meetingID] = task
+    /// 登记管线 Task。`token` 由调用方在创建 Task 前生成，并同一传入管线 defer 与本方法：
+    /// 同一会议若在旧 Task 退出前又登记新 Task（新 token），旧 Task 的 defer 因 token 不匹配
+    /// 不会抹掉新条目，避免删除竞态写入（旧版无条件置 nil 的隐患）。
+    func register(_ task: Task<Void, Never>, token: UUID, for meetingID: UUID) {
+        entries[meetingID] = (task, token)
     }
 
-    /// 管线 Task 自身在任意退出路径（完成 / 失败 / 取消）调用，移除句柄。
-    func unregister(for meetingID: UUID) {
-        tasks[meetingID] = nil
+    /// 管线 Task 自身在任意退出路径（完成 / 失败 / 取消）调用；仅当 token 仍是当前登记项时移除，
+    /// 避免旧 Task 的 defer 抹掉后来者登记的新 Task。
+    func unregister(token: UUID, for meetingID: UUID) {
+        guard entries[meetingID]?.token == token else { return }
+        entries[meetingID] = nil
     }
 
     /// 删除会议前调用：协作式取消纪要管线（管线在下一 `Task.isCancelled` 检查点退出，
     /// 并经 catch 兜底不再写回部分结果）。
     func cancel(for meetingID: UUID) {
-        tasks[meetingID]?.cancel()
-        tasks[meetingID] = nil
+        entries[meetingID]?.task.cancel()
+        entries[meetingID] = nil
     }
 }
 
@@ -43,7 +48,13 @@ enum MeetingDeletion {
             context.delete(session)
         }
         context.delete(meeting)
-        try? context.save()
+        // save 成功才删音频文件：失败时保留会议记录与音频（刷新后会议重现，等价于删除未生效），
+        // 避免「DB 仍存但音频已删」的不一致孤儿。
+        do {
+            try context.save()
+        } catch {
+            return
+        }
         MeetingAudioStore.deleteMeetingAudio(meetingId: id)
     }
 
@@ -58,7 +69,11 @@ enum MeetingDeletion {
             }
             context.delete(meeting)
         }
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            return
+        }
         for id in ids {
             MeetingAudioStore.deleteMeetingAudio(meetingId: id)
         }

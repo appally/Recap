@@ -95,7 +95,7 @@ public struct MindmapRadialGraph: View {
     private func content(displayScale: CGFloat, viewport: CGSize) -> some View {
         if layout.placedNodes.isEmpty {
             Text("无内容")
-                .font(.system(size: 14))
+                .font(.recapBodyS)
                 .foregroundStyle(Color.recapTea)
         } else {
             ZStack {

@@ -14,9 +14,9 @@ public enum LLMProviderFactory {
             case .missingAPIKey(let account):
                 return "未配置 API Key（Keychain account: \(account)）"
             case .requiresMembership:
-                return "当前为 Recap 会员模式，请开通 Pro 或切换到「自备密钥」"
+                return "当前为会员模式，请开通 Pro 或切换到「自备密钥」"
             case .cloudGatewayUnavailable:
-                return "Recap 云服务暂未接通，请改用「自备密钥」或稍后再试"
+                return "云服务暂未接通，请改用「自备密钥」或稍后再试"
             }
         }
     }
@@ -34,8 +34,8 @@ public enum LLMProviderFactory {
                 id: "recap-cloud",
                 apiKey: cred.token,
                 baseURL: cred.llmBase,
-                defaultModel: userPicked ?? template.defaultModel,
-                summaryModel: userPicked ?? template.summaryModel
+                defaultModel: cred.llmModel ?? userPicked ?? template.defaultModel,
+                summaryModel: cred.llmModel ?? userPicked ?? template.summaryModel
             )
         case .freeTrial:
             // 免费档:网关签发的阿里 token(Flash 模型,服务端按次计量);无 ASR token,转写走端侧。
@@ -45,8 +45,8 @@ public enum LLMProviderFactory {
                 id: "recap-free",
                 apiKey: cred.token,
                 baseURL: cred.llmBase,
-                defaultModel: flash,
-                summaryModel: flash
+                defaultModel: cred.llmModel ?? flash,
+                summaryModel: cred.llmModel ?? flash
             )
         case .byok:
             return try makeSelectedBYOK()

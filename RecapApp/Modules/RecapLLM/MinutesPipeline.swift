@@ -25,7 +25,7 @@ public struct MinutesPipeline: Sendable {
 
     /// 跑完整管线。
     /// - Parameter briefSummary: 会前底稿稳定摘要；空则行为与无底稿一致。
-    public func run(transcript: String, briefSummary: String? = nil, momentsSummary: String? = nil, handwritingSummary: String? = nil) -> AsyncThrowingStream<MinutesEvent, Error> {
+    public func run(transcript: String, briefSummary: String? = nil, momentsSummary: String? = nil, handwritingSummary: String? = nil, scenario: TemplateScenario = .general) -> AsyncThrowingStream<MinutesEvent, Error> {
         AsyncThrowingStream { c in
             let task = Task {
                 let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -36,9 +36,13 @@ public struct MinutesPipeline: Sendable {
                     return
                 }
 
-                // 模型感知阈值：DeepSeek V4(1M 上下文) 等大窗口模型让 2h 会议走 direct，
-                // 避免不必要的 map-reduce（分块边界丢中段、串行多轮增延迟）。未知模型回落保守 14k。
-                let threshold = ModelContextWindows.mapReduceThresholdChars(for: LLMPresets.deepSeekPro)
+                // 模型感知阈值：按当前 provider 实际模型算（direct 路径 summary 与 todo 都吃整段转写，
+                // 取两者阈值较小者保守）。大窗口模型(1M)让 2h 会议走 direct，避免不必要的
+                // map-reduce（分块边界丢中段、串行多轮增延迟）。未知模型回落保守 14k。
+                let threshold = min(
+                    ModelContextWindows.mapReduceThresholdChars(for: self.provider.summaryModel),
+                    ModelContextWindows.mapReduceThresholdChars(for: self.provider.defaultModel)
+                )
                 if TranscriptChunker.needsMapReduce(trimmed, threshold: threshold) {
                     RecapLog.minutes.info("run: 长会 map-reduce，\(trimmed.count) 字，summary=\(self.provider.summaryModel, privacy: .public)")
                     await self.runMapReduce(
@@ -46,6 +50,7 @@ public struct MinutesPipeline: Sendable {
                         briefSummary: briefSummary,
                         momentsSummary: momentsSummary,
                         handwritingSummary: handwritingSummary,
+                        scenario: scenario,
                         yield: { c.yield($0) }
                     )
                 } else {
@@ -55,6 +60,7 @@ public struct MinutesPipeline: Sendable {
                         briefSummary: briefSummary,
                         momentsSummary: momentsSummary,
                         handwritingSummary: handwritingSummary,
+                        scenario: scenario,
                         yield: { c.yield($0) }
                     )
                 }
@@ -71,10 +77,13 @@ public struct MinutesPipeline: Sendable {
         briefSummary: String?,
         momentsSummary: String?,
         handwritingSummary: String?,
+        scenario: TemplateScenario,
         yield: (MinutesEvent) -> Void
     ) async {
         let userPayload = Self.composeUserPayload(briefSummary: briefSummary, transcript: transcript, momentsSummary: momentsSummary, handwritingSummary: handwritingSummary)
         let hasBrief = !(briefSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // 轻度场景化：场景提示仅注入 summary 的 user 消息（四段式结构不变），todo 用原 payload。
+        let summaryUser = Self.applyScenarioHint(scenario, to: userPayload)
 
         let todosTask = Task { () -> Result<[TodoListPayload.Item], Error> in
             do {
@@ -99,7 +108,7 @@ public struct MinutesPipeline: Sendable {
         do {
             let summaryStream = provider.streamText(
                 system: hasBrief ? Self.summarySystemWithBrief : Self.summarySystem,
-                user: userPayload,
+                user: summaryUser,
                 model: provider.summaryModel,
                 temperature: 0.2
             )
@@ -145,6 +154,7 @@ public struct MinutesPipeline: Sendable {
         briefSummary: String?,
         momentsSummary: String?,
         handwritingSummary: String?,
+        scenario: TemplateScenario,
         yield: (MinutesEvent) -> Void
     ) async {
         let chunks = TranscriptChunker.chunk(transcript)
@@ -153,11 +163,29 @@ public struct MinutesPipeline: Sendable {
         // 顺序 map（稳定、易取消）；后续可改为有界并发
         var mappedNotes: [String] = []
         var allTodos: [TodoListPayload.Item] = []
+        var failedSteps = 0
         for (idx, chunk) in chunks.enumerated() {
             if Task.isCancelled { return }
-            let note = await mapChunkSummary(chunk, index: idx + 1, total: chunks.count)
-            if !note.isEmpty { mappedNotes.append(note) }
-            allTodos.append(contentsOf: await mapChunkTodos(chunk))
+            // P1-C：分段失败不再静默吞掉——上报 .coverage 让用户感知残缺，避免长会零提示拿到缺段纪要。
+            do {
+                let note = try await mapChunkSummary(chunk, index: idx + 1, total: chunks.count)
+                if !note.isEmpty { mappedNotes.append(note) }
+            } catch {
+                if Task.isCancelled { return }
+                failedSteps += 1
+                yield(.coverage("段 \(idx + 1) 摘要失败，已跳过"))
+            }
+            if Task.isCancelled { return }
+            do {
+                allTodos.append(contentsOf: try await mapChunkTodos(chunk))
+            } catch {
+                if Task.isCancelled { return }
+                failedSteps += 1
+                yield(.coverage("段 \(idx + 1) 待办提取失败，已跳过"))
+            }
+        }
+        if failedSteps > 0 {
+            yield(.coverage("本场 \(failedSteps) 个分段步骤失败，纪要可能不完整"))
         }
 
         if Task.isCancelled { return }
@@ -178,7 +206,7 @@ public struct MinutesPipeline: Sendable {
         do {
             let stream = provider.streamText(
                 system: hasBrief ? Self.summarySystemWithBrief : Self.summarySystem,
-                user: reducedInput,
+                user: Self.applyScenarioHint(scenario, to: reducedInput),
                 model: provider.summaryModel,
                 temperature: 0.2
             )
@@ -199,45 +227,37 @@ public struct MinutesPipeline: Sendable {
         yield(.finished)
     }
 
-    private func mapChunkSummary(_ chunk: String, index: Int, total: Int) async -> String {
+    private func mapChunkSummary(_ chunk: String, index: Int, total: Int) async throws -> String {
         let user = """
         这是第 \(index)/\(total) 段转写。用简短 Markdown 列出：主题一句、议题要点（按话题分条）、关键决策、遗留问题、关键待办原文线索。
 
         \(chunk)
         """
         var text = ""
-        do {
-            for try await delta in provider.streamText(
-                system: "你是会议分段摘录助手。只依据本段，不编造。输出精简中文。",
-                user: user,
-                model: provider.defaultModel,
-                temperature: 0.1
-            ) {
-                if Task.isCancelled { return text }
-                text += delta
-            }
-        } catch {
-            return ""
+        for try await delta in provider.streamText(
+            system: "你是会议分段摘录助手。只依据本段，不编造。输出精简中文。",
+            user: user,
+            model: provider.defaultModel,
+            temperature: 0.1
+        ) {
+            if Task.isCancelled { return text }
+            text += delta
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func mapChunkTodos(_ chunk: String) async -> [TodoListPayload.Item] {
-        do {
-            let todos = try await provider.extractViaTool(
-                system: Self.todoSystem,
-                user: chunk,
-                model: provider.defaultModel,
-                toolName: "extract_action_items",
-                toolDescription: "从会议转写中提取待办/行动项（null-safe）",
-                parameters: TodoListPayload.schema,
-                as: TodoListPayload.self,
-                thinkingEnabled: todoThinkingEnabled
-            )
-            return todos?.action_items ?? []
-        } catch {
-            return []
-        }
+    private func mapChunkTodos(_ chunk: String) async throws -> [TodoListPayload.Item] {
+        let todos = try await provider.extractViaTool(
+            system: Self.todoSystem,
+            user: chunk,
+            model: provider.defaultModel,
+            toolName: "extract_action_items",
+            toolDescription: "从会议转写中提取待办/行动项（null-safe）",
+            parameters: TodoListPayload.schema,
+            as: TodoListPayload.self,
+            thinkingEnabled: todoThinkingEnabled
+        )
+        return todos?.action_items ?? []
     }
 
     private static func dedupeTodos(_ items: [TodoListPayload.Item]) -> [TodoListPayload.Item] {
@@ -373,7 +393,7 @@ public struct MinutesPipeline: Sendable {
     4. 不抽条件式（"如果…就…"）、不推断被动式；
     5. due_text 照搬转写中的相对日期表达（如"下周三""月底""本周五""3号"），不要换算成绝对日期；未提及为 null；
     6. evidence_quote 必填原文逐字（禁止改写）；引文与 task 不符则不抽该条；
-    7. 若能从转写时间线判断证据句位置，填 start_seconds（相对会议开始的秒数）；否则 null，禁止猜测。
+    7. 转写每行以 [mm:ss] 时间戳开头（相对会议开始的分:秒）；证据句所在行的时间戳换算成秒填 start_seconds（如 [5:30] -> 330）；无法判断则 null，禁止猜测。
     通过 extract_action_items 工具输出。
     """
 
@@ -391,7 +411,25 @@ public struct MinutesPipeline: Sendable {
     4. 不抽条件式、不推断被动式；
     5. due_text 照搬转写中的相对日期表达（如"下周三""月底""本周五""3号"），不要换算成绝对日期；未提及为 null；
     6. evidence_quote 必填原文逐字；无转写证据则不抽；
-    7. start_seconds 能判断才填，否则 null。
+    7. 转写每行以 [mm:ss] 时间戳开头；证据句所在行时间戳换算成秒填 start_seconds（如 [5:30] -> 330）；无法判断则 null。
     通过 extract_action_items 工具输出。
     """
+
+    /// 轻度场景化：四段式结构不变，仅按场景微调核心摘要侧重点。注入 user 消息（system 前缀缓存不受影响）；
+    /// `.general` 不加提示（保持默认行为与缓存字节一致）。
+    private static func scenarioHint(for scenario: TemplateScenario) -> String? {
+        switch scenario {
+        case .general: return nil
+        case .sales: return "【场景提示】本场为客户/销售会议：核心摘要侧重客户需求、报价与承诺、下一步推进；议题按客户/产品/商务线索归组。"
+        case .team: return "【场景提示】本场为团队会议：核心摘要侧重决议、责任人与时限；议题按讨论项归组。"
+        case .hiring: return "【场景提示】本场为面试：核心摘要侧重候选人能力评估、亮点与顾虑、是否推进的结论。"
+        case .learning: return "【场景提示】本场为学习/讲座：核心摘要侧重知识要点与结论；议题按主题归组。"
+        }
+    }
+
+    /// 把场景提示 prepend 到 user payload；`.general` 原样返回（字节不变，保 cache）。
+    private static func applyScenarioHint(_ scenario: TemplateScenario, to payload: String) -> String {
+        guard let hint = scenarioHint(for: scenario) else { return payload }
+        return hint + "\n\n" + payload
+    }
 }

@@ -73,6 +73,14 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         }
     }
 
+    /// MacPaw 对 HTTP ≥400 抛 `OpenAIError.statusError`：仅 429 / 5xx 视为瞬态可重试
+    ///（4xx 为客户端错误，重试无意义）。与 Agent 路径 `AgentTransportError.shouldRetryTransient` 对齐，
+    /// 否则纪要 summary 流式遇服务端 5xx（常见瞬态）直接放弃，与 Agent 路径行为不一致。
+    private static func isRetryableStatusError(_ error: Error) -> Bool {
+        guard case OpenAIError.statusError(_, let statusCode) = error else { return false }
+        return statusCode == 429 || (500...599).contains(statusCode)
+    }
+
     public func streamText(
         system: String,
         messages: [AskChatTurn],
@@ -122,6 +130,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
 
         let isRetryable = (error is FirstTokenTimeoutError)
             || ((error as? URLError).map(Self.isTransientNetworkError) ?? false)
+            || Self.isRetryableStatusError(error)
 
         if !outcome.produced && attempt < Self.maxRetries && isRetryable {
             let delayNs = UInt64(300_000_000) * UInt64(attempt + 1)   // 300ms / 600ms
@@ -286,22 +295,20 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         }
 
         let data = try JSONSerialization.data(withJSONObject: body)
-        var req = URLRequest(url: URL(string: "https://\(host)\(basePath)/chat/completions")!)
+        // host 来自 parseBaseURL：URL 解析失败时回退为用户原始输入（可能含空格/非 ASCII），
+        // 直接强解 URL(string:)! 会崩。构造失败时抛 badURL，由上层错误映射转友好提示。
+        guard let url = URL(string: "https://\(host)\(basePath)/chat/completions") else {
+            throw URLError(.badURL)
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.httpBody = data
         req.timeoutInterval = 90
 
-        let (respData, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse else {
-            throw ExtractError.badResponse
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let msg = String(data: respData, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            RecapLog.provider.error("extractViaTool HTTP \(http.statusCode): \(msg, privacy: .public)")
-            throw ExtractError.http(http.statusCode, msg)
-        }
+        // P1-B: 瞬态重试（URLError 瞬态 + 5xx，与流式 runStream 同构），避免单次网络抖动丢全部待办。
+        let (respData, http) = try await performToolRequest(req)
 
         guard let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
               let choices = root["choices"] as? [[String: Any]],
@@ -329,6 +336,37 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
             return decoded
         }
         return nil
+    }
+
+    /// 执行 tool-call HTTP 请求，瞬态错误重试（URLError `.timedOut`/`.networkConnectionLost`/
+    /// `.notConnectedToInternet` + 429/5xx），与流式 ``runStream`` 同构：最多 `maxRetries+1` 次，
+    /// 300ms/600ms 退避。其余 4xx 与非瞬态错误立即抛出；仅在 2xx 时返回 `(body, response)`。
+    private func performToolRequest(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var attempt = 0
+        while true {
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                guard let http = resp as? HTTPURLResponse else { throw ExtractError.badResponse }
+                if (200..<300).contains(http.statusCode) { return (data, http) }
+                let msg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+                RecapLog.provider.error("extractViaTool HTTP \(http.statusCode): \(msg, privacy: .public)")
+                if attempt < Self.maxRetries && (http.statusCode == 429 || (500..<600).contains(http.statusCode)) {
+                    try? await Task.sleep(nanoseconds: UInt64(300_000_000) * UInt64(attempt + 1))
+                    if Task.isCancelled { throw CancellationError() }
+                    attempt += 1
+                    continue
+                }
+                throw ExtractError.http(http.statusCode, msg)
+            } catch let error as URLError where Self.isTransientNetworkError(error) {
+                if attempt < Self.maxRetries {
+                    try? await Task.sleep(nanoseconds: UInt64(300_000_000) * UInt64(attempt + 1))
+                    if Task.isCancelled { throw CancellationError() }
+                    attempt += 1
+                    continue
+                }
+                throw error
+            }
+        }
     }
 
     private func encodeJSONSchema(_ schema: JSONSchema) throws -> Any {

@@ -40,8 +40,9 @@ public enum LLMPresets {
     public static let deepSeekBaseURL = "https://api.deepseek.com"
     public static let deepSeekFlash = "deepseek-v4-flash"   // 日常/会中问答/短任务
     public static let deepSeekPro = "deepseek-v4-pro"       // 纪要/待办/调研(thinking)
-    /// 平台云端免费档 Flash 模型（纪要滴灌；服务端按次计量）。
-    public static let cloudFlashModel = "qwen-turbo"
+    /// 平台云端免费档 Flash 模型（纪要滴灌；服务端按次计量）。用版本名锁定最新 qwen3.7-flash
+    ///（1M 上下文，ModelContextWindows 命中 qwen3 分支）；勿用旧版裸名 qwen-flash（legacy）。
+    public static let cloudFlashModel = "qwen3.7-flash"
     /// 与 `LLMProviderTemplate.deepseek.keychainAccount` 对齐。
     public static let deepSeekKeychainAccount = "llm.deepseek.apikey"
 }

@@ -34,4 +34,19 @@ public enum TemplateScenario: String, CaseIterable, Sendable, Hashable, Identifi
         case .learning: return "graduationcap"
         }
     }
+
+    /// 轻量场景推断（标题关键词）：供主总结轻度分场景用。与 ``TemplateRecommender`` 同源信号，
+    /// 但归一到 5 桶；无命中返回 `.general`（不加场景提示，保持默认行为与缓存字节一致）。
+    public static func infer(title: String) -> TemplateScenario {
+        let t = title.lowercased()
+        func hit(_ needles: [String]) -> Bool { needles.contains { t.contains($0) } }
+        if hit(["客户", "拜访", "销售", "商务", "customer", "sales", "client"]) { return .sales }
+        if hit(["面试", "候选人", "interview", "hiring"]) { return .hiring }
+        if hit(["讲座", "课程", "分享", "培训", "lecture", "class", "tutorial", "学习"]) { return .learning }
+        if hit(["1on1", "1 on 1", "one on one", "一对一", "面谈", "1v1",
+                "周会", "例会", "站会", "复盘", "项目", "汇报", "述职", "weekly", "standup", "retro", "status"]) {
+            return .team
+        }
+        return .general
+    }
 }

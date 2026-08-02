@@ -12,6 +12,8 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
     /// ASR 原始起止秒；缺省时由 timestamp 字符串回退解析。
     public var startSeconds: Double?
     public var endSeconds: Double?
+    /// 端侧 ASR 置信度（方言检测信号），从 TranscriptSegment 透传；云端/旧数据为 nil。
+    public var confidence: Double?
 
     public init(id: String = UUID().uuidString,
                 speaker: Speaker,
@@ -20,7 +22,8 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
                 polished: String,
                 isFinal: Bool,
                 startSeconds: Double? = nil,
-                endSeconds: Double? = nil) {
+                endSeconds: Double? = nil,
+                confidence: Double? = nil) {
         self.id = id
         self.speaker = speaker
         self.timestamp = timestamp
@@ -29,6 +32,7 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
         self.isFinal = isFinal
         self.startSeconds = startSeconds
         self.endSeconds = endSeconds
+        self.confidence = confidence
     }
 
     public init(segment: TranscriptSegment, speakers: [Speaker], isFinal: Bool = true) {
@@ -55,9 +59,15 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
             polished: segment.text,
             isFinal: isFinal,
             startSeconds: segment.startSeconds,
-            endSeconds: segment.endSeconds
+            endSeconds: segment.endSeconds,
+            confidence: segment.confidence
         )
     }
+}
+
+public extension TranscriptBlock {
+    /// 喂给 LLM 的文本：润色过用 polished，否则回退 raw（未润色时 polished == raw，零回归）。
+    var feedText: String { polished.isEmpty ? raw : polished }
 }
 
 /// 降级演示内容：仅当 ASR / LLM 不可用时使用，不作为真实会议数据。

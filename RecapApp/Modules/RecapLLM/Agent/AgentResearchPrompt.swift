@@ -58,15 +58,15 @@ public enum ResearchDraftParser {
         generatedAt: Date = .now
     ) -> ResearchDraft {
         let sections = splitSections(raw)
-        let title = firstLine(sections["标题"] ?? sections["title"])
+        let title = firstLine(sections["标题"])
             ?? String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
-        let conclusion = sections["结论"] ?? sections["conclusion"] ?? ""
-        let options = parseOptions(sections["备选方案"] ?? sections["方案"] ?? "")
+        let conclusion = sections["结论"] ?? ""
+        let options = parseOptions(sections["备选方案"] ?? "")
         let risks = bulletLines(sections["风险"] ?? "")
-        let nextSteps = bulletLines(sections["下一步"] ?? sections["行动"] ?? "")
+        let nextSteps = bulletLines(sections["下一步"] ?? "")
         var cites = citations
         if cites.isEmpty {
-            cites = parseCitationLines(sections["来源清单"] ?? sections["来源"] ?? "")
+            cites = parseCitationLines(sections["来源清单"] ?? "")
         }
         return ResearchDraft(
             title: title.isEmpty ? "调研草稿" : title,
@@ -81,11 +81,21 @@ public enum ResearchDraftParser {
         )
     }
 
+    /// 段落标题别名 -> 规范键。模型换措辞（总结/概要/可选方案/行动计划/参考来源…）也能归位，降低丢段风险。
+    /// 匹配互斥（精确 或「别名：」前缀），故字典遍历顺序无关；同一 stripped 至多命中一个别名。
+    static let sectionAliases: [String: String] = [
+        "标题": "标题", "title": "标题",
+        "结论": "结论", "总结": "结论", "概要": "结论", "结论与建议": "结论", "conclusion": "结论",
+        "备选方案": "备选方案", "方案": "备选方案", "建议方案": "备选方案", "可选方案": "备选方案", "备选": "备选方案", "options": "备选方案",
+        "风险": "风险", "潜在风险": "风险", "风险与挑战": "风险", "风险与对策": "风险", "risks": "风险",
+        "下一步": "下一步", "行动": "下一步", "行动计划": "下一步", "行动项": "下一步", "后续行动": "下一步", "建议步骤": "下一步", "next steps": "下一步",
+        "来源清单": "来源清单", "来源": "来源清单", "参考来源": "来源清单", "参考资料": "来源清单", "引用": "来源清单", "sources": "来源清单",
+    ]
+
     static func splitSections(_ raw: String) -> [String: String] {
         let text = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let headers = ["标题", "结论", "备选方案", "方案", "风险", "下一步", "行动", "来源清单", "来源"]
         var map: [String: String] = [:]
         var current: String?
         var buffer: [String] = []
@@ -100,19 +110,16 @@ public enum ResearchDraftParser {
             let stripped = trimmed
                 .replacingOccurrences(of: #"^#{1,6}\s*"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces)
-            if let hit = headers.first(where: { stripped == $0 || stripped.hasPrefix($0 + "：") || stripped.hasPrefix($0 + ":") }) {
+            if let alias = Self.sectionAliases.keys.first(where: {
+                stripped == $0 || stripped.hasPrefix($0 + "：") || stripped.hasPrefix($0 + ":")
+            }), let canonical = Self.sectionAliases[alias] {
                 flush()
-                current = hit
+                current = canonical
                 buffer = []
-                let rest: String
-                if stripped.hasPrefix(hit + "：") {
-                    rest = String(stripped.dropFirst(hit.count + 1)).trimmingCharacters(in: .whitespaces)
-                } else if stripped.hasPrefix(hit + ":") {
-                    rest = String(stripped.dropFirst(hit.count + 1)).trimmingCharacters(in: .whitespaces)
-                } else {
-                    rest = ""
+                if stripped.hasPrefix(alias + "：") || stripped.hasPrefix(alias + ":") {
+                    let rest = String(stripped.dropFirst(alias.count + 1)).trimmingCharacters(in: .whitespaces)
+                    if !rest.isEmpty { buffer.append(rest) }
                 }
-                if !rest.isEmpty { buffer.append(rest) }
             } else if current != nil {
                 buffer.append(line)
             }
@@ -156,14 +163,14 @@ public enum ResearchDraftParser {
 
         for line in lines where !line.isEmpty {
             let lower = line.lowercased()
-            if line.hasPrefix("方案") || line.hasPrefix("选项") || (line.first?.isNumber == true && line.contains(".")) {
+            if line.hasPrefix("方案") || line.hasPrefix("选项") || line.hasPrefix("备选") || (line.first?.isNumber == true && line.contains(".")) {
                 flush()
                 name = line.replacingOccurrences(of: #"^\d+[\.、]\s*"#, with: "", options: .regularExpression)
                 pros = []
                 cons = []
-            } else if lower.contains("利") || lower.contains("优点") || lower.contains("pros") {
+            } else if lower.contains("利") || lower.contains("优点") || lower.contains("pros") || lower.contains("好处") || lower.contains("优势") || lower.contains("长处") {
                 pros.append(contentsOf: bulletLines(line))
-            } else if lower.contains("弊") || lower.contains("缺点") || lower.contains("cons") {
+            } else if lower.contains("弊") || lower.contains("缺点") || lower.contains("cons") || lower.contains("劣势") || lower.contains("短板") || lower.contains("坏处") {
                 cons.append(contentsOf: bulletLines(line))
             } else if name == nil {
                 name = line

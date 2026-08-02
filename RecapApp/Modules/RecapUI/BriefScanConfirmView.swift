@@ -27,7 +27,7 @@ struct BriefScanConfirmView: View {
 
                 if let suggestedTitle, !suggestedTitle.isEmpty {
                     Text(suggestedTitle)
-                        .font(.recapH1)
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.recapInk)
                 }
 
@@ -75,12 +75,12 @@ struct BriefScanConfirmView: View {
                     isPresented = false
                 } label: {
                     Text("确认并使用")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.recapTitleS)
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                         .background(
-                            (agenda.isEmpty && openItems.isEmpty) ? Color.recapTea : Color.recapCeladon,
+                            (agenda.isEmpty && openItems.isEmpty) ? Color.recapTea : Color.recapInk,
                             in: Capsule()
                         )
                 }
@@ -109,12 +109,12 @@ struct BriefScanConfirmView: View {
                              onDelete: @escaping () -> Void) -> some View {
         HStack(alignment: .top, spacing: Spacing.sm) {
             Text(indexLabel)
-                .font(.recapTimestamp)
-                .foregroundStyle(Color.recapCeladon)
+                .font(.recapMono)
+                .foregroundStyle(Color.recapInk)
                 .frame(width: 22, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.recapRaw)
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapInk)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)

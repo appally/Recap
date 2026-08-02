@@ -37,7 +37,7 @@ public struct MindmapFullScreenView: View {
             Spacer()
 
             Text(title.isEmpty ? "思维导图" : title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.recapHeading)
                 .foregroundStyle(Color.recapInk)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)

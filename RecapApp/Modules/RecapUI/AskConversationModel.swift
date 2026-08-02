@@ -4,6 +4,7 @@ import SwiftData
 import RecapModels
 import RecapLLM
 import RecapPersistence
+import RecapASR
 
 public struct AskStepChip: Identifiable, Equatable, Sendable {
     public let id: UUID
@@ -41,6 +42,8 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
     public var steps: [AskStepChip]
     public var isStreaming: Bool
     public var isDegraded: Bool
+    /// 调研轮：该 assistant 气泡对应的结构化草稿 AIOutput(.draft) id；非 nil 时渲染「结构化视图」入口。
+    public var draftOutputId: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -50,7 +53,8 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
         citations: [AskCitation] = [],
         steps: [AskStepChip] = [],
         isStreaming: Bool = false,
-        isDegraded: Bool = false
+        isDegraded: Bool = false,
+        draftOutputId: UUID? = nil
     ) {
         self.id = id
         self.role = role
@@ -60,6 +64,7 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
         self.steps = steps
         self.isStreaming = isStreaming
         self.isDegraded = isDegraded
+        self.draftOutputId = draftOutputId
     }
 }
 
@@ -104,6 +109,8 @@ public final class AskConversationModel {
     @ObservationIgnored private var pendingSteps: [PendingStepDraft] = []
     @ObservationIgnored private var turnReasoningChars = 0
     @ObservationIgnored private var pendingApprovalStepID: UUID?
+    /// 深度调研执行器（单例）：调研轮由 runner 全权执行 + 落库，本模型只观察其 live mirror。
+    @ObservationIgnored private var researchRunner: AgentTaskRunner? = AgentTaskRunner.shared
 
     public init(
         phase: MeetingPhase,
@@ -140,8 +147,23 @@ public final class AskConversationModel {
         self.remindersBridge.meeting = meeting
         self.reviseBridge.meeting = meeting
         self.reviseBridge.modelContext = modelContext
+        researchRunner?.bind(modelContext: modelContext)
+        wireResearchCallback()
         if messages.isEmpty, let latest = meeting.chatSessions.max(by: { $0.updatedAt < $1.updatedAt }) {
             loadSession(latest)
+            // 续看 / 续跑调研轮（runner mirror 在单例上存活，关重开对话窗仍可见）
+            if let runner = researchRunner, runner.current?.chatSessionID == latest.id {
+                switch runner.current?.state {
+                case .running, .queued:
+                    isThinking = true
+                    statusLabel = runner.liveStatus ?? "调研中…"
+                case .suspended:
+                    statusLabel = "已挂起，回前台继续"
+                    runner.resumeSuspendedIfNeeded()
+                default:
+                    break
+                }
+            }
         }
     }
 
@@ -222,6 +244,98 @@ public final class AskConversationModel {
         let clipped = String(bubble.text.prefix(400))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         followUpAnchor = clipped.isEmpty ? nil : clipped
+    }
+
+    // MARK: - Research turn（深度调研融入对话窗）
+
+    /// 本会话内是否有调研轮进行中 / 挂起（阻塞 chat 发送，与 `isThinking` 同效）。
+    public var isResearchActive: Bool {
+        guard let runner = researchRunner,
+              let sid = currentSessionID,
+              let task = runner.current,
+              task.chatSessionID == sid
+        else { return false }
+        switch task.state {
+        case .queued, .running, .suspended, .awaitingApproval: return true
+        case .succeeded, .partial, .failed, .cancelled: return false
+        }
+    }
+
+    /// 调研轮正在 streaming（决定是否渲染进行中气泡 / Stop 钮 / 前台保持提示）。
+    public var isResearchStreaming: Bool {
+        guard let runner = researchRunner,
+              let sid = currentSessionID,
+              runner.liveSessionID == sid else { return false }
+        return runner.liveStreaming
+    }
+
+    /// 把 runner 的 live mirror 投影成对话里的 streaming 气泡（仅在进行中且尚未落库时）。
+    /// 读取 runner 的 @Observable 属性 → SwiftUI 观察链自动续上，气泡随流式更新。
+    public var liveResearchBubble: AskBubble? {
+        guard let runner = researchRunner,
+              runner.liveSessionID == currentSessionID,
+              currentSessionID != nil,
+              let aid = runner.liveAssistantID,
+              runner.liveStreaming || !runner.liveText.isEmpty
+        else { return nil }
+        return AskBubble(
+            id: aid,
+            role: .assistant,
+            text: runner.liveText,
+            citations: runner.liveCitations,
+            steps: runner.liveSteps,
+            isStreaming: runner.liveStreaming
+        )
+    }
+
+    /// 供对话窗渲染的消息序列：已落库消息 + 进行中的调研气泡。
+    public var displayMessages: [AskBubble] {
+        var out = messages
+        if let live = liveResearchBubble { out.append(live) }
+        return out
+    }
+
+    /// 在当前会话内为某待办发起一轮深度调研（委派 runner，本模型不双写）。
+    public func startResearch(actionItem: ActionItemSnapshot) {
+        guard !isThinking, !isResearchActive else { return }
+        ensureSession(titleSeed: String(actionItem.task.prefix(20)))
+        guard let meeting, let session else { return }
+        wireResearchCallback()
+        statusLabel = "调研中…"
+        isThinking = true
+        do {
+            _ = try researchRunner?.startResearchTurn(actionItem: actionItem, meeting: meeting, session: session)
+        } catch {
+            isThinking = false
+            statusLabel = nil
+            let assistantId = UUID()
+            let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            messages.append(AskBubble(
+                id: assistantId, role: .assistant,
+                text: text, source: "调研未开始", isDegraded: true
+            ))
+            persistAssistantTurn(
+                id: assistantId, text: text, source: "调研未开始",
+                citations: [], steps: [], degraded: true
+            )
+        }
+    }
+
+    /// 停止当前调研轮（Stop 钮）。runner 的 execute 会落「已取消」记录并回调 reload。
+    public func cancelResearch() {
+        researchRunner?.cancelCurrent()
+    }
+
+    /// 调研轮到达终态：reload 拾取落库的 assistant 记录（live mirror 已被 runner 清空，无重影）。
+    private func handleResearchTurnCompleted(_ sessionID: UUID) {
+        guard sessionID == currentSessionID, let session else { return }
+        loadSession(session)
+    }
+
+    private func wireResearchCallback() {
+        researchRunner?.onTurnCompleted = { [weak self] sid in
+            self?.handleResearchTurnCompleted(sid)
+        }
     }
 
     public func approve(_ id: UUID, approved: Bool) async {
@@ -343,7 +457,8 @@ public final class AskConversationModel {
                     citations: cites,
                     steps: steps,
                     isStreaming: false,
-                    isDegraded: record.isDegraded
+                    isDegraded: record.isDegraded,
+                    draftOutputId: record.draftOutputId
                 )
             }
     }
@@ -407,6 +522,7 @@ public final class AskConversationModel {
                 argumentsJSON: draft.argumentsJSON,
                 uiSummary: draft.uiSummary,
                 resultChars: draft.resultChars,
+                resultText: draft.resultText,
                 hasReasoning: draft.hasReasoning || turnReasoningChars > 0,
                 reasoningChars: draft.reasoningChars > 0 ? draft.reasoningChars : turnReasoningChars,
                 approvalStateRaw: draft.approvalStateRaw,
@@ -436,6 +552,8 @@ public final class AskConversationModel {
 
     /// 关 sheet / 取消时：未完成轮次落「已中断」，绝不自动重放批准。
     private func finalizeInterruptedIfNeeded() {
+        // 调研轮由 AgentTaskRunner 管理生命周期（可挂起恢复），勿在此当中断的 chat 落伪记录。
+        guard !isResearchStreaming else { return }
         guard isThinking || pendingApproval != nil || messages.last?.isStreaming == true else { return }
         let interruptedText: String
         if pendingApproval != nil {
@@ -496,11 +614,13 @@ public final class AskConversationModel {
     // MARK: - Ask loop
 
     private func runAsk(_ q: String) async {
-        guard MinutesPipelineSmoke.canRunMinutesPipeline else {
+        // 免费档 token 瞬时未就绪时强刷一次（与纪要路径同构），避免误报"未配置密钥"。
+        let availability = await MinutesPipelineSmoke.ensureCanRun()
+        guard availability.available else {
             isThinking = false
             statusLabel = nil
             let assistantId = UUID()
-            let text = "未配置可用的大模型密钥。请到设置 → 大模型配置后重试。"
+            let text = availability.message ?? "未配置可用的大模型密钥。"
             messages.append(AskBubble(
                 id: assistantId,
                 role: .assistant,
@@ -565,7 +685,12 @@ public final class AskConversationModel {
             }
         )
         func makePrepared(retrievalQuery: String? = nil) -> AgentAskRuntime.AnswerContext {
-            AgentAskRuntime.prepareLocal(
+            // 「你的发言」身份：标记我优先·单发言人退化·多未标记 nil（让"我的待办"可答；user-payload·caching 安全）。
+            let meLabel = AgentSkillRunner.meSpeakerLabel(
+                speakers: speakers,
+                meVoiceprintId: VoiceprintGallery.shared.meVoiceprintId
+            )
+            return AgentAskRuntime.prepareLocal(
                 query: q,
                 segments: segments,
                 speakers: speakers,
@@ -577,7 +702,9 @@ public final class AskConversationModel {
                 momentsSummary: momentsSummary,
                 handwritingSummary: handwritingSummary,
                 phase: phase,
-                retrievalQuery: retrievalQuery
+                retrievalQuery: retrievalQuery,
+                meSpeakerLabel: meLabel,
+                userProfile: UserProfile.current
             )
         }
 
@@ -743,7 +870,7 @@ public final class AskConversationModel {
                         citations: citations
                     )
                 }
-            case .toolFinished(let name, let summary, let cites, let resultChars, let errorText):
+            case .toolFinished(let name, let summary, let cites, let resultChars, let resultContent, let errorText):
                 citations.append(contentsOf: cites)
                 if name != "prewarm",
                    let idx = pendingSteps.lastIndex(where: {
@@ -752,6 +879,9 @@ public final class AskConversationModel {
                     let started = pendingSteps[idx].startedAt
                     pendingSteps[idx].uiSummary = summary
                     pendingSteps[idx].resultChars = resultChars
+                    pendingSteps[idx].resultText = AgentContextBudget.clipToolResult(
+                        resultContent, maxChars: budget.maxToolResultChars
+                    )
                     pendingSteps[idx].errorText = errorText
                     pendingSteps[idx].durationMs = Int(Date().timeIntervalSince(started) * 1000)
                     if turnReasoningChars > 0 {
@@ -968,12 +1098,61 @@ public final class AskConversationModel {
     }
 
     private func priorAgentHistory() -> [AgentMessage] {
-        priorChatTurns().map { turn in
-            switch turn.role {
-            case .user: return .user(turn.content)
-            case .assistant: return .assistant(AgentAssistantTurn(content: turn.content))
+        guard let session else { return [] }
+        let records = session.messages.sorted { $0.createdAt < $1.createdAt }
+        // dropLast：排除本轮已 persist 的 user（assistant 尚未持久化）
+        return Self.rebuildAgentHistory(from: Array(records.dropLast()))
+    }
+
+    /// 从持久化消息记录重建带工具调用的 Agent 消息序列（P0-B）。
+    ///
+    /// 一个 assistant 轮次重建为：`.assistant(toolCalls)` + 每个 step 的 `.tool` 结果 + `.assistant(最终回答)`。
+    /// - callId 用 `step.id.uuidString`，与 toolCalls 自洽配对（codec 仅靠 tool_call_id 关联）。
+    /// - reasoningContent 用空串满足 DeepSeek thinking「含 tool call 必须带 reasoning_content 键」。
+    /// - 旧数据 resultText=nil 时用占位符，保证 callId 配对不 400。
+    /// - 复用 `AgentContextBudget.compact` 控制历史工具结果总量（保 callId 配对）。
+    static func rebuildAgentHistory(from records: [ChatMessageRecord]) -> [AgentMessage] {
+        var result: [AgentMessage] = []
+        for record in records {
+            switch record.roleRaw {
+            case "user":
+                let text = record.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty { result.append(.user(text)) }
+            case "assistant":
+                let steps = record.steps.sorted { $0.index < $1.index }
+                if !steps.isEmpty {
+                    let toolCalls = steps.map { step in
+                        AgentToolCall(
+                            id: step.id.uuidString,
+                            name: step.toolName,
+                            argumentsJSON: step.argumentsJSON
+                        )
+                    }
+                    result.append(.assistant(AgentAssistantTurn(
+                        content: nil,
+                        reasoningContent: "",
+                        toolCalls: toolCalls
+                    )))
+                    for step in steps {
+                        let content = step.resultText
+                            ?? step.errorText
+                            ?? "（历史工具结果未留存）"
+                        result.append(.tool(
+                            callId: step.id.uuidString,
+                            name: step.toolName,
+                            content: content
+                        ))
+                    }
+                }
+                let answer = record.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !answer.isEmpty {
+                    result.append(.assistant(AgentAssistantTurn(content: answer)))
+                }
+            default:
+                break
             }
         }
+        return AgentContextBudget.compact(result, maxTotalToolChars: 4_000)
     }
 
     private func chips(from drafts: [PendingStepDraft]) -> [AskStepChip] {
@@ -1045,6 +1224,8 @@ public final class AskConversationModel {
         var argumentsJSON: String
         var uiSummary: String
         var resultChars: Int = 0
+        /// clip 后的工具结果正文；持久化进 AgentStepRecord 用于跨轮回放（P0-B）。
+        var resultText: String = ""
         var hasReasoning: Bool = false
         var reasoningChars: Int = 0
         var approvalStateRaw: String = "notRequired"

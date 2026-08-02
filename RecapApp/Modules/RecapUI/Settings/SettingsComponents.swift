@@ -62,7 +62,8 @@ struct SettingsSection<Content: View>: View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             if !title.isEmpty {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold, design: .default))
+                    .font(.recapEyebrow)
+                    .tracking(Tracking.eyebrow)
                     .foregroundStyle(Color.recapTea)
                     .padding(.horizontal, 4)
             }
@@ -73,9 +74,9 @@ struct SettingsSection<Content: View>: View {
 
             if let footnote {
                 Text(footnote)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(Color.recapTea.opacity(0.85))
-                    .lineSpacing(3)
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .lineSpacing(Leading.tight)
                     .padding(.horizontal, 4)
                     .padding(.top, 2)
             }
@@ -100,14 +101,14 @@ struct SettingsNavRow: View {
             }
 
             Text(title)
-                .font(.system(size: 16, weight: .regular))
+                .font(.recapBody)
                 .foregroundStyle(titleTint)
 
             Spacer(minLength: Spacing.sm)
 
             if let value {
                 Text(value)
-                    .font(.system(size: 14, weight: .regular))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapTea)
                     .lineLimit(1)
                     .contentTransition(.opacity)
@@ -171,8 +172,8 @@ struct SettingsAvatar: View {
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color.recapCeladon.opacity(0.9),
-                                Color.recapCeladon.opacity(0.5),
+                                Color.recapInk.opacity(0.9),
+                                Color.recapInk.opacity(0.5),
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -184,7 +185,7 @@ struct SettingsAvatar: View {
             } else {
                 Circle()
                     .fill(Color.recapTea.opacity(0.12))
-                Image(systemName: "person.fill")
+                Image(systemName: "person")
                     .font(.system(size: size * 0.38, weight: .medium))
                     .foregroundStyle(Color.recapTea.opacity(0.75))
             }
@@ -204,13 +205,13 @@ struct SettingsInlineNotice: View {
         ZStack(alignment: .topLeading) {
             if !message.isEmpty {
                 HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
-                    Image(systemName: "info.circle.fill")
+                    Image(systemName: "info.circle")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(kind.color)
                     Text(message)
-                        .font(.system(size: 12))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
-                        .lineSpacing(2)
+                        .lineSpacing(Leading.tight)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -237,7 +238,7 @@ struct SettingsChoiceCard: View {
     let title: String
     let subtitle: String
     var badge: String? = nil
-    var badgeTint: Color = .recapCeladon
+    var badgeTint: Color = .recapInk
     let selected: Bool
     let action: () -> Void
 
@@ -248,21 +249,21 @@ struct SettingsChoiceCard: View {
             HStack(alignment: .top, spacing: Spacing.md) {
                 ZStack {
                     Circle()
-                        .fill(selected ? Color.recapCeladon.opacity(0.16) : Color.recapTea.opacity(0.08))
+                        .fill(selected ? Color.recapInk.opacity(0.16) : Color.recapTea.opacity(0.08))
                         .frame(width: 40, height: 40)
                     Image(systemName: icon)
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(selected ? Color.recapCeladon : Color.recapTea)
+                        .foregroundStyle(selected ? Color.recapInk : Color.recapTea)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: Spacing.sm) {
                         Text(title)
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.recapTitleS)
                             .foregroundStyle(Color.recapInk)
                         if let badge {
                             Text(badge)
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.recapCaption)
                                 .foregroundStyle(badgeTint)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
@@ -270,16 +271,16 @@ struct SettingsChoiceCard: View {
                         }
                     }
                     Text(subtitle)
-                        .font(.system(size: 13, weight: .regular))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 0)
 
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                Image(systemName: selected ? "checkmark.circle" : "circle")
                     .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(selected ? Color.recapCeladon : Color.recapTea.opacity(0.35))
+                    .foregroundStyle(selected ? Color.recapInk : Color.recapTea.opacity(0.35))
                     .padding(.top, 2)
             }
             .padding(Spacing.lg)
@@ -291,7 +292,7 @@ struct SettingsChoiceCard: View {
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .strokeBorder(
-                        selected ? Color.recapCeladon.opacity(0.55) : SettingsMetrics.separator,
+                        selected ? Color.recapInk.opacity(0.55) : SettingsMetrics.separator,
                         lineWidth: selected ? 1.5 : 1
                     )
             )
@@ -323,7 +324,7 @@ struct SettingsSegmentedControl<Value: Hashable>: View {
                     }
                 } label: {
                     Text(title)
-                        .font(.system(size: 14, weight: selected ? .semibold : .medium))
+                        .font(selected ? .recapHeading : .recapBodyS.weight(.medium))
                         .foregroundStyle(selected ? Color.recapInk : Color.recapTea)
                         // 含 4pt 外框内边距后达到 44pt 最小触控目标。
                         .frame(maxWidth: .infinity, minHeight: 18)
@@ -353,7 +354,7 @@ struct SettingsStatusPill: View {
 
         var color: Color {
             switch self {
-            case .ready: return .recapCeladon
+            case .ready: return .recapInk
             case .missing: return .recapOchre
             case .info: return .recapTea
             }
@@ -365,7 +366,7 @@ struct SettingsStatusPill: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.recapCaption)
             .foregroundStyle(kind.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
@@ -389,7 +390,7 @@ struct SettingsSecureFieldBlock: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.recapHeading)
                     .foregroundStyle(Color.recapInk)
                 Spacer()
                 SettingsStatusPill(
@@ -403,12 +404,12 @@ struct SettingsSecureFieldBlock: View {
                     TextField(placeholder, text: $text)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(.recapMono)
                 } else {
                     SecureField(placeholder, text: $text)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(.recapMono)
                 }
 
                 Button {
@@ -435,11 +436,11 @@ struct SettingsSecureFieldBlock: View {
                     onSave()
                 }) {
                     Text("保存")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.recapHeading)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 9)
-                        .background(Color.recapCeladon, in: Capsule())
+                        .background(Color.recapInk, in: Capsule())
                 }
                 .buttonStyle(SettingsPressStyle())
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -451,7 +452,7 @@ struct SettingsSecureFieldBlock: View {
                         onClear()
                     } label: {
                         Text("清除")
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.recapBodyS.weight(.medium))
                             .foregroundStyle(Color.recapCinnabar)
                     }
                 }
@@ -467,3 +468,119 @@ struct SettingsSecureFieldBlock: View {
 // MARK: - Press
 
 typealias SettingsPressStyle = RecapPressStyle
+
+// MARK: - 预下载模型卡片
+
+/// 「提前下载模型」统一卡片：消除 speaker / fluidDiarizer / fluidModel 三处重复 chrome，
+/// 统一进度 / 就绪 / 错误反馈。错误 inline 卡内（不依赖顶部 toast 自动消散），点卡片即重试。
+struct SettingsPreloadCard: View {
+    enum LoadState { case idle, preparing, ready }
+
+    /// idle 态图标；preparing 自动换 arrow.down.circle，ready 换 checkmark.seal.fill。
+    let icon: String
+    /// idle 态标题（如「提前下载端侧模型」）。
+    let title: String
+    /// 利益导向副标题（去术语）。
+    var subtitle: String
+    /// tap 前体积披露（如「约 447 MB」），仅 idle 时附在 subtitle 后。
+    var sizeLabel: String? = nil
+    let state: LoadState
+    /// preparing 时的进度分数 0...1；nil 表示 indeterminate（底层不暴露进度时用）。
+    var progress: Double? = nil
+    /// 非空 → 卡内 inline 红字错误（不自动消失），点卡片重试。
+    var errorMessage: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: Spacing.sm) {
+                HStack(spacing: Spacing.md) {
+                    Image(systemName: currentIcon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(currentTitle)
+                            .font(.recapHeading)
+                            .foregroundStyle(Color.recapInk)
+                        Text(currentSubtitle)
+                            .font(.recapMeta)
+                            .foregroundStyle(currentSubtitleTint)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                if state == .preparing {
+                    if let progress {
+                        ProgressView(value: progress).tint(Color.recapInk)
+                    } else {
+                        ProgressView().tint(Color.recapInk)
+                    }
+                }
+
+                if let errorMessage, !errorMessage.isEmpty {
+                    Text(errorMessage)
+                        .font(.recapMeta)
+                        .foregroundStyle(Color.recapCinnabar)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(Spacing.lg)
+            .background(
+                Color.recapPaper,
+                in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
+            )
+        }
+        .buttonStyle(SettingsPressStyle())
+        .disabled(state == .preparing)
+    }
+
+    private var currentIcon: String {
+        switch state {
+        case .ready: return "checkmark.seal.fill"
+        case .preparing: return "arrow.down.circle"
+        case .idle: return icon
+        }
+    }
+
+    private var currentTitle: String {
+        switch state {
+        case .ready: return "已就绪"
+        case .preparing: return "下载中…"
+        case .idle: return title
+        }
+    }
+
+    private var currentSubtitle: String {
+        switch state {
+        case .idle:
+            if let sizeLabel { return "\(subtitle)（\(sizeLabel)）" }
+            return subtitle
+        case .preparing, .ready:
+            return subtitle
+        }
+    }
+
+    private var currentSubtitleTint: Color {
+        switch state {
+        case .ready: return .recapInk
+        case .idle, .preparing: return Color.recapTea.opacity(0.9)
+        }
+    }
+}
+
+// MARK: - 磁盘空间预检
+
+enum DiskSpace {
+    /// 重要用途可用容量是否 >= minMB。读取失败时乐观返回 true（不阻断下载，由下载失败兜底）。
+    static func hasAvailable(minMB: Int) -> Bool {
+        let url = FileManager.default.temporaryDirectory
+        guard let values = try? url.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+              let bytes = values.volumeAvailableCapacityForImportantUsage else { return true }
+        return bytes >= Int64(minMB) * 1_000_000
+    }
+}

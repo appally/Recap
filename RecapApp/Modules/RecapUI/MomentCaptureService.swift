@@ -134,4 +134,15 @@ private final class CaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate, @u
         }
         continuation.resume(returning: photo.fileDataRepresentation())
     }
+
+    /// 采集在「照片处理前」失败（会话运行时错误/热中断/硬件故障）时，系统只回调本方法、
+    /// 不再回调 didFinishProcessingPhoto。若不实现，continuation 永不 resume → capture() 永久 hang、
+    /// isCapturing 永远 true（defer 不执行）→ 之后所有拍照被 guard 挡死。仅在有错时 resume nil。
+    nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
+                                 didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+                                 error: Error?) {
+        if error != nil {
+            continuation.resume(returning: nil)
+        }
+    }
 }

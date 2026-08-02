@@ -13,6 +13,7 @@ struct MomentCaptureOverlay: View {
     let onComplete: () -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.openURL) private var openURL
     @StateObject private var camera = MomentCaptureService()
     @State private var momentId = UUID()
     @State private var photoPaths: [String] = []
@@ -117,7 +118,7 @@ struct MomentCaptureOverlay: View {
     private var topBar: some View {
         HStack {
             Text("记录此刻")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.recapTitleS)
                 .foregroundStyle(.white)
             Spacer()
             Button {
@@ -154,12 +155,32 @@ struct MomentCaptureOverlay: View {
                 .font(.system(size: 40))
                 .foregroundStyle(.white.opacity(0.4))
             Text(hasCamera ? "请允许相机权限" : "相机不可用")
-                .font(.system(size: 16, weight: .medium))
+                .font(.recapTranscript)
                 .foregroundStyle(.white.opacity(0.85))
-            Text("拍照记录需在真机使用；模拟器可查看已有时刻卡片")
-                .font(.recapMeta)
-                .foregroundStyle(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
+            if hasCamera {
+                // 有摄像头但 accessGranted=false = 权限被拒；给「打开设置」深链，避免死路（对齐麦克风处理）。
+                Text("请在系统设置中允许「纪要」访问相机，然后返回重试")
+                    .font(.recapMeta)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                Button {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        openURL(url)
+                    }
+                } label: {
+                    Text("打开设置")
+                        .font(.recapHeading)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, Spacing.xs)
+                        .background(.white.opacity(0.15), in: Capsule())
+                }
+            } else {
+                Text("拍照记录需在真机使用；模拟器可查看已有时刻卡片")
+                    .font(.recapMeta)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -179,10 +200,10 @@ struct MomentCaptureOverlay: View {
                     .shadow(color: .black.opacity(0.3), radius: 3)
             }
             Text("\(thumbnails.count)")
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(.recapCaption)
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
-                .background(Color.recapCeladon, in: Circle())
+                .background(Color.recapInk, in: Circle())
                 .overlay(Circle().stroke(.white, lineWidth: 1.5))
         }
         .transition(.scale.combined(with: .opacity))
@@ -192,10 +213,10 @@ struct MomentCaptureOverlay: View {
         HStack(spacing: Spacing.xxl) {
             VStack(spacing: 2) {
                 Text("\(photoPaths.count)")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundStyle(photoPaths.isEmpty ? .white.opacity(0.35) : Color.recapCeladon)
+                    .font(.recapHero)
+                    .foregroundStyle(photoPaths.isEmpty ? .white.opacity(0.35) : Color.recapInk)
                 Text("本刻")
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(.white.opacity(0.6))
             }
             .frame(width: 64)
@@ -212,12 +233,12 @@ struct MomentCaptureOverlay: View {
             } label: {
                 VStack(spacing: 2) {
                     Text(photoPaths.isEmpty ? "完成" : "钉到")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.recapHeading)
                         .foregroundStyle(photoPaths.isEmpty ? .white.opacity(0.5) : .white)
                     if !photoPaths.isEmpty {
                         Text(timeText(anchorElapsed))
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Color.recapCeladon)
+                            .font(.recapMono)
+                            .foregroundStyle(Color.recapInk)
                     }
                 }
                 .frame(width: 64)

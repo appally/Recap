@@ -69,6 +69,9 @@ public final class ChatMessageRecord {
     public var isDegraded: Bool
     public var createdAt: Date
     public var session: ChatSession?
+    /// 调研融入对话窗后：该 assistant 气泡对应的结构化草稿 AIOutput(.draft) id，
+    /// 供气泡渲染「结构化视图」入口与待办卡/switcher 反查深链。
+    public var draftOutputId: UUID?
     @Relationship(deleteRule: .cascade, inverse: \AgentStepRecord.message)
     public var steps: [AgentStepRecord] = []
 
@@ -80,6 +83,7 @@ public final class ChatMessageRecord {
         citationsData: Data? = nil,
         isDegraded: Bool = false,
         createdAt: Date = .now,
+        draftOutputId: UUID? = nil,
         session: ChatSession? = nil
     ) {
         self.id = id
@@ -89,6 +93,7 @@ public final class ChatMessageRecord {
         self.citationsData = citationsData
         self.isDegraded = isDegraded
         self.createdAt = createdAt
+        self.draftOutputId = draftOutputId
         self.session = session
     }
 }
@@ -101,6 +106,8 @@ public final class AgentStepRecord {
     public var argumentsJSON: String
     public var uiSummary: String
     public var resultChars: Int
+    /// 工具结果正文（clip 后）；用于跨轮历史回放（P0-B）。旧数据 nil。
+    public var resultText: String?
     /// 仅记有无 reasoning，不落正文（体积 + 隐私）。
     public var hasReasoning: Bool
     public var reasoningChars: Int
@@ -120,6 +127,7 @@ public final class AgentStepRecord {
         argumentsJSON: String = "{}",
         uiSummary: String,
         resultChars: Int = 0,
+        resultText: String? = nil,
         hasReasoning: Bool = false,
         reasoningChars: Int = 0,
         approvalStateRaw: String = "notRequired",
@@ -135,6 +143,7 @@ public final class AgentStepRecord {
         self.argumentsJSON = argumentsJSON
         self.uiSummary = uiSummary
         self.resultChars = resultChars
+        self.resultText = resultText
         self.hasReasoning = hasReasoning
         self.reasoningChars = reasoningChars
         self.approvalStateRaw = approvalStateRaw

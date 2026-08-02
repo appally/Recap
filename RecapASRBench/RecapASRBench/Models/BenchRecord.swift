@@ -16,6 +16,10 @@ struct BenchRecord: Identifiable, Sendable {
     let chunkCount: Int
     let error: String?
     let timestamp: Date
+    // 分离引擎专属（ASR 引擎为 nil）：
+    let speakerCount: Int? = nil      // 识别出的说话人数
+    let segmentCount: Int? = nil      // 分离段数（diarizer 产出）
+    let der: Double? = nil            // 说话人错率（需参考 RTTM 标注；第一版不算，留 nil）
 
     /// 倍实时因子：>1 表示快于实时（能跟上说话）。
     var rtfx: Double {

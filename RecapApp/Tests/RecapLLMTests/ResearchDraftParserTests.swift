@@ -88,4 +88,44 @@ final class ResearchDraftParserTests: XCTestCase {
         XCTAssertEqual(draft.citations.count, 1)
         XCTAssertEqual(draft.citations.first?.url, "https://provided.example")
     }
+
+    /// 模型换措辞（总结/可选方案/行动计划/参考来源 + 优势/劣势/好处/短板）也能正确归位（P1-F 韧性）。
+    func testParaphrasedHeadersAndKeywords() {
+        let raw = """
+        标题
+        供应商选型
+
+        总结
+        建议选 A 方案。
+
+        可选方案
+        方案 A
+        优势：交付快
+        劣势：成本高
+        方案 B
+        好处：便宜
+        短板：周期长
+
+        行动计划
+        - 张三本周约演示
+
+        参考来源
+        - https://example.com/a
+        """
+        let draft = ResearchDraftParser.parse(
+            raw,
+            citations: [],
+            isPartial: false,
+            modelId: "m"
+        )
+        XCTAssertEqual(draft.title, "供应商选型")
+        XCTAssertTrue(draft.conclusion.contains("建议选 A"), "总结 应归位到 conclusion")
+        XCTAssertEqual(draft.options.count, 2, "可选方案 应归位")
+        XCTAssertEqual(draft.options.first?.pros.first, "优势：交付快", "优势 应归位到 pros")
+        XCTAssertEqual(draft.options.first?.cons.first, "劣势：成本高", "劣势 应归位到 cons")
+        XCTAssertEqual(draft.options.last?.pros.first, "好处：便宜", "好处 应归位到 pros")
+        XCTAssertEqual(draft.options.last?.cons.first, "短板：周期长", "短板 应归位到 cons")
+        XCTAssertEqual(draft.nextSteps.count, 1, "行动计划 应归位到 nextSteps")
+        XCTAssertEqual(draft.citations.count, 1, "参考来源 应归位到 citations")
+    }
 }

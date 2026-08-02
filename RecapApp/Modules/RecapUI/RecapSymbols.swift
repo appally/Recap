@@ -40,7 +40,7 @@ public enum RecapSymbol {
     public static let paste = "doc.on.clipboard"
     public static let importFile = "square.and.arrow.down"
     public static let linkPrior = "link"
-    public static let research = "doc.text.magnifyingglass"
+    public static let research = "sparkles"
     public static let researchProgress = "arrow.triangle.2.circlepath"
     public static let researchDraft = "lightbulb"
 
@@ -96,7 +96,7 @@ public struct RecapToolbarIconImage: View {
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(
                 emphasized
-                    ? Color.recapCeladon
+                    ? Color.recapInk
                     : Color.recapInk.opacity(RecapToolbarIconMetrics.inkOpacity)
             )
             .frame(width: RecapToolbarIconMetrics.side, height: RecapToolbarIconMetrics.side)

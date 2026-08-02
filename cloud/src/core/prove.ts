@@ -33,8 +33,15 @@ export async function verifyPro(req: Request, env: Env): Promise<ProvedUser> {
   if (device) return { userId: 'device:' + device, tier: 'free' };
 
   // 3. stub(仅 dev)
+  // 硬护栏:生产域名(hostname 非 localhost)拒绝 ALLOW_STUB=1,防误以 secret 注入导致付费绕过。
   if (env.ALLOW_STUB === '1') {
-    console.warn('[prove] ALLOW_STUB=1 — trusting X-Recap-* headers. NEVER enable in production.');
+    const host = new URL(req.url).hostname;
+    const isDevHost = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost') || host.endsWith('.test') || host.endsWith('.local');
+    if (!isDevHost) {
+      console.error('[prove] REFUSED ALLOW_STUB=1 on non-dev host:', host);
+      return { userId: '', tier: 'none' };
+    }
+    console.warn('[prove] ALLOW_STUB=1 on dev host:', host);
     const stubPro = (req.headers.get('X-Recap-Pro') ?? '1') === '1';
     return {
       userId: req.headers.get('X-Recap-User') ?? 'dev-user',

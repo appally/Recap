@@ -35,9 +35,9 @@ struct LegalDocumentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xl) {
                 Text(kind.bodyText)
-                    .font(.system(size: 15))
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapInk)
-                    .lineSpacing(5)
+                    .lineSpacing(Leading.body)
 
                 Link(destination: kind.url) {
                     SettingsNavRow(
@@ -101,13 +101,13 @@ struct DataPrivacySettingsView: View {
                 }
 
                 Text("清除不会删除 Keychain 中的 API Key。如需一并清除，请到偏好设置中手动移除。")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.recapTea.opacity(0.85))
-                    .lineSpacing(3)
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .lineSpacing(Leading.tight)
 
                 if !status.isEmpty {
                     Text(status)
-                        .font(.system(size: 12))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
                 }
             }
@@ -134,16 +134,16 @@ struct DataPrivacySettingsView: View {
     private var summaryCard: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("本机数据")
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(1.4)
+                .font(.recapEyebrow)
+                .tracking(Tracking.eyebrow)
                 .foregroundStyle(Color.recapTea)
             Text("\(meetings.count) 场会议保存在此设备")
-                .font(.system(size: 17, weight: .semibold))
+                .font(.recapTitleS)
                 .foregroundStyle(Color.recapInk)
             Text("默认不上传会议内容。仅在你选择云端引擎或云端模型时，相关片段才会发往对应服务商。")
-                .font(.system(size: 13))
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
-                .lineSpacing(3)
+                .lineSpacing(Leading.tight)
         }
         .padding(.vertical, Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -161,15 +161,15 @@ struct AboutRecapView: View {
         ScrollView {
             VStack(spacing: Spacing.xxl) {
                 VStack(spacing: Spacing.md) {
-                    Text("Recap")
-                        .font(.system(size: 36, weight: .bold, design: .default))
-                        .tracking(-0.8)
+                    Text("纪要")
+                        .font(.recapHero)
+                        .tracking(Tracking.hero)
                         .foregroundStyle(Color.recapInk)
                     Text("把会议变成可行动的纪要")
-                        .font(.system(size: 15))
+                        .font(.recapBodyS)
                         .foregroundStyle(Color.recapTea)
                     Text(versionLabel)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.recapMono)
                         .foregroundStyle(Color.recapTea.opacity(0.85))
                 }
                 .frame(maxWidth: .infinity)
@@ -178,16 +178,16 @@ struct AboutRecapView: View {
                 VStack(spacing: 0) {
                     Link(destination: RecapLegal.supportURL) {
                         SettingsNavRow(
-                            icon: "questionmark.circle.fill",
-                            iconTint: .recapCeladon,
+                            icon: "questionmark.circle",
+                            iconTint: .recapInk,
                             title: "帮助与支持"
                         )
                     }
                     SettingsDivider()
                     Link(destination: URL(string: "mailto:\(RecapLegal.supportEmail)")!) {
                         SettingsNavRow(
-                            icon: "envelope.fill",
-                            iconTint: .recapOchre,
+                            icon: "envelope",
+                            iconTint: .recapInk,
                             title: "联系我们",
                             value: RecapLegal.supportEmail
                         )
@@ -197,8 +197,8 @@ struct AboutRecapView: View {
                         LegalDocumentView(kind: .privacy)
                     } label: {
                         SettingsNavRow(
-                            icon: "hand.raised.fill",
-                            iconTint: .recapTea,
+                            icon: "hand.raised",
+                            iconTint: .recapInk,
                             title: "隐私政策"
                         )
                     }
@@ -207,8 +207,8 @@ struct AboutRecapView: View {
                         DataPrivacySettingsView()
                     } label: {
                         SettingsNavRow(
-                            icon: "lock.shield.fill",
-                            iconTint: .recapTea,
+                            icon: "lock.shield",
+                            iconTint: .recapInk,
                             title: "数据与隐私",
                             value: "导出 / 清除"
                         )
@@ -218,16 +218,12 @@ struct AboutRecapView: View {
                         LegalDocumentView(kind: .terms)
                     } label: {
                         SettingsNavRow(
-                            icon: "doc.text.fill",
-                            iconTint: .recapTea,
+                            icon: "doc.text",
+                            iconTint: .recapInk,
                             title: "用户协议"
                         )
                     }
                 }
-                .background(
-                    Color.recapPaper,
-                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                )
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.bottom, Spacing.xxxl)

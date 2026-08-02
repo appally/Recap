@@ -1,7 +1,22 @@
 import XCTest
 @testable import RecapLLM
+import RecapModels
 
 final class AgentTransportDowngradeTests: XCTestCase {
+
+    override func setUp() {
+        super.setUp()
+        // modelName 在 freeTrial 下短路返回 cloudFlashModel；model-name 测试要验非 freeTrial 路径
+        // （厂商分档 / 模板默认回落），故显式切 byok 并清 selectedModel。
+        AIServiceMode.current = .byok
+        LLMSelection.selectedModel = nil
+    }
+
+    override func tearDown() {
+        AIServiceMode.current = .freeTrial
+        LLMSelection.selectedModel = nil
+        super.tearDown()
+    }
 
     func testClassifyToolChoiceRejected() {
         let err = AgentTransportError.classify(
@@ -103,12 +118,12 @@ final class AgentTransportDowngradeTests: XCTestCase {
 
     func testModelNameNonDeepSeekUsesTemplateDefault() {
         let name = AgentTransportFactory.modelName(for: .qwen, role: .deep)
-        // 未设置 selectedModel 时回落到模板默认
-        XCTAssertEqual(name, "qwen-plus")
+        // 未设置 selectedModel 时回落到模板默认（qwen3.7-plus）
+        XCTAssertEqual(name, "qwen3.7-plus")
     }
 
-    func testChatCompletionsURLPreservesPath() {
-        let url = OpenAICompatibleAgentStreaming.chatCompletionsURL(
+    func testChatCompletionsURLPreservesPath() throws {
+        let url = try OpenAICompatibleAgentStreaming.chatCompletionsURL(
             from: "https://dashscope.aliyuncs.com/compatible-mode/v1"
         )
         XCTAssertEqual(

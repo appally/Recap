@@ -4,7 +4,7 @@ import Foundation
 ///
 /// **背景**：iOS CoreML/E5RT 运行时在「同进程并发跑多个 CoreML 模型」时会破坏共享
 /// scratch 缓冲区，触发 `EXC_BAD_ACCESS`（FluidAudio #661）。SpeakerKit 的 pyannote 与
-/// FluidAudio 的 SenseVoice/Paraformer 是两个独立包，但都落点 E5RT——会后重转写与
+/// FluidAudio 的 SenseVoice 同为独立包，但都落点 E5RT——会后重转写与
 /// （进 REVIEW 自动触发的）说话人分离一旦时间窗重叠即踩坑。
 ///
 /// 本 gate 是 1-permit 异步锁（actor + FIFO 队列），把所有 CoreML 推理闭包串行化。

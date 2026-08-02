@@ -63,6 +63,23 @@ public enum AgentSkillRunner {
         return tools
     }
 
+    /// 解析「这场会议中哪位发言人是用户本人」，用于把"你的发言"注入 prompt（user-payload 侧，caching 安全）。
+    ///
+    /// 优先用声纹画廊的「我」标记（`voiceprintId == meVoiceprintId`，跨会议稳定）；
+    /// 单发言人会议退化为「唯一发言人即你」（语音备忘 / 独白常见情形）；
+    /// 多人且未标记返回 nil——由模板诚实降级，不要猜测。
+    /// SpeakerKit 路径 `voiceprintId` 为 nil，故仅单人场景可解析——与 FluidAudio 路线图一致。
+    public static func meSpeakerLabel(speakers: [Speaker], meVoiceprintId: String?) -> String? {
+        if let meId = meVoiceprintId, !meId.isEmpty,
+           let me = speakers.first(where: { $0.voiceprintId == meId }) {
+            return me.name
+        }
+        if speakers.count == 1 {
+            return speakers[0].name
+        }
+        return nil
+    }
+
     public static func makeUserPrompt(
         skill: AgentSkill,
         meetingTitle: String,
@@ -71,7 +88,8 @@ public enum AgentSkillRunner {
         hint: String?,
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
-        userProfile: UserProfile? = nil
+        userProfile: UserProfile? = nil,
+        meSpeakerLabel: String? = nil
     ) -> String {
         var parts: [String] = [
             "【会议】\(meetingTitle)",
@@ -94,6 +112,11 @@ public enum AgentSkillRunner {
         }
         if let handwriting = handwritingSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !handwriting.isEmpty {
             parts.append("【会中手写笔记】\n\(handwriting)")
+        }
+        // 「你的发言」身份标记（user-payload 侧，caching 安全）：告知 LLM 哪位发言人是用户本人。
+        // 仅在能解析时产出（标记我 / 单发言人）；多未标记为 nil，由模板诚实降级，不要猜测。
+        if let meLabel = meSpeakerLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !meLabel.isEmpty {
+            parts.append("【你的发言】本场转写中「\(meLabel)」是你（用户本人）的发言。")
         }
         let excerpt = transcriptExcerpt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !excerpt.isEmpty {
@@ -123,9 +146,12 @@ public enum AgentSkillRunner {
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
         userProfile: UserProfile? = nil,
+        meSpeakerLabel: String? = nil,
         onProgress: (@Sendable (AgentSkillRunProgress) -> Void)? = nil
     ) async throws -> AgentSkillRunOutcome {
-        guard MinutesPipelineSmoke.canRunMinutesPipeline else {
+        // 免费档 token 瞬时未就绪时强刷一次（与纪要/对话路径同构），避免误报 noKey。
+        let availability = await MinutesPipelineSmoke.ensureCanRun()
+        guard availability.available else {
             throw AgentSkillRunnerError.noKey
         }
         let transport = try AgentTransportFactory.makeCurrent(role: skill.modelRole)
@@ -144,7 +170,8 @@ public enum AgentSkillRunner {
             hint: hint,
             momentsSummary: momentsSummary,
             handwritingSummary: handwritingSummary,
-            userProfile: userProfile
+            userProfile: userProfile,
+            meSpeakerLabel: meSpeakerLabel
         )
         var budget = AgentBudget.skill(maxSteps: skill.maxSteps)
         if let remain = context.remainingWallClock {
@@ -159,7 +186,8 @@ public enum AgentSkillRunner {
             budget: budget,
             modelRole: skill.modelRole,
             thinking: .disabled,
-            model: model
+            model: model,
+            temperature: skill.temperature ?? 0.2
         )
 
         var progress = AgentSkillRunProgress()
@@ -182,7 +210,7 @@ public enum AgentSkillRunner {
                     progress.toolLines.append("\(name) · \(summary)")
                     onProgress?(progress)
                 }
-            case .toolFinished(let name, let summary, _, _, _):
+            case .toolFinished(let name, let summary, _, _, _, _):
                 if name != "prewarm" {
                     let line = "\(name) · \(summary)"
                     if progress.toolLines.last != line {

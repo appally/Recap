@@ -96,6 +96,9 @@ public final class MeetingAudioPlayer: ObservableObject {
             try prepareEngine()
             loadState = .ready
         } catch {
+            // 失败清理：fileHandle 已开、engine 已连接，tearDown 一并关句柄/停引擎/复位，
+            // 避免 FD 泄漏与半残状态；随后标 failed 供 UI 展示。
+            tearDown(resetPath: true)
             loadState = .failed(error.localizedDescription)
         }
     }

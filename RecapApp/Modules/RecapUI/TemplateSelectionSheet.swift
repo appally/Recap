@@ -96,7 +96,7 @@ public struct TemplateSelectionSheet: View {
         // push/pop 导航习语，与 sheet 的 dismiss（下滑 / 右上关闭）语义冲突。
         ZStack {
             Text("选择模板")
-                .font(.system(size: 17, weight: .bold))
+                .font(.recapTitleS)
                 .foregroundStyle(Color.recapInk)
             HStack {
                 Spacer()
@@ -126,7 +126,7 @@ public struct TemplateSelectionSheet: View {
                 } label: {
                     VStack(spacing: 4) {
                         Text(tab.rawValue)
-                            .font(.system(size: 15, weight: selectedTab == tab ? .bold : .regular))
+                            .font(selectedTab == tab ? .recapHeading : .recapBodyS)
                             .foregroundStyle(selectedTab == tab ? Color.recapInk : Color.recapTea)
                         // 滑动下划线：固定占位保高，选中项带 matchedGeometry 的墨色胶囊
                         // 随 selectedTab 平滑滑动，给眼睛一个移动锚点（空间一致性）。
@@ -182,7 +182,7 @@ public struct TemplateSelectionSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 Text("根据本场会议推荐")
-                    .font(.system(size: 13))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
                 skillGrid(recommendedSkills)
             }
@@ -223,7 +223,7 @@ public struct TemplateSelectionSheet: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack {
                 Text("我的模板")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.recapTitle)
                     .foregroundStyle(Color.recapInk)
                 Spacer()
                 Button {
@@ -231,7 +231,7 @@ public struct TemplateSelectionSheet: View {
                     showCustomEditor = true
                 } label: {
                     Label("新建", systemImage: "plus")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.recapMeta.weight(.semibold))
                         .foregroundStyle(Color.recapInk)
                         .padding(.horizontal, Spacing.xs)
                         .contentShape(Rectangle())
@@ -240,7 +240,7 @@ public struct TemplateSelectionSheet: View {
             }
             if customStore.isEmpty {
                 Text("还没有自定义模板——点「新建」，用你的提示词创建一个")
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea.opacity(0.8))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, Spacing.sm)
@@ -260,7 +260,7 @@ public struct TemplateSelectionSheet: View {
         if !favs.isEmpty {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 Text("收藏的模板")
-                    .font(.system(size: 20, weight: .bold))
+                    .font(.recapTitle)
                     .foregroundStyle(Color.recapInk)
                 skillGrid(favs)
             }
@@ -282,11 +282,11 @@ public struct TemplateSelectionSheet: View {
                     .frame(width: 30)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(skill.name)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.recapHeading)
                         .foregroundStyle(Color.recapInk)
                         .lineLimit(1)
                     Text(skill.description)
-                        .font(.system(size: 12))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
                         .lineLimit(2)
                 }
@@ -326,7 +326,7 @@ public struct TemplateSelectionSheet: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.recapInk)
             Text(group.title)
-                .font(.system(size: 20, weight: .bold))
+                .font(.recapTitle)
                 .foregroundStyle(Color.recapInk)
         }
     }
@@ -393,12 +393,12 @@ public struct TemplateSelectionSheet: View {
                 }
 
                 Text(skill.name)
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.recapHeading)
                     .foregroundStyle(Color.recapInk)
                     .lineLimit(1)
 
                 Text(skill.description)
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -407,7 +407,7 @@ public struct TemplateSelectionSheet: View {
                 Spacer(minLength: 0)
 
                 Text(skill.groupTitle)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.recapCaption)
                     .foregroundStyle(Color.recapTea)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -446,7 +446,7 @@ public struct TemplateSelectionSheet: View {
                 isPresented = false
             } label: {
                 Text(generateTitle)
-                    .font(.system(size: 16, weight: .bold))
+                    .font(.recapTitleS)
                     .foregroundStyle(Color.recapBg)
                     .frame(maxWidth: .infinity)
                     .frame(height: 50)

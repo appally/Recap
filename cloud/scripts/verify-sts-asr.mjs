@@ -3,7 +3,7 @@
  * P0 验证脚本:阿里 DashScope「临时 API Key」能否用于 ASR WebSocket
  *
  * 验证整个「凭证签发器」方案的技术地基。用对照法,排除脚本自身干扰:
- *   A. 主 key (基线)  → Bearer 连 fun-asr-realtime wss,完成 run-task→PCM→finish-task
+ *   A. 主 key (基线)  → Bearer 连 paraformer-realtime-v2 wss,完成 run-task→PCM→finish-task
  *   B. st-临时 token  → 同样流程
  *
  * 判定:
@@ -23,7 +23,7 @@ import { randomBytes } from 'node:crypto';
 const API_KEY = process.env.DASHSCOPE_API_KEY;
 const TOKEN_ENDPOINT = 'https://dashscope.aliyuncs.com/api/v1/tokens';
 const WS_URL = 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/';
-const MODEL = 'fun-asr-realtime';
+const MODEL = 'paraformer-realtime-v2';
 
 if (!API_KEY) {
   console.error('✗ 缺少 DASHSCOPE_API_KEY 环境变量。\n  用法: DASHSCOPE_API_KEY=sk-xxxx node scripts/verify-sts-asr.mjs');
@@ -164,6 +164,6 @@ if (aOk && bOk) {
 } else {
   console.log('⚠ INCONCLUSIVE:主 key 基线(A)就失败。');
   console.log(`   A 失败原因: ${A.failed}`);
-  console.log('   → 先确认:主 key 有效 / 已开通 fun-asr-realtime / 网络可达 wss,再重跑。');
+  console.log('   → 先确认:主 key 有效 / 已开通 paraformer-realtime-v2 / 网络可达 wss,再重跑。');
 }
 console.log('');

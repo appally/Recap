@@ -112,4 +112,22 @@ final class AudioSilenceChunkerTests: XCTestCase {
         let covered = chunks.reduce(0) { $0 + ($1.upperBound - $1.lowerBound) }
         XCTAssertEqual(covered, samples.count)
     }
+
+    /// mmap Data 重载与数组重载产出完全一致的切片（#1：二者共用 planSamples 内核）。
+    /// 守护长音频 mmap 流式重转的切片正确性，防字节解释/边界回归。
+    func testPlanFromDataMatchesPlanFromSamples() {
+        let cycle = concatenate([tone(seconds: 4), silence(seconds: 0.5)])
+        let samples = concatenate((0..<14).map { _ in cycle })   // 63s
+
+        // [Float] -> Float32 PCM Data（与录音落盘格式一致）
+        let data = samples.withUnsafeBufferPointer { buf -> Data in
+            Data(buffer: buf)
+        }
+
+        let fromSamples = AudioSilenceChunker.plan(samples: samples, sampleRate: rate)
+        let fromData = AudioSilenceChunker.plan(audioData: data, sampleRate: rate)
+
+        XCTAssertEqual(fromData, fromSamples, "mmap Data 重载应与数组重载产出一致切片")
+        XCTAssertFalse(fromData.isEmpty, "63s 音频应被切多段")
+    }
 }

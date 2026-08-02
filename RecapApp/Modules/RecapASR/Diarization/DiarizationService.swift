@@ -58,7 +58,12 @@ public enum DiarizationService {
         guard !segments.isEmpty else {
             throw DiarizationError.emptyTranscript
         }
-        let samples = try MeetingAudioStore.loadFloatSamples(storedPath: audioPath)
+        // mmap 懒加载 + 单次物化：消除 loadFloatSamples 的 Data+[Float] 双缓冲（峰值 460MB->230MB）。
+        // Pyannote kit 需整数组（分块会破坏说话人聚类），故仍物化 [Float]，但避免双份常驻。
+        let audioData = try MeetingAudioStore.loadMappedData(storedPath: audioPath)
+        let samples: [Float] = audioData.withUnsafeBytes { raw in
+            Array(raw.bindMemory(to: Float.self))
+        }
         guard !samples.isEmpty else {
             throw DiarizationError.emptyAudio
         }
@@ -72,7 +77,9 @@ public enum DiarizationService {
             throw DiarizationError.engineFailed("未检测到说话人片段")
         }
 
-        let nameMap = Dictionary(uniqueKeysWithValues: preserveSpeakerNames.map { ($0.id, $0.name) })
+        // uniquingKeysWith 防御：Speaker.id 理论唯一，但多次重转/手改/迁移残留可能产生重复 id，
+        // uniqueKeysWithValues 遇重复 key 会 trap 致进程崩溃；取首个（保留最初命名）。
+        let nameMap = Dictionary(preserveSpeakerNames.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         let speakers = SpeakerAligner.makeSpeakers(from: timeline, existingNames: nameMap)
         let labeled = SpeakerAligner.assignSpeakers(segments: segments, timeline: timeline)
         return Outcome(segments: labeled, speakers: speakers, timeline: timeline)

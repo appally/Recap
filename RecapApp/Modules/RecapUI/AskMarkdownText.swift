@@ -372,7 +372,7 @@ public enum AskMarkdownRenderer {
                 continue
             }
             if run.inlinePresentationIntent?.contains(.code) == true {
-                output[range].font = .body.monospaced()
+                output[range].font = .recapMono
                 output[range].backgroundColor = Color.recapInk.opacity(0.06)
                 output[range].foregroundColor = Color.recapInk
                 continue
@@ -421,8 +421,8 @@ public struct AskMarkdownText: View {
     @State private var blocks: [MarkdownBlock] = []
     @State private var debounceTask: Task<Void, Never>?
 
-    /// 助手正文统一字号（略大于 recapRaw 的 15，长文更易读）。
-    private static let bodyFont: Font = .system(size: 16, weight: .regular, design: .default)
+    /// 助手正文统一字号（略大于 recapBodyS 的 15，长文更易读）。
+    private static let bodyFont: Font = .recapBody
 
     public init(source: String, isStreaming: Bool = false) {
         self.source = source
@@ -466,7 +466,7 @@ public struct AskMarkdownText: View {
         case .paragraph(let text):
             Text(AskMarkdownRenderer.attributed(text))
                 .font(Self.bodyFont)
-                .lineSpacing(5)
+                .lineSpacing(Leading.body)
 
         case .heading(let level, let text):
             Text(AskMarkdownRenderer.attributedInline(text))
@@ -491,9 +491,9 @@ public struct AskMarkdownText: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, line in
                     Text(AskMarkdownRenderer.attributed(line))
-                        .font(.system(size: 15, weight: .regular, design: .default))
+                        .font(.recapBodyS)
                         .foregroundStyle(Color.recapTea)
-                        .lineSpacing(3)
+                        .lineSpacing(Leading.tight)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -509,7 +509,7 @@ public struct AskMarkdownText: View {
                 MermaidBlockView(source: content, isStreaming: isStreaming)
             } else {
                 Text(content)
-                    .font(.system(size: 14, weight: .regular, design: .monospaced))
+                    .font(.recapMono)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(Spacing.sm + 2)
                     .background(
@@ -532,22 +532,22 @@ public struct AskMarkdownText: View {
         HStack(alignment: .firstTextBaseline, spacing: Spacing.sm - 2) {
             Text(marker)
                 .font(monospacedMarker
-                      ? .system(size: 16, weight: .regular, design: .monospaced)
+                      ? .recapMono
                       : Self.bodyFont)
                 .foregroundStyle(Color.recapTea)
             Text(AskMarkdownRenderer.attributed(text))
                 .font(Self.bodyFont)
-                .lineSpacing(5)
+                .lineSpacing(Leading.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func headingFont(_ level: Int) -> Font {
         switch level {
-        case 1: return .system(size: 20, weight: .semibold, design: .default)
-        case 2: return .system(size: 18, weight: .semibold, design: .default)
-        case 3: return .system(size: 17, weight: .semibold, design: .default)
-        default: return .system(size: 16, weight: .semibold, design: .default)
+        case 1: return .recapTitle
+        case 2: return .recapTitleS
+        case 3: return .recapBody.weight(.semibold)
+        default: return .recapBody.weight(.semibold)
         }
     }
 
@@ -562,7 +562,7 @@ public struct AskMarkdownText: View {
                 ForEach(Array(header.enumerated()), id: \.offset) { idx, cell in
                     let a = align(at: idx, in: aligns)
                     Text(AskMarkdownRenderer.attributedInline(cell))
-                        .font(.system(size: 15, weight: .semibold, design: .default))
+                        .font(.recapHeading)
                         .foregroundStyle(Color.recapTea)
                         .multilineTextAlignment(textAlign(a))
                         .frame(maxWidth: .infinity, alignment: frameAlign(a))

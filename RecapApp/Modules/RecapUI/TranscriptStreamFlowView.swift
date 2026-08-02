@@ -49,7 +49,7 @@ public struct TranscriptStreamFlowView: View {
 
                 // 纯文字流：去掉小绿点与行底背景，靠呼吸透明度 + 上下淡出遮罩营造飞升感
                 Text(contentText)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.recapMeta.weight(.medium))
                     .lineLimit(1)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(Color.recapInk.opacity(0.78))

@@ -38,7 +38,7 @@ public struct DispatchConfirmSheet: View {
             }
             if dispatchable.isEmpty {
                 Text("没有可分发的待办（需已确认的高置信项，或尚未真实分发的项）。")
-                    .font(.recapRaw)
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapTea)
                     .padding(.horizontal, Spacing.xl)
                 Spacer()
@@ -66,10 +66,10 @@ public struct DispatchConfirmSheet: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text("确认分发待办")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.recapTitleS)
                     .foregroundStyle(Color.recapInk)
                 Text(meetingTitle)
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
                     .lineLimit(1)
             }
@@ -93,10 +93,10 @@ public struct DispatchConfirmSheet: View {
         } label: {
             HStack(alignment: .top, spacing: Spacing.md) {
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(on ? Color.recapCeladon : Color.recapTea)
+                    .foregroundStyle(on ? Color.recapInk : Color.recapTea)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.task)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.recapHeading)
                         .foregroundStyle(Color.recapInk)
                         .multilineTextAlignment(.leading)
                     if let owner = item.owner {
@@ -121,11 +121,11 @@ public struct DispatchConfirmSheet: View {
             Task { await runDispatch() }
         } label: {
             Text(isRunning ? "分发中…" : "确认分发到提醒事项")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.recapTitleS)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(Color.recapCeladon, in: Capsule())
+                .background(Color.recapInk, in: Capsule())
         }
         .buttonStyle(.plain)
         .disabled(isRunning || selected.isEmpty)

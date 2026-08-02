@@ -13,11 +13,11 @@ struct VoiceprintConsentSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xl) {
                 VStack(spacing: Spacing.md) {
-                    Image(systemName: "person.wave.2.fill")
+                    Image(systemName: "person.wave.2")
                         .font(.system(size: 40, weight: .light))
                         .foregroundStyle(Color.recapCinnabar)
                     Text("用声纹跨会议认出你")
-                        .font(.system(size: 20, weight: .bold))
+                        .font(.recapTitle)
                         .foregroundStyle(Color.recapInk)
                 }
                 .frame(maxWidth: .infinity)
@@ -29,16 +29,16 @@ struct VoiceprintConsentSheet: View {
                           "跨会议认出「这是你」，在转写与纪要中标记为「我」，关联你的发言与待办。")
                     point("hand.raised", "非必要",
                           "这不是 App 基础功能；拒绝不会影响录音、转写或纪要。")
-                    point("lock.fill", "存储与去向",
+                    point("lock", "存储与去向",
                           "仅保存在本机，不上传云端、不分享给任何第三方。")
                     point("trash", "可随时撤回",
-                          "在「设置 → 个性化」可删除全部声纹，删除后本功能停用。")
+                          "在「设置 → 转写与说话人」可删除全部声纹，删除后本功能停用。")
                 }
 
                 Text("这是对生物识别信息的单独同意，与你此前授予的麦克风录音权限相互独立。")
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
-                    .lineSpacing(2)
+                    .lineSpacing(Leading.tight)
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.xl)
@@ -51,7 +51,7 @@ struct VoiceprintConsentSheet: View {
                     onAllow()
                 } label: {
                     Text("允许并标记")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.recapTitleS)
                         .foregroundStyle(Color.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
@@ -64,7 +64,7 @@ struct VoiceprintConsentSheet: View {
                     dismiss()
                 } label: {
                     Text("暂不")
-                        .font(.system(size: 16))
+                        .font(.recapBody)
                         .foregroundStyle(Color.recapTea)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -86,12 +86,12 @@ struct VoiceprintConsentSheet: View {
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.recapHeading)
                     .foregroundStyle(Color.recapInk)
                 Text(desc)
-                    .font(.system(size: 13))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
-                    .lineSpacing(2)
+                    .lineSpacing(Leading.tight)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

@@ -53,12 +53,12 @@ struct CustomTemplateEditorSheet: View {
                 Section {
                     TextEditor(text: $prompt)
                         .frame(minHeight: 220)
-                        .font(.system(size: 14))
+                        .font(.recapBodyS)
                 } header: {
                     Text("提示词")
                 } footer: {
                     Text("告诉 AI 怎么处理这场会议。建议给出固定的输出章节骨架；只写转写里的事实，不确定写「待确认」，不要编造。")
-                        .font(.system(size: 12))
+                        .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
                 }
             }
@@ -82,7 +82,7 @@ struct CustomTemplateEditorSheet: View {
     private var iconPicker: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             Text("图标")
-                .font(.system(size: 13))
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {

@@ -25,6 +25,7 @@ public enum AgentBundledSkills {
         cornellNotes,
         briefReconcile,
         photoRecap,
+        speechCoach,
     ]
 
     public static func all() throws -> [AgentSkill] {
@@ -154,6 +155,7 @@ public enum AgentBundledSkills {
     scenario: general
     modelRole: quick
     maxSteps: 3
+    temperature: 0.0
     allowedTools: search_transcript, search_brief, list_action_items
     ---
 
@@ -186,24 +188,30 @@ public enum AgentBundledSkills {
     scenario: general
     modelRole: quick
     maxSteps: 3
+    temperature: 0.0
     allowedTools: search_transcript, search_brief, list_action_items
     ---
 
     你是技能「流程图」。把本场会议的**流程 / 架构 / 决策路径**整理成一张 mermaid 流程图。
     【本技能例外，覆盖全局契约】整个输出**只**是一个 ```mermaid 代码块，不要输出任何围栏外的文字（无标题、无解释、无前后说明）。
-    用 flowchart 表达（`graph TD` 自上而下，或 `graph LR` 左右）：
-    - 节点用 `[文本]`、判断用 `{文本}`、箭头 `-->`；箭头可带条件 `-->|是|`。
+    第一行必须是 `graph TD`（自上而下）或 `graph LR`（左右）。
+    mermaid 语法铁律（违反任一条都会导致图表渲染失败）：
+    - 节点 ID 用短字母 A/B/C…，显示文本放形状括号内；不要用纯数字或带空格的串当 ID。
+    - 节点文本一律用双引号包裹：矩形 `A["文本"]`、菱形 `B{"文本"}`、圆角 `C("文本")`；这样文本里的 `()`、`[]`、`{}`、`|` 才不会破坏解析。
+    - 节点文本内不要出现双引号 `"`；需要引用时改用「」或《》，不要用转义。
+    - 节点文本用纯文本，不要用 Markdown（**、##）或 HTML 标记。
+    - 箭头 `-->`；带条件 `-->|是|`，条件文本内不要含 `|`、`()`、`[]`、`{}`；不确定用虚线 `-.->`。
+    内容约束：
     - 仅画转写中确有的流程/关系，不臆造步骤；拿不准的分支用虚线 `-.->` 并标注「待确认」。
     - 节点文本≤8 字、同义步骤合并、总节点≤12 个；过密就只画主流程、省略细枝。
-    - 节点文本若含括号/引号/斜杠/竖线等符号，用双引号包裹（如 `["方案 A / B"]`），避免破坏 mermaid 解析。
     - 涉及人名/数字先用 search_transcript 核验。
     示例（仅输出此代码块本身，含围栏）：
     ```mermaid
     graph TD
-      A[需求评审] --> B{方案可行?}
-      B -->|是| C[排期开发]
-      B -->|否| D[返工修改]
-      C --> E[上线]
+      A["需求评审"] --> B{"方案可行?"}
+      B -->|是| C["排期开发"]
+      B -->|否| D["返工 / 迭代"]
+      C --> E["上线"]
     ```
     """
 
@@ -220,6 +228,7 @@ public enum AgentBundledSkills {
     scenario: general
     modelRole: quick
     maxSteps: 3
+    temperature: 0.0
     allowedTools: search_transcript, search_brief, list_action_items
     ---
 
@@ -582,5 +591,48 @@ public enum AgentBundledSkills {
     ## 后续行动（任务 — 负责人 — 时限；仅已确认项）
     时间标注：仅当 search_transcript 命中返回了时间戳时才写大致时间；无则省略，禁止猜测。
     会中标记是用户主动标记的重点，优先覆盖；若本场无标记，退化为普通纪要，不要编造标记。
+    """
+
+    /// 针对用户**本人发言**的反思与提升建议（沟通教练视角）。Recap 第一个「自我视角」模板——
+    /// 其它模板总结会议，本模板复盘"我自己说得怎样"。依赖 prompt 注入的【你的发言】身份标记
+    /// （`AgentSkillRunner.meSpeakerLabel`：标记我 / 单发言人可解析，多未标记则诚实降级）。
+    /// 严守"只评可观察行为、禁心理推测"红线——复用 interview-eval 的 MBTI 护栏 house pattern。
+    private static let speechCoach = """
+    ---
+    id: speech-coach
+    name: 发言复盘
+    description: 针对你本人在会议中的发言，给出基于原话的反思与可执行建议
+    icon: figure.speech
+    group: recap
+    groupTitle: 纪要
+    scenario: learning
+    modelRole: quick
+    maxSteps: 3
+    allowedTools: search_transcript, search_brief, list_action_items
+    ---
+
+    你是技能「发言复盘」，一位沟通教练。只针对「你」（本场标注为用户本人的那位发言人）的发言做反思，给出具体、可执行的改进建议，受众是用户本人，约 400–600 字。
+
+    只依据转写中的事实评估，**不做心理、情绪、意图或性格判断（如 MBTI）**——只评论可观察的表达：措辞精炼度、结构、论据、互动与倾听、节奏、承诺与收束。
+
+    取数准则：
+    - 只点评「你」的发言；其他人仅作上下文（如"你打断了对方"）。
+    - 每条观察必须附 1 段你的原话引文（「…」），引文须为转写中真实出现，禁止杜撰。
+    - 若未告知哪位发言人是你、且无法判断，直接写"本场未标注你自己，暂无法针对个人发言反思"，不要猜测。
+    - 某维度信息不足时该维度直接省略，不要硬编。
+
+    结构：
+    # 发言复盘
+    ## ✨ 做得好的
+    - 1–3 条。每条：观察 + 原话引文 + 为什么有效。
+    ## 🔧 可以更好的
+    - 2–4 条，按影响力排序。每条三行：
+      - **观察**：你说了什么（原话引文）。
+      - **影响**：这样表达可能带来的效果。
+      - **建议**：下次可以怎么说——给一句改写示范。
+    ## 🎯 下次试试
+    - 一句话：最重要的一个改变。
+
+    建议要具体到可照做（给改写示范），不要空泛（如"加强沟通""注意表达"）。
     """
 }

@@ -127,6 +127,9 @@ enum OpenAICompatibleAgentStreaming {
         attempt: Int,
         continuation: AsyncThrowingStream<AgentTransportEvent, Error>.Continuation
     ) async throws {
+        // produced 守卫：已向下游 yield 任意可见 delta 后**绝不重试**（重试会从头再产出，
+        // AgentKernel 累加 streamedText 致 UI 重复/乱序）。inout 传入，抛错时也能反映已产出量。
+        var produced = false
         do {
             try await performOnce(
                 apiKey: apiKey,
@@ -135,10 +138,12 @@ enum OpenAICompatibleAgentStreaming {
                 messages: messages,
                 tools: tools,
                 options: options,
+                produced: &produced,
                 continuation: continuation
             )
         } catch let error as AgentTransportError {
-            if AgentTransportError.shouldDowngrade(attempt: attempt, error: error),
+            if !produced,
+               AgentTransportError.shouldDowngrade(attempt: attempt, error: error),
                capabilities.supportsThinkingToggle
             {
                 continuation.yield(.reasoningDelta("（已降级为非思考模式）"))
@@ -160,9 +165,10 @@ enum OpenAICompatibleAgentStreaming {
                 )
                 return
             }
-            if AgentTransportError.shouldRetryTransient(attempt: attempt, error: error) {
+            if !produced, AgentTransportError.shouldRetryTransient(attempt: attempt, error: error) {
+                // M8：try? -> try，让取消在 sleep 阶段即抛出终止重试（否则吞 CancellationError 后仍发新请求）。
                 let delayNs = UInt64(300_000_000) * UInt64(attempt + 1)
-                try? await Task.sleep(nanoseconds: delayNs)
+                try await Task.sleep(nanoseconds: delayNs)
                 try await run(
                     apiKey: apiKey,
                     baseURL: baseURL,
@@ -181,9 +187,10 @@ enum OpenAICompatibleAgentStreaming {
                 || urlError.code == .networkConnectionLost
                 || urlError.code == .notConnectedToInternet
         {
-            if attempt < 2 {
+            if attempt < 2, !produced {
+                // M8：try? -> try，取消在 sleep 即生效，不再多发一次请求。
                 let delayNs = UInt64(300_000_000) * UInt64(attempt + 1)
-                try? await Task.sleep(nanoseconds: delayNs)
+                try await Task.sleep(nanoseconds: delayNs)
                 try await run(
                     apiKey: apiKey,
                     baseURL: baseURL,
@@ -207,6 +214,7 @@ enum OpenAICompatibleAgentStreaming {
         messages: [AgentMessage],
         tools: [AgentToolSpec],
         options: AgentTransportOptions,
+        produced: inout Bool,
         continuation: AsyncThrowingStream<AgentTransportEvent, Error>.Continuation
     ) async throws {
         let body = try ChatCompletionsCodec.encodeRequestBody(
@@ -216,7 +224,7 @@ enum OpenAICompatibleAgentStreaming {
             capabilities: capabilities
         )
 
-        var request = URLRequest(url: chatCompletionsURL(from: baseURL))
+        var request = URLRequest(url: try chatCompletionsURL(from: baseURL))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -250,14 +258,14 @@ enum OpenAICompatibleAgentStreaming {
             if byte == UInt8(ascii: "\n") {
                 let line = String(data: lineBuffer, encoding: .utf8) ?? ""
                 lineBuffer.removeAll(keepingCapacity: true)
-                try handleSSELine(
+                if try handleSSELine(
                     line,
                     reasoning: &reasoning,
                     accumulator: &accumulator,
                     sawFinish: &sawFinish,
                     dsmlFilter: &dsmlFilter,
                     continuation: continuation
-                )
+                ) { produced = true }
             } else {
                 lineBuffer.append(byte)
             }
@@ -265,14 +273,14 @@ enum OpenAICompatibleAgentStreaming {
 
         if !lineBuffer.isEmpty {
             let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-            try handleSSELine(
+            if try handleSSELine(
                 line,
                 reasoning: &reasoning,
                 accumulator: &accumulator,
                 sawFinish: &sawFinish,
                 dsmlFilter: &dsmlFilter,
                 continuation: continuation
-            )
+            ) { produced = true }
         }
 
         let structured = accumulator.finish()
@@ -292,20 +300,22 @@ enum OpenAICompatibleAgentStreaming {
         sawFinish: inout Bool,
         dsmlFilter: inout DeepSeekDSML.StreamFilter,
         continuation: AsyncThrowingStream<AgentTransportEvent, Error>.Continuation
-    ) throws {
+    ) throws -> Bool {
         switch SSELineParser.classify(line) {
         case .ignorable:
-            return
+            return false
         case .done:
             sawFinish = true
-            return
+            return false
         case .data(let payload):
             let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return }
+            guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return false }
             let fragment = try ChatCompletionsCodec.decodeDelta(data)
+            var yielded = false
             if let r = fragment.reasoningContent, !r.isEmpty {
                 reasoning += r
                 continuation.yield(.reasoningDelta(r))
+                yielded = true
             }
             if !fragment.toolCallDeltas.isEmpty {
                 accumulator.ingest(fragment.toolCallDeltas)
@@ -315,15 +325,17 @@ enum OpenAICompatibleAgentStreaming {
                 let visible = dsmlFilter.ingest(c)
                 if !visible.isEmpty {
                     continuation.yield(.textDelta(visible))
+                    yielded = true
                 }
             }
             if fragment.finishReason != nil {
                 sawFinish = true
             }
+            return yielded
         }
     }
 
-    static func chatCompletionsURL(from baseURL: String) -> URL {
+    static func chatCompletionsURL(from baseURL: String) throws -> URL {
         let trimmed = baseURL
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -333,6 +345,10 @@ enum OpenAICompatibleAgentStreaming {
         } else {
             withScheme = "https://\(trimmed)"
         }
-        return URL(string: "\(withScheme)/chat/completions")!
+        // BYOK baseURL 含空格/非 ASCII 等非法字符时 URL 构造失败；旧版强解会崩，改为抛 badURL。
+        guard let url = URL(string: "\(withScheme)/chat/completions") else {
+            throw URLError(.badURL)
+        }
+        return url
     }
 }

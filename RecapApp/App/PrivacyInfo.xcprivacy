@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Recap 不进行任何用户追踪：无 IDFA、无广告 SDK、无跨 app 数据关联。 -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+
+	<!-- 数据收集声明留空：声纹 embedding 仅本机（不上云不关联身份），音频/纪要/待办均为用户主动产生且不向 Recap 服务器上传原始内容。
+	     App Store Connect 隐私问卷另行如实填写（含"用于 App 功能的音频/内容/购买历史"等）。 -->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+
+	<!-- Required Reason API：经核实仅命中 UserDefaults。
+	     FileTimestamp 三处 attributesOfItem 均只读 .size（文件体积推算音频时长），未读时间戳，不触发。
+	     DiskSpace / SystemBootTime（仅 thermalState，非 RR）/ ActiveKeyboards 均无命中。 -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- 读写 app 自身偏好（ASR/凭证/配额/个性化等设置），符合 CA92.1。 -->
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

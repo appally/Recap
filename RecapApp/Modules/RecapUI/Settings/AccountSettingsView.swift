@@ -13,15 +13,16 @@ struct AccountSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xxl) {
                 profileCard
+                membershipSection
                 if account.isSignedIn {
-                    signedInActions
+                    accountSection
                 } else {
-                    signInPanel
+                    signInSection
                 }
                 SettingsInlineNotice(message: $status)
             }
             .padding(.horizontal, Spacing.xl)
-            .padding(.top, Spacing.md)
+            .padding(.top, Spacing.lg)
             .padding(.bottom, Spacing.xxxl)
         }
         .scrollIndicators(.hidden)
@@ -45,63 +46,69 @@ struct AccountSettingsView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将清除登录状态。会议数据请在「数据与隐私」中另行清除。订阅需在系统「订阅」中管理；删除账户不会自动退款。")
+            Text("将清除登录状态。会议数据请在「数据与隐私」中另行清除。订阅需在系统「订阅」中管理；删除账户不会自动退款。云端不保存你的会议内容或个人资料，本机清除即彻底删除。")
         }
     }
+
+    // MARK: - Profile hero card
 
     private var profileCard: some View {
         HStack(spacing: Spacing.lg) {
-            SettingsAvatar(account: account, size: 64)
+            SettingsAvatar(account: account, size: 56)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(account.displayName)
-                    .font(.system(size: 20, weight: .semibold, design: .default))
+                    .font(.recapTitle)
                     .foregroundStyle(Color.recapInk)
-                HStack(spacing: Spacing.sm) {
-                    SettingsStatusPill(
-                        text: account.isSignedIn ? providerLabel : "未登录",
-                        kind: account.isSignedIn ? .ready : .info
-                    )
-                    SettingsStatusPill(
-                        text: membership.isPro ? "Pro" : account.tier.title,
-                        kind: membership.isPro ? .ready : .info
-                    )
-                }
-                if let email = account.email {
-                    Text(email)
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.recapTea)
-                }
+                Text(profileSubtitle)
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: Spacing.sm)
+            SettingsStatusPill(text: membership.tierLabel, kind: tierPillKind)
         }
-        .padding(.vertical, Spacing.md)
+        .padding(Spacing.lg)
+        .settingsCard()
     }
 
-    private var providerLabel: String {
+    private var profileSubtitle: String {
+        if !account.isSignedIn { return "未登录" }
+        if let email = account.email { return email }
         switch account.provider {
-        case .apple: return "Apple"
-        case .local: return "本机"
+        case .apple: return "Apple 账户"
+        case .local: return "本机账户"
         case .none: return "已登录"
         }
     }
 
-    private var signInPanel: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            Text("登录账号以同步云端数据与 Pro 权益")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(Color.recapTea)
-
-            AppleSignInSection(
-                onSignedIn: { reload() },
-                onMessage: { status = $0 }
-            )
-        }
-        .padding(.vertical, Spacing.sm)
+    private var tierPillKind: SettingsStatusPill.Kind {
+        (membership.isPro || membership.byokUnlocked) ? .ready : .info
     }
 
-    private var signedInActions: some View {
-        VStack(spacing: 0) {
+    // MARK: - 订阅与权益
+
+    private var membershipSection: some View {
+        SettingsSection(title: "订阅与权益") {
+            NavigationLink {
+                MembershipSettingsView()
+            } label: {
+                SettingsNavRow(
+                    icon: "creditcard",
+                    iconTint: .recapInk,
+                    title: "会员与订阅",
+                    value: membership.tierLabel
+                )
+            }
+            .buttonStyle(SettingsPressStyle())
+        }
+    }
+
+    // MARK: - 账户（已登录：退出 / 删除）
+
+    private var accountSection: some View {
+        SettingsSection(title: "账户") {
             Button {
                 RecapAccountStore.signOut()
                 reload()
@@ -130,6 +137,18 @@ struct AccountSettingsView: View {
                 )
             }
             .buttonStyle(SettingsPressStyle())
+        }
+    }
+
+    // MARK: - 登录（未登录）
+
+    private var signInSection: some View {
+        SettingsSection(title: "登录") {
+            AppleSignInSection(
+                onSignedIn: { reload() },
+                onMessage: { status = $0 }
+            )
+            .padding(.vertical, Spacing.sm)
         }
     }
 

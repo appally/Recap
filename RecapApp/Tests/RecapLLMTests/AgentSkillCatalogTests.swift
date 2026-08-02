@@ -146,6 +146,21 @@ final class AgentSkillCatalogTests: XCTestCase {
         XCTAssertTrue(skill.systemPrompt.contains("```mermaid"), "prompt 应包含 mermaid 围栏示例")
     }
 
+    /// 结构化产出模板（mermaid-flowchart / mindmap / action-list）须降温到 0.0，降结构飘移；
+    /// 非结构化模板（如 external-minutes 散文纪要）缺省 nil；temperature 经 encode round-trip 不丢。
+    func testStructuralSkillsTemperatureZero() throws {
+        let catalog = try AgentSkillCatalog.bundled()
+        let mermaid = try XCTUnwrap(catalog.skill(id: "mermaid-flowchart"))
+        XCTAssertEqual(mermaid.temperature, 0.0, "mermaid-flowchart 须 temperature=0.0（降结构化飘移）")
+        XCTAssertEqual(try XCTUnwrap(catalog.skill(id: "mindmap")).temperature, 0.0, "mindmap 缩进大纲须 temperature=0.0")
+        XCTAssertEqual(try XCTUnwrap(catalog.skill(id: "action-list")).temperature, 0.0, "action-list 行式清单须 temperature=0.0")
+        XCTAssertNil(try XCTUnwrap(catalog.skill(id: "external-minutes")).temperature, "非结构化模板温度应缺省 nil")
+        // round-trip：encode 须保留 temperature 行，reparse 仍为 0.0
+        let encoded = AgentSkillDocument.encode(mermaid)
+        XCTAssertTrue(encoded.contains("temperature: 0.0"), "encode 须输出 temperature：\n\(encoded)")
+        XCTAssertEqual(try AgentSkillDocument.parse(encoded).temperature, 0.0)
+    }
+
     // MARK: - Prompt 契约回归（防 P0 类语义 bug 回潮）
 
     /// 全部内置模板：核心字段非空（防误存空 body / 描述 / 名称）。
@@ -184,11 +199,38 @@ final class AgentSkillCatalogTests: XCTestCase {
         // 思维导图：缩进契约须与 MindmapOutlineView 解析器对齐（每级 2 空格 + `- `）。
         let mindmap = try XCTUnwrap(catalog.skill(id: "mindmap"))
         XCTAssertTrue(mindmap.systemPrompt.contains("2 个空格"), "mindmap 须声明 2 空格缩进契约")
-        // 流程图：mermaid 特殊字符鲁棒性护栏。
+        // 流程图：mermaid 语法鲁棒性护栏（基于 mermaid v11.16.0 实测的崩溃字符集）。
         let mermaid = try XCTUnwrap(catalog.skill(id: "mermaid-flowchart"))
-        XCTAssertTrue(mermaid.systemPrompt.contains("双引号"), "mermaid 须含特殊字符双引号护栏")
+        let mp = mermaid.systemPrompt
+        XCTAssertTrue(mp.contains("双引号"), "mermaid 须含双引号护栏")
+        XCTAssertTrue(mp.contains("graph TD"), "mermaid 须要求首行 graph TD/LR")
+        // 示例必须演示加引号节点（A["…"] / B{"…"}）--LLM 跟示例走，无引号示例是崩因。
+        XCTAssertTrue(mp.contains("[\""), "mermaid 示例须演示加引号矩形节点 A[\"…\"]")
+        XCTAssertTrue(mp.contains("{\""), "mermaid 示例须演示加引号菱形节点 B{\"…\"}")
+        // 须点名真崩字符（mermaid 自身语法符号）。
+        XCTAssertTrue(mp.contains("()") && mp.contains("[]") && mp.contains("{}") && mp.contains("|"),
+                      "mermaid 须点名 () [] {} | 为崩溃字符")
+        // 不得再把斜杠误标为崩溃字符（v11 实测 / & <> # 均不崩）。
+        XCTAssertFalse(mp.contains("斜杠"), "mermaid 不得误标斜杠为崩溃字符")
         // 周报：描述不得过度承诺跨会议聚合（runner 是单会议执行）。
         let weekly = try XCTUnwrap(catalog.skill(id: "weekly-report"))
         XCTAssertTrue(weekly.description.contains("本场会议"), "weekly-report 描述须如实反映单会议")
+    }
+
+    /// 发言复盘（speech-coach）：第一个「自我视角」模板。须守住"只评可观察行为、禁心理推测"红线
+    /// （对齐 interview-eval 的 MBTI 护栏 house pattern），并钉死未标注时的诚实降级文案。
+    func testSpeechCoachGuardsAgainstPsychologicalSpeculation() throws {
+        let catalog = try AgentSkillCatalog.bundled()
+        let skill = try XCTUnwrap(catalog.skill(id: "speech-coach"), "speech-coach 应已注册")
+        XCTAssertEqual(skill.scenario, .learning)
+        XCTAssertEqual(skill.groupId, "recap")
+        // 红线：禁止心理/情绪/意图/性格推测。
+        XCTAssertTrue(skill.systemPrompt.contains("MBTI"), "speech-coach 须显式禁止 MBTI/心理推测")
+        // 引文护栏：反思须基于真实原话。
+        XCTAssertTrue(skill.systemPrompt.contains("禁止杜撰"), "speech-coach 须守引文不杜撰护栏")
+        // 自我视角：明确针对用户本人。
+        XCTAssertTrue(skill.systemPrompt.contains("用户本人"), "speech-coach 须聚焦用户本人发言")
+        // 未标注时的诚实降级文案（仿 action-list 钉「（无待办）」范式）。
+        XCTAssertTrue(skill.systemPrompt.contains("未标注你自己"), "speech-coach 须有未标注时的诚实降级文案")
     }
 }

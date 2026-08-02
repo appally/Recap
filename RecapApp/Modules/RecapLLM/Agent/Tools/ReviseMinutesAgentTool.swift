@@ -2,9 +2,12 @@ import Foundation
 import RecapModels
 
 /// 读取 UI 侧落库结果（避免工具内写 SwiftData）。
+///
+/// 隔离：两个要求均 `@MainActor`--落库桥整体 MainActor 隔离，工具在内核 actor 上经
+/// `await` 跳 MainActor 读取，与 UI 侧 `commit`/`rollback` 串行化，杜绝 `lastCommitMessage` 竞态。
 public protocol ReviseMinutesCommitReading: Sendable {
-    var lastCommitMessage: String? { get }
-    func consumeCommitMessage() -> String?
+    @MainActor var lastCommitMessage: String? { get }
+    @MainActor func consumeCommitMessage() -> String?
 }
 
 /// 对话式修改本场纪要（HITL；工具内不写库，由 UI 确认后经 Bridge 落库）。
@@ -41,7 +44,7 @@ public struct ReviseMinutesAgentTool: AgentTool {
     }
 
     public func invoke(argumentsJSON: String, context: AgentToolContext) async throws -> AgentToolResult {
-        if let msg = commitReader?.consumeCommitMessage(), !msg.isEmpty {
+        if let msg = await commitReader?.consumeCommitMessage(), !msg.isEmpty {
             return AgentToolResult(
                 contentForModel: msg,
                 uiSummary: msg,

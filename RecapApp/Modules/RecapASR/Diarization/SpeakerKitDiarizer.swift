@@ -117,6 +117,8 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
         preparing = task
         do {
             let kit = try await task.value
+            // unload() 可能在加载期间 cancel 并清空 preparing；不回填 kit，避免刚卸载又驻留（告警失效）。
+            guard preparing != nil else { throw CancellationError() }
             self.kit = kit
             preparing = nil
             return kit

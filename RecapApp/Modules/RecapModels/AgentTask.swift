@@ -66,6 +66,10 @@ public final class AgentTask {
     public var meeting: Meeting?
     /// 产出草稿（AIOutput(.draft)）的 id；partial 时也可能已有。
     public var draftOutputId: UUID?
+    /// 调研融入对话窗后：该轮所属的 ChatSession（与对话历史同库共存）。
+    public var chatSessionID: UUID?
+    /// 调研轮 streaming 写入的 assistant ChatMessageRecord id（finish 时落库并回挂 steps）。
+    public var chatMessageID: UUID?
     @Relationship(deleteRule: .cascade, inverse: \AgentStepRecord.task)
     public var steps: [AgentStepRecord] = []
 
@@ -97,7 +101,9 @@ public final class AgentTask {
         lastError: String? = nil,
         actionItemId: UUID? = nil,
         meeting: Meeting? = nil,
-        draftOutputId: UUID? = nil
+        draftOutputId: UUID? = nil,
+        chatSessionID: UUID? = nil,
+        chatMessageID: UUID? = nil
     ) {
         self.id = id
         self.kindRaw = kind.rawValue
@@ -110,6 +116,8 @@ public final class AgentTask {
         self.actionItemId = actionItemId
         self.meeting = meeting
         self.draftOutputId = draftOutputId
+        self.chatSessionID = chatSessionID
+        self.chatMessageID = chatMessageID
     }
 
     public func transition(to newState: AgentTaskState) -> Bool {

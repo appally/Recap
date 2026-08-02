@@ -10,7 +10,14 @@ public actor AgentKernel {
     private let context: AgentToolContext
     private let approvalTimeout: TimeInterval
 
-    private var pendingApprovals: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var pendingApprovals: [UUID: PendingApproval] = [:]
+
+    /// 一个待决审批：续体 + 配套超时 Task。resolve 时 cancel 超时 Task，
+    /// 避免它在审批已决后仍 sleep 到超时（最长 90s）强引用 actor 无法释放。
+    private struct PendingApproval {
+        let continuation: CheckedContinuation<Bool, Never>
+        let timeoutTask: Task<Void, Never>
+    }
 
     public init(
         transport: any AgentTransport,
@@ -25,8 +32,9 @@ public actor AgentKernel {
     }
 
     public func resolveApproval(id: UUID, approved: Bool) {
-        if let cont = pendingApprovals.removeValue(forKey: id) {
-            cont.resume(returning: approved)
+        if let pending = pendingApprovals.removeValue(forKey: id) {
+            pending.timeoutTask.cancel()
+            pending.continuation.resume(returning: approved)
         }
     }
 
@@ -53,10 +61,11 @@ public actor AgentKernel {
     }
 
     private func cancelAllApprovals() {
-        for (id, cont) in pendingApprovals {
-            cont.resume(returning: false)
-            pendingApprovals.removeValue(forKey: id)
+        for (_, pending) in pendingApprovals {
+            pending.timeoutTask.cancel()
+            pending.continuation.resume(returning: false)
         }
+        pendingApprovals.removeAll()
     }
 
     private func execute(
@@ -85,6 +94,7 @@ public actor AgentKernel {
                     uiSummary: "本场材料 \(prewarm.citations.count) 条",
                     citations: prewarm.citations,
                     resultChars: 0,
+                    resultContent: "",
                     errorText: nil
                 ))
             }
@@ -106,7 +116,7 @@ public actor AgentKernel {
             let toolsForCall: [AgentToolSpec] = forcedNoTools ? [] : registry.specs
             let options = AgentTransportOptions(
                 model: request.model,
-                temperature: 0.2,
+                temperature: request.temperature,
                 thinking: request.thinking,
                 allowTools: !toolsForCall.isEmpty,
                 timeout: Self.transportTimeout(remaining: remaining, isConverge: false)
@@ -220,7 +230,7 @@ public actor AgentKernel {
             let remain = Self.remainingWallClock(startedAt: startedAt, budget: budget)
             let options = AgentTransportOptions(
                 model: request.model,
-                temperature: 0.2,
+                temperature: request.temperature,
                 thinking: request.thinking,
                 allowTools: false,
                 timeout: Self.transportTimeout(remaining: remain, isConverge: true)
@@ -344,6 +354,7 @@ public actor AgentKernel {
                     uiSummary: "已拒绝",
                     citations: [],
                     resultChars: outcome.content.count,
+                    resultContent: outcome.content,
                     errorText: nil
                 ))
                 return (index, outcome)
@@ -357,6 +368,7 @@ public actor AgentKernel {
                 uiSummary: result.uiSummary,
                 citations: result.citations,
                 resultChars: result.contentForModel.count,
+                resultContent: result.contentForModel,
                 errorText: nil
             ))
             return (index, ToolCallOutcome(
@@ -373,6 +385,7 @@ public actor AgentKernel {
                 uiSummary: "失败",
                 citations: [],
                 resultChars: msg.count,
+                resultContent: msg,
                 errorText: msg
             ))
             return (index, ToolCallOutcome(
@@ -388,12 +401,12 @@ public actor AgentKernel {
     /// 等待 HITL；超时或取消均按拒绝 resume，保证 continuation 不泄漏。
     private func waitForApproval(id: UUID) async -> Bool {
         await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            pendingApprovals[id] = cont
             let timeout = approvalTimeout
-            Task {
+            let timeoutTask = Task {
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 await self.resolveApproval(id: id, approved: false)
             }
+            pendingApprovals[id] = PendingApproval(continuation: cont, timeoutTask: timeoutTask)
         }
     }
 

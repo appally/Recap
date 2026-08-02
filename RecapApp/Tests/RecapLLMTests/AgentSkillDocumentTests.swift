@@ -167,6 +167,7 @@ final class AgentSkillDocumentTests: XCTestCase {
             ("photo-recap", .general, "recap"),
             ("project-status", .team, "write"),
             ("key-quotes", .general, "extract"),
+            ("speech-coach", .learning, "recap"),
         ]
         for c in cases {
             let skill = try XCTUnwrap(catalog.skill(id: c.id), "缺失模板 \(c.id)")

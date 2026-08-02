@@ -74,7 +74,7 @@ public struct MeetingAudioPlayerBar: View {
                 .offset(x: player.isPlaying ? 0 : 1)
                 .background(
                     Circle()
-                        .fill(Color.recapCeladon.opacity(player.isPlaying ? 0.22 : 0.14))
+                        .fill(Color.recapInk.opacity(player.isPlaying ? 0.22 : 0.14))
                 )
                 .contentTransition(.symbolEffect(.replace))
         }
@@ -102,13 +102,13 @@ public struct MeetingAudioPlayerBar: View {
     private var listeningMark: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(Color.recapCeladon)
+                .fill(Color.recapInk)
                 .frame(width: 6, height: 6)
                 .opacity(player.isPlaying ? 1 : 0.35)
             Text(player.isPlaying ? "回听中" : "回听")
-                .font(.system(size: 12, weight: .semibold, design: .default))
-                .tracking(0.2)
-                .foregroundStyle(player.isPlaying ? Color.recapCeladon : Color.recapTea)
+                .font(.recapCaption)
+                .tracking(Tracking.caption)
+                .foregroundStyle(player.isPlaying ? Color.recapInk : Color.recapTea)
         }
         .animation(.recapSoft, value: player.isPlaying)
         .accessibilityHidden(true)
@@ -117,7 +117,7 @@ public struct MeetingAudioPlayerBar: View {
     private var scrubRow: some View {
         HStack(spacing: Spacing.sm) {
             Text(Self.format(displayedTime))
-                .font(.recapTimestamp)
+                .font(.recapMono)
                 .foregroundStyle(Color.recapTea)
                 .frame(width: 44, alignment: .leading)
                 .monospacedDigit()
@@ -138,10 +138,10 @@ public struct MeetingAudioPlayerBar: View {
                     }
                 }
             )
-            .tint(Color.recapCeladon)
+            .tint(Color.recapInk)
 
             Text(Self.format(player.duration))
-                .font(.recapTimestamp)
+                .font(.recapMono)
                 .foregroundStyle(Color.recapTea)
                 .frame(width: 44, alignment: .trailing)
                 .monospacedDigit()

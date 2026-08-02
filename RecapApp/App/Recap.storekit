@@ -11,12 +11,12 @@
       "localizations" : [
         {
           "description" : "永久解锁自备密钥（BYOK）：用你自己的厂商 Key，费用自理、不限量。",
-          "displayName" : "Recap BYOK 解锁",
+          "displayName" : "纪要 BYOK 解锁",
           "locale" : "zh_CN"
         },
         {
           "description" : "Lifetime unlock for bringing your own API keys.",
-          "displayName" : "Recap BYOK Unlock",
+          "displayName" : "纪要 BYOK Unlock",
           "locale" : "en_US"
         }
       ],
@@ -37,7 +37,7 @@
       "localizations" : [
 
       ],
-      "name" : "Recap Pro",
+      "name" : "纪要 Pro",
       "subscriptions" : [
         {
           "adHocOffers" : [
@@ -53,13 +53,13 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "云端高保真转写与强模型纪要，无需自备 API Key。",
-              "displayName" : "Recap Pro 月度",
+              "description" : "云端高保真转写与智能纪要，无需自备 API Key。",
+              "displayName" : "纪要 Pro 月度",
               "locale" : "zh_CN"
             },
             {
-              "description" : "Cloud ASR and strong LLM minutes without bringing your own API keys.",
-              "displayName" : "Recap Pro Monthly",
+              "description" : "Cloud ASR and smart AI minutes without bringing your own API keys.",
+              "displayName" : "纪要 Pro Monthly",
               "locale" : "en_US"
             }
           ],
@@ -86,13 +86,13 @@
           "introductoryOffer" : null,
           "localizations" : [
             {
-              "description" : "年付更省，含云端转写与强模型纪要。",
-              "displayName" : "Recap Pro 年度",
+              "description" : "年付更省，含云端转写与智能纪要。",
+              "displayName" : "纪要 Pro 年度",
               "locale" : "zh_CN"
             },
             {
-              "description" : "Yearly plan with cloud ASR and strong LLM minutes.",
-              "displayName" : "Recap Pro Yearly",
+              "description" : "Yearly plan with cloud ASR and smart AI minutes.",
+              "displayName" : "纪要 Pro Yearly",
               "locale" : "en_US"
             }
           ],

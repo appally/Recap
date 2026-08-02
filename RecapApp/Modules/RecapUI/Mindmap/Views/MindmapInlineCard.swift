@@ -34,7 +34,7 @@ public struct MindmapInlineCard: View {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 11, weight: .semibold))
                     Text("全屏查看")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.recapCaption)
                 }
                 .foregroundStyle(Color.recapInk)
                 .padding(.horizontal, 10)

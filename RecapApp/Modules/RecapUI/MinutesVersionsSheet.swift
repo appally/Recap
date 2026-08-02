@@ -53,27 +53,27 @@ public struct MinutesVersionsSheet: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: Spacing.sm) {
                 Text("v\(output.version)")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.recapHeading)
                     .foregroundStyle(Color.recapInk)
                 if isCurrent {
                     Text("当前")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.recapCeladon)
+                        .font(.recapCaption)
+                        .foregroundStyle(Color.recapInk)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
-                        .background(Color.recapCeladon.opacity(0.12), in: Capsule())
+                        .background(Color.recapInk.opacity(0.12), in: Capsule())
                 }
                 Spacer()
                 Text(output.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 12))
+                    .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
             }
             Text("\(output.modelId) · \(output.promptHash)")
-                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .font(.recapMono)
                 .foregroundStyle(Color.recapTea.opacity(0.85))
             if let tldr = output.summaryPayload?.tldr, !tldr.isEmpty {
                 Text(tldr)
-                    .font(.recapRaw)
+                    .font(.recapBodyS)
                     .foregroundStyle(Color.recapInk.opacity(0.9))
                     .lineLimit(3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -85,8 +85,8 @@ public struct MinutesVersionsSheet: View {
                     dismiss()
                 } label: {
                     Text("回滚到此版本")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.recapCeladon)
+                        .font(.recapMeta.weight(.semibold))
+                        .foregroundStyle(Color.recapInk)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(RecapPressStyle())
@@ -100,7 +100,7 @@ public struct MinutesVersionsSheet: View {
         .overlay(
             RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 .strokeBorder(
-                    isCurrent ? Color.recapCeladon.opacity(0.22) : Color.clear,
+                    isCurrent ? Color.recapInk.opacity(0.22) : Color.clear,
                     lineWidth: 1
                 )
         )

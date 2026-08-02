@@ -34,14 +34,25 @@ public actor FluidDiarizer: MeetingDiarizer {
     // MARK: - MeetingDiarizer
 
     public func prepare() async throws {
-        _ = try await ensureLoaded()
+        _ = try await prepare(progress: nil)
+    }
+
+    /// 带下载进度的 prepare（设置页预下载用）。底层 `DiarizerModels.download` 产 `DownloadProgress`。
+    public func prepare(progress: (@Sendable (Double, String) -> Void)?) async throws {
+        _ = try await ensureLoaded(progress: progress)
     }
 
     /// 后台预下载分离模型（文件落 FluidAudio 缓存，供首次会后分离即用）。
     /// `DiarizerModels.download` 会顺带加载 MLModel 再随返回值丢弃——文件缓存已就绪，
     /// 后续 ``prepare`` 命中缓存、仅重新加载。失败静默（try?）：网络错误不抛，最坏退化到现场下载。
-    nonisolated public static func prefetchInBackground() {
+    /// - Parameter delaySeconds: 延后启动的秒数。CoreML ANE 特化编译耗时 ~16s，与启动期
+    ///   WebKit/SpeechAnalyzer 预取并发会争资源致卡顿；延后到首帧渲染后再编译可移出启动关键路径。
+    ///   分离只在会后 REVIEW 触发，用户录满一场会前 prefetch 必已就绪，故延后无副作用。
+    nonisolated public static func prefetchInBackground(delaySeconds: TimeInterval = 0) {
         Task.detached(priority: .utility) {
+            if delaySeconds > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+            }
             _ = try? await DiarizerModels.download()
         }
     }
@@ -66,7 +77,7 @@ public actor FluidDiarizer: MeetingDiarizer {
     ) async throws -> [SpeakerTimelineSegment] {
         // numberOfSpeakers 当前恒为 nil（scheduleDiarizationIfNeeded 不传）；DiarizerManager.config
         // 是 internal let，Phase 1 统一走自动聚类（numClusters=-1），忽略该参数。
-        let box = try await ensureLoaded()
+        let box = try await ensureLoaded(progress: nil)
         // 跨录音声纹身份（路径 C）：仅在用户同意声纹处理时读写画廊（PIPL §28 敏感信息须单独同意）。
         // 未同意时画廊空跑——分离仍产出本会议内有效的身份，但不收集 / 持久化声纹 embedding。
         let consented = VoiceprintConsent.granted
@@ -94,9 +105,23 @@ public actor FluidDiarizer: MeetingDiarizer {
         return mapped
     }
 
+    /// 从一段单说话人音频提取 256 维声纹 embedding（主动登记「我」用，不跑完整分离）。
+    ///
+    /// 仅跑 WeSpeaker embedding 模型（内部构造全 1 mask），需分离模型已加载（`ensureLoaded`）。
+    /// 输入须为 16kHz mono `[Float]`（模型固定 10s/160k 采样窗口：短则循环补、长则截，建议 3–10s 清晰人声）。
+    /// 推理经 ``CoreMLInferenceGate`` 与其它 CoreML 互斥（#661）。
+    public func extractEmbedding(from samples: [Float]) async throws -> [Float] {
+        let box = try await ensureLoaded(progress: nil)
+        isInferring = true
+        defer { isInferring = false }
+        return try await CoreMLInferenceGate.shared.exclusive {
+            try box.manager.extractSpeakerEmbedding(from: samples)
+        }
+    }
+
     // MARK: - 内部
 
-    private func ensureLoaded() async throws -> ManagerBox {
+    private func ensureLoaded(progress: (@Sendable (Double, String) -> Void)?) async throws -> ManagerBox {
         if let managerBox, managerBox.manager.isAvailable {
             return managerBox
         }
@@ -110,11 +135,12 @@ public actor FluidDiarizer: MeetingDiarizer {
             // ModelRegistry.baseURL 已由 FluidAudioBootstrap 在启动时设为 hf-mirror。
             // 注：曾试 .cpuAndNeuralEngine 降 GPU 驻留，但与 prefetchInBackground(默认 .all) 的
             // compute units 不一致会致 CoreML 编译缓存失效、REVIEW 时重编译 ~12s；且 mach_vm_allocate
-            // 主因是 Vision OCR 而非 diarizer 驻留，故回退默认 .all，与 prefetch 一致、REVIEW 命中缓存。
-            let models = try await DiarizerModels.download()
-            let manager = DiarizerManager()
-            manager.initialize(models: models)
-            return ManagerBox(manager: manager)
+            // 主因是并发重负载（Vision OCR 等）抢占 VM 而非 diarizer 驻留，故回退默认 .all，与 prefetch
+            // 一致、REVIEW 命中缓存。
+            // WeSpeaker：embedding 模型有 251×1 大核，不满足 ANE「大核须 8 倍数」→ 该 op 回退 CPU
+            // （CoreML op 级回退，结果正确，非致命）；41.5s 一次性 ANE 特化编译命中缓存后 ~100ms。
+            // 改 compute units 绕开 ANE 特化在 FluidAudio 侧曾让 RTFx 回归 -26%，无真机 benchmark 前不动。
+            try await Self.loadManagerBox(progress: progress)
         }
         preparing = task
         do {
@@ -124,8 +150,52 @@ public actor FluidDiarizer: MeetingDiarizer {
             return box
         } catch {
             self.preparing = nil
+            // 区分失败归因：资源耗尽（mach_vm_allocate / OOM）多为并发重负载导致的瞬时压力，
+            // 给内存类文案，避免把内存耗尽误报成"网络问题"。重试已在 loadManagerBox 内完成一次。
+            if Self.isResourceExhaustion(error) {
+                throw DiarizationError.engineFailed("内存紧张，分离模型加载失败，请关闭其他 App 后重试")
+            }
             throw DiarizationError.engineFailed("FluidAudio 分离模型加载失败，请检查网络后重试")
         }
+    }
+
+    /// 下载 + 加载 FluidAudio 分离模型并构造 `DiarizerManager`。
+    /// 资源耗尽（mach_vm_allocate/OOM）常为瞬时（并发 Vision OCR / WebKit / SpeechAnalyzer 抢内存），
+    /// 等 1.5s 让压力窗口过去后重试一次；仍失败则上抛由 `ensureLoaded` 归因（不再无限重试）。
+    private static func loadManagerBox(progress: (@Sendable (Double, String) -> Void)?) async throws -> ManagerBox {
+        do {
+            return try await downloadAndWrap(progress: progress)
+        } catch {
+            guard isResourceExhaustion(error) else { throw error }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            return try await downloadAndWrap(progress: progress)   // 第二次失败直接上抛，不再重试
+        }
+    }
+
+    private static func downloadAndWrap(progress: (@Sendable (Double, String) -> Void)?) async throws -> ManagerBox {
+        let models = try await DiarizerModels.download(progressHandler: { dp in
+            progress?(dp.fractionCompleted, "下载")
+        })
+        // unload() 可能在下载期间 cancel 本任务（内存告警卸模型）。下载完成后先查取消，
+        // 避免无视取消继续构造模型、再被 awaiter 回填 managerBox（刚卸载又驻留，告警失效）。
+        try Task.checkCancellation()
+        let manager = DiarizerManager()
+        manager.initialize(models: models)
+        return ManagerBox(manager: manager)
+    }
+
+    /// 启发式判定失败是否为内存 / VM 耗尽（`mach_vm_allocate` / OOM / malloc）。
+    /// 用于把"内存紧张"与"网络/解析"失败分开归因，并触发 `loadManagerBox` 的有限重试。
+    private static func isResourceExhaustion(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain, ns.code == Int(ENOMEM) { return true }   // mach_vm_allocate 常落此
+        let text = "\(error.localizedDescription) \(ns.debugDescription)".lowercased()
+        let markers = [
+            "mach_vm_allocate", "vm_allocate",
+            "out of memory", "cannot allocate memory",
+            "malloc", "nsmallocexception",
+        ]
+        return markers.contains { text.contains($0) }
     }
 
     /// `DiarizerManager` 的 String speakerId → 每会议 Int 索引（按时间轴首次出现顺序）。

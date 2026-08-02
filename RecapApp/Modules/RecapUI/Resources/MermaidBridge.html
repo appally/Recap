@@ -3,8 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="color-scheme" content="light dark">
-  <!-- mermaid 桥接页：离线加载同目录 mermaid.min.js，把 Swift 注入的源码渲染成 SVG。
-       安全：securityLevel=strict（转义 HTML、禁交互绑定）；不加载任何外网。 -->
+  <!-- mermaid 桥接页：离线加载 mermaid.min.js，把 Swift 注入的源码渲染成 SVG。
+       安全：securityLevel=strict（转义 HTML、禁交互绑定）；不加载任何外网。
+       注：JS 经 recap-local:// 自定义 scheme 由 App 进程内 handler 提供，WebContent 无需
+       读 framework bundle（旧 loadFileURL 的 sandbox extension 在 jetsam/debug 压力下被拒）。 -->
   <style>
     html, body { margin: 0; padding: 0; background: transparent; }
 
@@ -14,19 +16,28 @@
     #d { width: 100%; }
     #d svg { width: 100%; max-width: 100% !important; height: auto; display: block; }
 
-    /* 全屏（body.fullscreen）：contain——长边贴边、完整居中可见，pinch 放大看细节。
-       不沿用内联的满宽放大：窄高图会高度爆炸超屏、看不全，且 scrollView 不能缩小、
-       pinch 想缩小会被 minimumZoomScale 弹回（“自动恢复”）。 */
-    body.fullscreen #d {
-      width: 100%; height: 100vh;
+    /* 全屏：SVG 按自然固有像素尺寸渲染，大图溢出视口 -> WKWebView scrollView 可拖拽滚动 +
+       pinch 缩放细看；小图由 body flex 居中（flex 在内容溢出视口时自动退化为左/顶对齐，
+       左/上侧仍可达，不会卡死边缘）。
+       不用 contain（#d 100%×100vh + svg max-width/height:100%）--那会把内容夹进视口，
+       contentSize==bounds 无滚动空间，拖拽被 bounces 弹回；pinch 时 100% / 100vh / flex 随
+       layout viewport reflow，SVG 被 max-height:100% 重新夹回，放大无效 ->「移动后马上恢复原位」。*/
+    body.fullscreen {
+      min-height: 100vh;
       display: flex; align-items: center; justify-content: center;
     }
+    body.fullscreen #d {
+      width: auto;                 /* 覆盖内联 #d{width:100%}，收缩到 SVG 自然尺寸 */
+    }
     body.fullscreen #d svg {
-      width: auto; height: auto;
-      max-width: 100% !important; max-height: 100% !important;
+      width: auto !important;      /* 解除 max-width/height:100% 夹紧 + mermaid useMaxWidth 注入的满宽 */
+      height: auto !important;
+      max-width: none !important;
+      max-height: none !important;
+      display: block;
     }
   </style>
-  <script src="mermaid.min.js"></script>
+  <script src="recap-local://bundle/mermaid.min.js"></script>
 </head>
 <body>
   <div id="d"></div>

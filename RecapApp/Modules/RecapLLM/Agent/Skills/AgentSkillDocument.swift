@@ -79,6 +79,7 @@ public enum AgentSkillDocument {
         let scenario = parseScenario(meta["scenario"])
         let role = parseRole(meta["modelRole"])
         let maxSteps = parseMaxSteps(meta["maxSteps"])
+        let temperature = parseTemperature(meta["temperature"])
         var tools = parseTools(meta["allowedTools"])
         tools.subtract(forbiddenTools)
         if tools.isEmpty { tools = defaultAllowedTools }
@@ -94,7 +95,8 @@ public enum AgentSkillDocument {
             systemPrompt: body,
             allowedTools: tools,
             modelRole: role,
-            maxSteps: maxSteps
+            maxSteps: maxSteps,
+            temperature: temperature
         )
     }
 
@@ -107,6 +109,7 @@ public enum AgentSkillDocument {
             case .deep: return "deep"
             }
         }()
+        let tempLine = skill.temperature.map { "temperature: \($0)" } ?? ""
         return """
         ---
         id: \(skill.id)
@@ -118,6 +121,7 @@ public enum AgentSkillDocument {
         scenario: \(skill.scenario.rawValue)
         modelRole: \(role)
         maxSteps: \(skill.maxSteps)
+        \(tempLine)
         allowedTools: \(tools)
         ---
 
@@ -158,6 +162,12 @@ public enum AgentSkillDocument {
             return 3
         }
         return min(max(n, 1), 6)
+    }
+
+    /// 解析 temperature（缺省/非法返回 nil -> 由 AgentKernel 用默认 0.2）。
+    private static func parseTemperature(_ raw: String?) -> Double? {
+        guard let raw else { return nil }
+        return Double(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private static func parseTools(_ raw: String?) -> Set<String> {

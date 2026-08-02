@@ -4,9 +4,14 @@ import RecapModels
 import RecapLLM
 
 /// 纪要改写落库桥（UI 在 Diff 采纳后调用；工具本身不写库）。
-public final class ReviseMinutesBridge: @unchecked Sendable, ReviseMinutesCommitReading {
-    @MainActor public weak var meeting: Meeting?
-    @MainActor public var modelContext: ModelContext?
+///
+/// 隔离：整体 `@MainActor`。`commit`/`rollback`（UI 采纳 Diff 时调用）与 `consumeCommitMessage`
+/// （Agent 工具在内核 actor 上 `await` 调用）都经 MainActor 串行化，杜绝 `lastCommitMessage`
+/// 跨隔离域读写竞态。@MainActor 类隐式满足 `Sendable`，故不再需要 `@unchecked Sendable`。
+@MainActor
+public final class ReviseMinutesBridge: ReviseMinutesCommitReading {
+    public weak var meeting: Meeting?
+    public var modelContext: ModelContext?
     /// 最近一次采纳结果，供对话回填。
     public private(set) var lastCommitMessage: String?
 
@@ -22,7 +27,6 @@ public final class ReviseMinutesBridge: @unchecked Sendable, ReviseMinutesCommit
         lastCommitMessage = "已放弃修改"
     }
 
-    @MainActor
     @discardableResult
     public func commit(
         payload: MinutesRevisionPayload,
@@ -53,7 +57,6 @@ public final class ReviseMinutesBridge: @unchecked Sendable, ReviseMinutesCommit
         return (version, next)
     }
 
-    @MainActor
     @discardableResult
     public func rollback(to output: AIOutput) -> (version: Int, summary: MeetingSummary)? {
         guard let meeting, let modelContext,

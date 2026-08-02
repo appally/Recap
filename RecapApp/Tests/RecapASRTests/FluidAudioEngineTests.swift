@@ -10,9 +10,9 @@ import RecapModels
 final class FluidAudioEngineTests: XCTestCase {
 
     func testKindExposed() async {
-        let engine = FluidAudioEngine(kind: .fluidParaformer)
+        let engine = FluidAudioEngine(kind: .fluidSenseVoice)
         let kind = await engine.kind
-        XCTAssertEqual(kind, .fluidParaformer)
+        XCTAssertEqual(kind, .fluidSenseVoice)
     }
 
     func testTranscribeBeforePrepareThrows() async {

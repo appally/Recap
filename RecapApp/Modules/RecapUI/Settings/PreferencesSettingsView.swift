@@ -30,7 +30,7 @@ public struct PreferencesSettingsView: View {
             VStack(alignment: .leading, spacing: Spacing.xxl) {
                 SettingsSection(
                     title: "智能服务引擎",
-                    footnote: "大模型与语音转写均可自由选择：Recap 云端免配置，或导入自备 Key 与离线引擎。"
+                    footnote: "大模型与语音转写均可自由选择：官方云端免配置，或导入自备 Key 与离线引擎。"
                 ) {
                     NavigationLink {
                         LLMSettingsView()
@@ -74,8 +74,8 @@ public struct PreferencesSettingsView: View {
 
     private var llmValue: String {
         switch serviceMode {
-        case .recapCloud: return "Recap 云端"
-        case .freeTrial: return "Recap 免费"
+        case .recapCloud: return "官方云端"
+        case .freeTrial: return "免费档"
         case .byok: return llmTemplate.displayName
         }
     }

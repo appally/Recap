@@ -1,12 +1,18 @@
 import SwiftUI
+import SwiftData
 import StoreKit
 import RecapModels
 
 /// 会员页：以开通 Pro 为主路径；已开通则展示续费与管理。
 struct MembershipSettingsView: View {
     @Environment(MembershipStore.self) private var membership
+    @Environment(\.openURL) private var openURL
     @State private var showManageSubscriptions = false
     @State private var selectedProductID: String?
+    @State private var purchaseTab: PurchaseTab = .pro
+    @Query private var meetings: [Meeting]
+
+    private enum PurchaseTab { case pro, byok }
 
     var body: some View {
         @Bindable var store = membership
@@ -16,12 +22,10 @@ struct MembershipSettingsView: View {
                 if membership.isPro {
                     activeHero
                 } else {
-                    offerHero
-                    perkList
                     purchaseBlock
                 }
-                secondaryActions
-                legalNote
+                usageStatsSection
+                footerSection
                 SettingsInlineNotice(message: $store.lastMessage)
             }
             .padding(.horizontal, Spacing.xl)
@@ -48,27 +52,36 @@ struct MembershipSettingsView: View {
 
     // MARK: - Already Pro
 
+    /// 已开通 Pro 的订阅粒度标签：年度订阅 / 月度订阅 / 已开通。
+    private var activePlanLabel: String {
+        switch membership.activeProductID {
+        case MembershipProducts.proYearlyID: return "年度订阅"
+        case MembershipProducts.proMonthlyID: return "月度订阅"
+        default: return "已开通"
+        }
+    }
+
     private var activeHero: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Recap Pro")
-                    .font(.system(size: 28, weight: .bold, design: .default))
-                    .tracking(-0.5)
+                Text("纪要 Pro")
+                    .font(.recapHero)
+                    .tracking(Tracking.hero)
                     .foregroundStyle(Color.recapInk)
                 Spacer(minLength: Spacing.sm)
-                SettingsStatusPill(text: "已开通", kind: .ready)
+                SettingsStatusPill(text: activePlanLabel, kind: .ready)
             }
 
             if let date = membership.renewalDate {
                 Text("下次续费 \(date.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.recapBodyS.weight(.medium))
                     .foregroundStyle(Color.recapTea)
             }
 
-            Text("云端转写与强模型纪要已解锁；端侧与自备密钥仍可随时使用。")
-                .font(.system(size: 14))
+            Text("云端转写与智能纪要已解锁；端侧与自备密钥仍可随时使用。")
+                .font(.recapBodyS)
                 .foregroundStyle(Color.recapTea)
-                .lineSpacing(3)
+                .lineSpacing(Leading.tight)
         }
         .padding(Spacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -86,63 +99,174 @@ struct MembershipSettingsView: View {
 
     private var offerHero: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text("Recap Pro")
-                .font(.system(size: 32, weight: .bold, design: .default))
-                .tracking(-0.6)
+            Text("纪要 Pro")
+                .font(.recapHero)
+                .tracking(Tracking.hero)
                 .foregroundStyle(Color.recapInk)
 
-            Text("云端高保真转写与强模型纪要，免配 API Key。")
-                .font(.system(size: 16, weight: .regular))
+            Text("专注聆听，纪要交给云端")
+                .font(.recapBody)
                 .foregroundStyle(Color.recapTea)
-                .lineSpacing(3)
+                .lineSpacing(Leading.tight)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Spacing.sm)
     }
 
-    private var perkList: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(proPerks, id: \.self) { perk in
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.recapCeladon)
-                        .frame(width: 16, alignment: .center)
-                    Text(perk)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Color.recapInk)
-                }
-            }
+    private var byokOfferHero: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("自备密钥")
+                .font(.recapHero)
+                .tracking(Tracking.hero)
+                .foregroundStyle(Color.recapInk)
+
+            Text("已有模型 API Key？一次性解锁全部端侧增强，永久可用。")
+                .font(.recapBody)
+                .foregroundStyle(Color.recapTea)
+                .lineSpacing(Leading.tight)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .accessibilityElement(children: .combine)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Spacing.sm)
     }
 
-    private var proPerks: [String] {
-        ["云端高保真转写", "强模型纪要与待办", "说话人分离等增强"]
+    private struct PlanPerk: Identifiable {
+        let symbol: String
+        let title: String
+        let value: String
+        var id: String { symbol }
+    }
+
+    private var proPerks: [PlanPerk] {
+        [
+            .init(symbol: "waveform",                 title: "云端高保真转写", value: "会议原声，字字精准"),
+            .init(symbol: "doc.text.magnifyingglass", title: "智能纪要",       value: "会后即刻生成结构化纪要与待办"),
+            .init(symbol: "person.2.wave.2",          title: "智能说话人分离", value: "自动标注「谁说了什么」"),
+            .init(symbol: "key.slash",                title: "开箱即用",       value: "登录即享，无需自备模型密钥"),
+        ]
+    }
+
+    private var byokPerks: [PlanPerk] {
+        [
+            .init(symbol: "waveform.badge.checkmark", title: "端侧增强",   value: "本地 SenseVoice 转写"),
+            .init(symbol: "doc.text.magnifyingglass", title: "自带强模型", value: "用你的 API Key 生成纪要与待办"),
+            .init(symbol: "infinity",                title: "永久买断",   value: "一次付费，不再续费"),
+            .init(symbol: "lock.shield",             title: "密钥自主",   value: "Key 仅存本机，不上传"),
+        ]
+    }
+
+    private func perkList(_ perks: [PlanPerk]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(perks) { perk in
+                HStack(alignment: .center, spacing: 12) {
+                    Image(systemName: perk.symbol)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.recapInk)
+                        .frame(width: 22, alignment: .center)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(perk.title)
+                            .font(.recapHeading)
+                            .foregroundStyle(Color.recapInk)
+                        Text(perk.value)
+                            .font(.recapMeta)
+                            .foregroundStyle(Color.recapTea)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     // MARK: - Purchase
 
     @ViewBuilder
     private var purchaseBlock: some View {
-        VStack(alignment: .leading, spacing: Spacing.lg) {
+        VStack(alignment: .leading, spacing: Spacing.xl) {
             if membership.isLoading && membership.products.isEmpty {
                 loadingCard
             } else if membership.products.isEmpty {
                 emptyProductsCard
             } else {
-                VStack(spacing: Spacing.sm) {
-                    ForEach(membership.products, id: \.id) { product in
-                        planRow(product)
-                    }
-                }
-                .animation(.recapValueSwap, value: membership.products.count)
+                SettingsSegmentedControl(
+                    options: [(PurchaseTab.pro, "Pro 订阅"), (PurchaseTab.byok, "自备密钥")],
+                    selection: $purchaseTab
+                )
 
-                primaryCTA
+                switch purchaseTab {
+                case .pro:
+                    proOfferContent
+                case .byok:
+                    byokOfferContent
+                }
             }
         }
         .animation(.recapValueSwap, value: membership.isLoading)
+        .animation(.recapValueSwap, value: purchaseTab)
+    }
+
+    private var proOfferContent: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            offerHero
+            perkList(proPerks)
+            VStack(spacing: Spacing.sm) {
+                ForEach(proPlanProducts, id: \.id) { product in
+                    planRow(product)
+                }
+            }
+            .animation(.recapValueSwap, value: membership.products.count)
+            primaryCTA
+        }
+    }
+
+    private var byokOfferContent: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            byokOfferHero
+            perkList(byokPerks)
+            byokCTA
+        }
+    }
+
+    private var byokCTA: some View {
+        let inFlight = membership.purchaseInFlight
+        return Group {
+            if let byok = membership.byokUnlockProduct {
+                Button {
+                    Haptics.impact(.medium)
+                    Task { await membership.purchase(byok) }
+                } label: {
+                    Text("解锁 · \(byok.displayPrice)")
+                        .font(.recapTitleS)
+                        .foregroundStyle(.white)
+                        .opacity(inFlight ? 0 : 1)
+                        .blur(radius: inFlight ? 3 : 0)
+                        .frame(maxWidth: .infinity, minHeight: 22)
+                        .padding(.vertical, 16)
+                        .overlay {
+                            if inFlight {
+                                ProgressView()
+                                    .tint(.white)
+                            }
+                        }
+                        .background(Color.recapInk, in: Capsule())
+                }
+                .buttonStyle(SettingsPressStyle())
+                .disabled(inFlight)
+                .animation(.recapValueSwap, value: inFlight)
+            } else {
+                Text("自备密钥商品暂不可用，请稍后重试。")
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Spacing.lg)
+            }
+        }
+    }
+
+    /// Pro 订阅两档（年度在前，让推荐项处于首位）；BYOK 不在此列。
+    private var proPlanProducts: [Product] {
+        [membership.yearlyProduct, membership.monthlyProduct].compactMap { $0 }
     }
 
     private var loadingCard: some View {
@@ -150,7 +274,7 @@ struct MembershipSettingsView: View {
             ProgressView()
                 .tint(Color.recapTea)
             Text("正在读取订阅…")
-                .font(.system(size: 13))
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
         }
         .frame(maxWidth: .infinity)
@@ -162,10 +286,10 @@ struct MembershipSettingsView: View {
     private var emptyProductsCard: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             Text("暂时拉不到订阅商品")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.recapHeading)
                 .foregroundStyle(Color.recapInk)
             Text("请检查网络或 StoreKit 配置后重试。")
-                .font(.system(size: 13))
+                .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
 
             Button {
@@ -173,11 +297,11 @@ struct MembershipSettingsView: View {
                 Task { await membership.loadProducts() }
             } label: {
                 Text("重新加载")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.recapTitleS)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .background(Color.recapCeladon, in: Capsule())
+                    .background(Color.recapInk, in: Capsule())
             }
             .buttonStyle(SettingsPressStyle())
         }
@@ -196,35 +320,34 @@ struct MembershipSettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: Spacing.sm) {
                         Text(planTitle(product))
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.recapTitleS)
                             .foregroundStyle(Color.recapInk)
                         if isYearly {
                             Text("推荐")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.recapCeladon)
+                                .font(.recapCaption)
+                                .foregroundStyle(Color.recapInk)
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 2)
-                                .background(Color.recapCeladon.opacity(0.14), in: Capsule())
+                                .background(Color.recapInk.opacity(0.14), in: Capsule())
+                                .accessibilityLabel("推荐方案")
                         }
                     }
 
-                    if let detail = planDetail(product) {
-                        Text(detail)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.recapTea)
-                    }
+                    planDetailContent(product)
+                        .font(.recapMeta.weight(.medium))
+                        .foregroundStyle(Color.recapTea)
                 }
 
                 Spacer(minLength: 0)
 
                 Text(product.displayPrice + periodSuffix(product))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.recapHeading)
                     .foregroundStyle(selected ? Color.recapInk : Color.recapTea)
                     .monospacedDigit()
 
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                Image(systemName: selected ? "checkmark.circle" : "circle")
                     .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(selected ? Color.recapCeladon : Color.recapTea.opacity(0.35))
+                    .foregroundStyle(selected ? Color.recapInk : Color.recapTea.opacity(0.35))
             }
             .padding(.horizontal, Spacing.lg)
             .padding(.vertical, 16)
@@ -236,7 +359,7 @@ struct MembershipSettingsView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .strokeBorder(
-                        selected ? Color.recapCeladon.opacity(0.55) : SettingsMetrics.hairline,
+                        selected ? Color.recapInk.opacity(0.55) : SettingsMetrics.hairline,
                         lineWidth: selected ? 1.5 : 1
                     )
             )
@@ -251,7 +374,7 @@ struct MembershipSettingsView: View {
     private var primaryCTA: some View {
         let inFlight = membership.purchaseInFlight
         let product = selectedProduct
-        let label = product.map { "开通 · \($0.displayPrice)\(periodSuffix($0))" } ?? "开通 Pro"
+        let label = product.map { "解锁 Pro · \($0.displayPrice)\(periodSuffix($0))" } ?? "解锁 Pro"
 
         return Button {
             guard let product else { return }
@@ -259,7 +382,7 @@ struct MembershipSettingsView: View {
             Task { await membership.purchase(product) }
         } label: {
             Text(label)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.recapTitleS)
                 .foregroundStyle(.white)
                 .opacity(inFlight ? 0 : 1)
                 .blur(radius: inFlight ? 3 : 0)
@@ -271,7 +394,7 @@ struct MembershipSettingsView: View {
                             .tint(.white)
                     }
                 }
-                .background(Color.recapCeladon, in: Capsule())
+                .background(Color.recapInk, in: Capsule())
         }
         .buttonStyle(SettingsPressStyle())
         .disabled(product == nil || inFlight)
@@ -280,55 +403,98 @@ struct MembershipSettingsView: View {
         .animation(.recapValueSwap, value: product?.id)
     }
 
-    // MARK: - Secondary
+    // MARK: - Footer
 
-    private var secondaryActions: some View {
-        HStack(spacing: Spacing.lg) {
-            Button {
-                Task { await membership.restore() }
-            } label: {
-                Text(membership.isLoading ? "恢复中…" : "恢复购买")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.recapTea)
+    private var footerSection: some View {
+        VStack(spacing: Spacing.lg) {
+            HStack(spacing: Spacing.md) {
+                Button {
+                    Task { await membership.restore() }
+                } label: {
+                    Text(membership.isLoading ? "恢复中…" : "恢复购买")
+                        .font(.recapBodyS.weight(.medium))
+                        .foregroundStyle(Color.recapTea)
+                }
+                .buttonStyle(SettingsPressStyle())
+                .disabled(membership.isLoading)
+
+                Text("·")
+                    .font(.recapBodyS.weight(.medium))
+                    .foregroundStyle(Color.recapTea.opacity(0.4))
+
+                Button {
+                    showManageSubscriptions = true
+                } label: {
+                    Text("管理订阅")
+                        .font(.recapBodyS.weight(.medium))
+                        .foregroundStyle(Color.recapTea)
+                }
+                .buttonStyle(SettingsPressStyle())
             }
-            .buttonStyle(SettingsPressStyle())
-            .disabled(membership.isLoading)
+            .frame(maxWidth: .infinity)
 
-            Text("·")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.recapTea.opacity(0.45))
+            VStack(spacing: Spacing.sm) {
+                Text("订阅经 Apple 账户扣款，可随时在系统「订阅」中取消。")
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(Leading.tight)
 
-            Button {
-                showManageSubscriptions = true
-            } label: {
-                Text("管理订阅")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.recapTea)
+                HStack(spacing: Spacing.md) {
+                    legalLink("用户协议", url: "https://recap.manymind.chat/terms")
+                    legalDot
+                    legalLink("隐私政策", url: "https://recap.manymind.chat/privacy")
+                    legalDot
+                    legalLink("支持", url: "https://recap.manymind.chat/support")
+                }
             }
-            .buttonStyle(SettingsPressStyle())
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity)
         }
         .padding(.top, Spacing.xs)
     }
 
-    private var legalNote: some View {
-        Text("订阅经 Apple 账户扣款，可随时在系统「订阅」中取消。购买即表示同意用户协议与隐私政策。")
-            .font(.system(size: 12))
-            .foregroundStyle(Color.recapTea.opacity(0.85))
-            .lineSpacing(2)
+    private var legalDot: some View {
+        Text("·")
+            .font(.recapMeta.weight(.medium))
+            .foregroundStyle(Color.recapTea.opacity(0.4))
+    }
+
+    private func legalLink(_ title: String, url: String) -> some View {
+        Button {
+            if let u = URL(string: url) { openURL(u) }
+        } label: {
+            Text(title)
+                .font(.recapMeta.weight(.medium))
+                .foregroundStyle(Color.recapOchre)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Usage Stats
+
+    /// 用量看板：近一年活动热力与核心度量。用量与计划同页，免去独立入口。
+    private var usageStatsSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            Text("使用数据与统计")
+                .font(.recapEyebrow)
+                .tracking(Tracking.eyebrow)
+                .foregroundStyle(Color.recapTea)
+                .padding(.horizontal, 4)
+
+            UsageStatsBoard(meetings: meetings)
+        }
     }
 
     // MARK: - Selection helpers
 
     private var selectedProduct: Product? {
         if let id = selectedProductID,
-           let match = membership.products.first(where: { $0.id == id }) {
+           let match = membership.products.first(where: { $0.id == id }),
+           MembershipProducts.isProProduct(match.id) {
             return match
         }
         return membership.yearlyProduct
             ?? membership.monthlyProduct
-            ?? membership.products.first
     }
 
     private func preferYearlyIfNeeded() {
@@ -348,18 +514,34 @@ struct MembershipSettingsView: View {
         }
     }
 
-    private func planDetail(_ product: Product) -> String? {
+    @ViewBuilder
+    private func planDetailContent(_ product: Product) -> some View {
         switch product.id {
         case MembershipProducts.proYearlyID:
-            if let equivalent = monthlyEquivalent(product) {
-                return "约 \(equivalent) / 月"
+            if let equivalent = monthlyEquivalent(product), let pct = yearlySavingsPercent() {
+                HStack(spacing: 6) {
+                    Text("约 \(equivalent) / 月")
+                    Text("年省 \(pct)%")
+                        .foregroundStyle(Color.recapCinnabar)
+                }
+            } else {
+                Text("年付更省")
             }
-            return "年付更省"
         case MembershipProducts.proMonthlyID:
-            return "按月灵活"
+            Text("按月灵活")
         default:
-            return nil
+            EmptyView()
         }
+    }
+
+    /// 年度相对月付的省费百分比；需同时持有两档，否则返回 nil（UI 退化为「年付更省」）。
+    private func yearlySavingsPercent() -> Int? {
+        guard let m = membership.monthlyProduct,
+              let y = membership.yearlyProduct, m.price > 0 else { return nil }
+        let monthlyAnnual = y.price / 12
+        let ratio = 1 - monthlyAnnual / m.price
+        let pct = NSDecimalNumber(decimal: ratio).doubleValue * 100
+        return Int(max(0, pct).rounded())
     }
 
     private func monthlyEquivalent(_ product: Product) -> String? {

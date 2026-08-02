@@ -35,10 +35,7 @@ public extension Color {
     /// 投影专用色。通透自然的软阴影，避免脏发灰。
     static let recapShadow = Color(light: 0x000000, lightAlpha: 0.04, dark: 0x000000, darkAlpha: 0.28)
 
-    /// 中性强调色（原青瓷品牌色已退役）。全 App 走黑白灰中性体系：
-    /// 强调靠 recapInk 的深浅 + 字重层次，不靠彩色。此 token 保留命名以免改 133 处引用，
-    /// 但语义已等价于 recapInk（墨黑）。朱砂/赭石仅作不可替代的功能语义保留。
-    static let recapCeladon = Color(light: 0x111614, dark: 0xF0F2EE)
+    // 原青瓷品牌色已退役并迁移至 recapInk（91 处引用已机械 rename）。朱砂/赭石仅作功能语义保留。
     static let recapCinnabar = Color(light: 0xC8463C, dark: 0xE15A4E)
     static let recapOchre = Color(light: 0xA87842, dark: 0xC99659)
 
@@ -77,40 +74,78 @@ public extension Color {
 }
 
 public extension Font {
-    /// Plaud 杂志风格大标题（全部文件 ∨ 等）
-    static let recapHeroTitle = Font.system(size: 32, weight: .bold, design: .default)
-        .leading(.tight)
-    /// 首页品牌英雄字。
-    static let recapHomeBrand = Font.system(size: 32, weight: .bold, design: .default)
-    /// 眉题 / 小徽记。
-    static let recapBrand = Font.system(size: 13, weight: .semibold, design: .rounded)
-    /// 首页日期英雄字。
-    static let recapDisplay = Font.system(size: 34, weight: .semibold, design: .default)
-        .leading(.tight)
-    static let recapLargeTitle = Font.system(size: 28, weight: .bold, design: .default)
-        .leading(.tight)
-    /// 正文小节标题：18pt 粗体，排版清晰紧凑。
-    static let recapH1 = Font.system(size: 18, weight: .bold, design: .default)
-        .leading(.tight)
+    // MARK: - 字体系统（13 语义 token）
+    // 病根：旧 16 token 仅 13% 采用，368 处 ad-hoc 散落 22 种点数。
+    // 新系统按「语义角色」收敛，每档不可替代；tracking/lineSpacing 走 Tracking/Leading 枚举。
 
-    /// 润色行（有别于原话时）：16pt semibold，适中加重。
-    static let recapPolished = Font.system(size: 16, weight: .semibold, design: .default)
-    /// LIVE / 单行字幕：16pt medium，适合长文顺畅阅读。
-    static let recapTranscript = Font.system(size: 16, weight: .medium, design: .default)
-    /// 核心摘要：16.5pt medium，优雅专业。
-    static let recapTldr = Font.system(size: 16.5, weight: .medium, design: .default)
-    static let recapRaw = Font.system(size: 15, weight: .regular, design: .default)
+    // a11y 合规：Font.system(size:) 本身不随 Dynamic Type 缩放；固定点数经 UIFontMetrics 按当前
+    // preferredContentSizeCategory 换算。token 用 computed，视图在 Dynamic Type 变化时重渲染即取最新值。
+    // 阶梯/语义角色不变（仅加缩放）；368 处 ad-hoc Font.system 调用未迁移、暂不缩放，后续 typography 重构再迁。
+    private static func scaledFont(
+        _ size: CGFloat,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> Font {
+        .system(size: UIFontMetrics.default.scaledValue(for: size), weight: weight, design: design)
+    }
 
-    static let recapTask = Font.system(size: 15, weight: .medium, design: .default)
-    static let recapTaskLow = Font.system(size: 15, weight: .regular, design: .default)
+    // 展示层
+    /// 罕用大展示（保留位）。
+    static var recapDisplay: Font { scaledFont(34, weight: .semibold).leading(.tight) }
+    /// 英雄字：首页「纪要」、空态标题、设置页英雄。28 semibold，克制现代。
+    static var recapHero: Font { scaledFont(28, weight: .semibold).leading(.tight) }
 
-    static let recapSection = Font.system(size: 12, weight: .semibold, design: .default)
-    static let recapMeta = Font.system(size: 13, weight: .regular, design: .default)
-    /// 极简内联元数据（19:43 | 16分钟）
-    static let recapSubMeta = Font.system(size: 13, weight: .regular, design: .default)
+    // 标题层
+    /// 文档标题：笔记自身标题，需存在感。22 semibold。
+    static var recapTitle: Font { scaledFont(22, weight: .semibold).leading(.tight) }
+    /// 卡片/栏标题：会议卡标题、滚动态顶栏、Sheet 标题。17 semibold。
+    static var recapTitleS: Font { scaledFont(17, weight: .semibold) }
+    /// 内联小标题：议题标题、区段内联标题、行强调。15 semibold。
+    static var recapHeading: Font { scaledFont(15, weight: .semibold) }
 
-    static let recapTimestamp = Font.system(size: 12, weight: .regular, design: .monospaced)
-        .monospacedDigit()
+    // 眉标
+    /// 段首眉标（今天/昨天/区段名）：12 semibold，配 Tracking.eyebrow 正字距（小帽字感）。
+    static var recapEyebrow: Font { scaledFont(12, weight: .semibold) }
+
+    // 正文层
+    /// 阅读正文：转写、纪要摘要、Markdown 正文。16 regular。
+    static var recapBody: Font { scaledFont(16) }
+    /// 次正文：项目符号、议程、用户气泡、卡片预览。15 regular。
+    static var recapBodyS: Font { scaledFont(15) }
+    /// 润色行（有别于原话时）：16 semibold（与 recapBody 同尺寸，仅字重升级）。
+    static var recapPolished: Font { scaledFont(16, weight: .semibold) }
+    /// LIVE/原话行：16 medium。
+    static var recapTranscript: Font { scaledFont(16, weight: .medium) }
+
+    // 元信息层
+    /// 元信息：日期·时长文本、说话人名、说明文。13 regular。
+    static var recapMeta: Font { scaledFont(13) }
+    /// 数字等宽：时间戳、时长、计数、行内代码。13 regular mono + tabular。
+    static var recapMono: Font { scaledFont(13, design: .monospaced).monospacedDigit() }
+    /// 徽标：状态胶囊、计数徽标。11 semibold。
+    static var recapCaption: Font { scaledFont(11, weight: .semibold) }
+}
+
+// MARK: - 字距 / 行距枚举（取代散落的魔法数）
+
+/// 字距按「角色」派生：大字越紧（负距），眉标正距（小帽字）。仅用于替换已存在的魔法数，不新增。
+public enum Tracking {
+    public static let display: CGFloat = -0.6
+    public static let hero: CGFloat = -0.5
+    public static let title: CGFloat = -0.3
+    public static let titleS: CGFloat = -0.2
+    public static let heading: CGFloat = -0.15
+    public static let body: CGFloat = -0.1
+    public static let eyebrow: CGFloat = 1.4   // 眉标 / 小帽字正距
+    public static let caption: CGFloat = 0.2
+    public static let none: CGFloat = 0
+}
+
+/// 行距按「角色」派生：标题紧凑、正文 ~1.45x、TL;DR 高管摘要留白。
+public enum Leading {
+    public static let tight: CGFloat = 2       // 标题 / 单行
+    public static let body: CGFloat = 5        // 16pt 阅读正文 ≈1.45x
+    public static let relaxed: CGFloat = 6.5   // 仅 TL;DR 高管摘要留白
 }
 
 public enum Spacing {
@@ -246,6 +281,8 @@ public extension Animation {
     static let recapValueSwap = Animation.easeOut(duration: 0.20)
     /// 行内状态提示出入场。
     static let recapNotice = Animation.easeOut(duration: 0.18)
+    /// LIVE 暂停/恢复统一切换时长：声波、状态点、状态文字共用，三态同步起止。
+    static let recapPausePhase = Animation.easeInOut(duration: 0.4)
 }
 
 /// 全 App 统一按压：scale 0.98 + 100ms ease-out。
@@ -256,6 +293,18 @@ public struct RecapPressStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.94 : 1)
+            .animation(.recapPress, value: configuration.isPressed)
+    }
+}
+
+/// Tab 标签按压：仅压暗（opacity 0.6），不做 scale——避免与 matchedGeometry 下划线指示器互相挤压；
+/// 100ms easeOut 即时回执。用于顶栏 Tab（reviewTabButton / noteTabButton / reviewNewNoteButton）。
+public struct RecapTabPressStyle: ButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.6 : 1)
             .animation(.recapPress, value: configuration.isPressed)
     }
 }

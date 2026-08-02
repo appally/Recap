@@ -17,10 +17,12 @@ actor BenchRunner {
         var firstLat: Double?
         var chunks = 0
         var errMsg: String?
+        var speakerCount: Int?
+        var segCount: Int?
         let kind = engine.kind
         let started = Date()
 
-        // 周期采样内存（200ms），与 transcribe 并发；转写结束后 cancel。
+        // 周期采样内存（200ms），与推理并发；结束后 cancel。
         let monitorRef = monitor
         let sampler = Task {
             while !Task.isCancelled {
@@ -31,13 +33,20 @@ actor BenchRunner {
 
         do {
             try await engine.prepare()
-            let result = try await engine.transcribe(
-                samples: audio.samples,
-                sampleRate: audio.sampleRate,
-                onPartial: onPartial)
-            transcript = result.text
-            firstLat = result.firstTokenLatencyMs
-            chunks = result.chunkCount
+            if let de = engine as? any DiarizerBench {
+                // 分离引擎：跑 diarize，产出说话人数 / 段数（无文本，不算 CER）。
+                let res = try await de.diarize(samples: audio.samples, sampleRate: audio.sampleRate)
+                speakerCount = res.speakerCount
+                segCount = res.segments.count
+            } else {
+                let result = try await engine.transcribe(
+                    samples: audio.samples,
+                    sampleRate: audio.sampleRate,
+                    onPartial: onPartial)
+                transcript = result.text
+                firstLat = result.firstTokenLatencyMs
+                chunks = result.chunkCount
+            }
         } catch {
             errMsg = error.localizedDescription
         }
@@ -47,9 +56,10 @@ actor BenchRunner {
 
         let elapsed = Date().timeIntervalSince(started)
         let (peakMem, peakThermal, batDelta) = await monitor.stop()
-        let cer = reference.map {
-            CERScorer.score(hypothesis: transcript, reference: $0).cer
-        }
+        // CER 仅对 ASR（有 transcript）且提供参考文本时算；分离引擎 transcript 为空 → nil。
+        let cer: Double? = (reference != nil && !transcript.isEmpty)
+            ? CERScorer.score(hypothesis: transcript, reference: reference!).cer
+            : nil
 
         return BenchRecord(
             engine: kind,
@@ -64,6 +74,8 @@ actor BenchRunner {
             firstTokenLatencyMs: firstLat,
             chunkCount: chunks,
             error: errMsg,
-            timestamp: Date())
+            timestamp: Date(),
+            speakerCount: speakerCount,
+            segmentCount: segCount)
     }
 }

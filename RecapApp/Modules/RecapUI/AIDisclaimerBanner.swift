@@ -17,14 +17,14 @@ public struct AIDisclaimerBanner: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(message)
-                .font(.system(size: 12, weight: .medium))
+                .font(.recapMeta.weight(.medium))
                 .foregroundStyle(Color.recapOchre)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Spacing.sm)
                 .background(Color.recapOchre.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
             if let severeWarning {
                 Text(severeWarning)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.recapCaption)
                     .foregroundStyle(Color.recapCinnabar)
             }
         }

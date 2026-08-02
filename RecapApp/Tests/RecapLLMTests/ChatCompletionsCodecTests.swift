@@ -260,6 +260,53 @@ final class ChatCompletionsCodecTests: XCTestCase {
         XCTAssertEqual(frag.toolCallDeltas[0].id, "c1")
         XCTAssertEqual(frag.toolCallDeltas[0].name, "get_time")
     }
+
+    // Qwen/百炼流式会发无 choices 的控制帧，必须忽略而非致命。
+    func testDecodeDeltaIgnoresEmptyChoicesUsageFrame() throws {
+        let json = """
+        {"id":"c1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+        """.data(using: .utf8)!
+        let frag = try ChatCompletionsCodec.decodeDelta(json)
+        XCTAssertNil(frag.content)
+        XCTAssertNil(frag.reasoningContent)
+        XCTAssertTrue(frag.toolCallDeltas.isEmpty)
+        XCTAssertNil(frag.finishReason)
+    }
+
+    func testDecodeDeltaIgnoresMissingChoicesKeepaliveFrame() throws {
+        let json = """
+        {"id":"c1","object":"chat.completion.chunk","created":0,"model":"qwen3"}
+        """.data(using: .utf8)!
+        let frag = try ChatCompletionsCodec.decodeDelta(json)
+        XCTAssertNil(frag.content)
+        XCTAssertTrue(frag.toolCallDeltas.isEmpty)
+    }
+
+    func testDecodeDeltaExtractsOpenAIStyleErrorFrame() {
+        let json = """
+        {"error":{"message":"内容不合规","type":"invalid_request_error"}}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try ChatCompletionsCodec.decodeDelta(json)) { err in
+            guard case AgentTransportError.malformedStream(let msg) = err else {
+                return XCTFail("期望 malformedStream，得到 \(err)")
+            }
+            XCTAssertTrue(msg.contains("上游错误"))
+            XCTAssertTrue(msg.contains("内容不合规"))
+        }
+    }
+
+    func testDecodeDeltaExtractsDashscopeStyleErrorFrame() {
+        let json = """
+        {"code":"InvalidParameter","message":"模型不可用","request_id":"r1"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try ChatCompletionsCodec.decodeDelta(json)) { err in
+            guard case AgentTransportError.malformedStream(let msg) = err else {
+                return XCTFail("期望 malformedStream，得到 \(err)")
+            }
+            XCTAssertTrue(msg.contains("InvalidParameter"))
+            XCTAssertTrue(msg.contains("模型不可用"))
+        }
+    }
 }
 
 final class OpenAICompatibleProviderBaseURLTests: XCTestCase {
