@@ -38,15 +38,15 @@ public enum LLMProviderFactory {
                 summaryModel: cred.llmModel ?? userPicked ?? template.summaryModel
             )
         case .freeTrial:
-            // 免费档:网关签发的阿里 token(Flash 模型,服务端按次计量);无 ASR token,转写走端侧。
+            // 免费档:网关签发的阿里 token(服务端按次计量);无 ASR token,转写走端侧。
+            // 模型名以网关下发的 cred.llmModel 为准(与 Pro/Ask 路径同一来源),不再客户端自定。
             let cred = try RecapCredentialProvider.shared.current()
-            let flash = LLMPresets.cloudFlashModel
             return OpenAICompatibleProvider(
                 id: "recap-free",
                 apiKey: cred.token,
                 baseURL: cred.llmBase,
-                defaultModel: cred.llmModel ?? flash,
-                summaryModel: cred.llmModel ?? flash
+                defaultModel: cred.llmModel,
+                summaryModel: cred.llmModel
             )
         case .byok:
             return try makeSelectedBYOK()

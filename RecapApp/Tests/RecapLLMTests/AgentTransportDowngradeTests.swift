@@ -6,7 +6,7 @@ final class AgentTransportDowngradeTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        // modelName 在 freeTrial 下短路返回 cloudFlashModel；model-name 测试要验非 freeTrial 路径
+        // modelName 在云端档(非 byok)下走 cred.llmModel；model-name 测试要验 byok 路径
         // （厂商分档 / 模板默认回落），故显式切 byok 并清 selectedModel。
         AIServiceMode.current = .byok
         LLMSelection.selectedModel = nil

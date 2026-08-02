@@ -42,7 +42,7 @@ public enum AgentTransportFactory {
                 toolsSupported: true
             )
         case .freeTrial:
-            // 免费档:网关签发的阿里 token(Flash);模型名由 modelName() 返 cloudFlashModel。
+            // 免费档:网关签发的阿里 token;模型名由 modelName() 返 cred.llmModel(网关下发)。
             let cred = try RecapCredentialProvider.shared.current()
             return OpenAIToolTransport(
                 id: "recap-free",
@@ -81,8 +81,12 @@ public enum AgentTransportFactory {
     }
 
     /// 按模板与角色解析模型名（不硬编码 DeepSeek）。
+    /// 云端档(Pro/免费)统一以网关下发的 cred.llmModel 为准——与 Minutes 路径同一来源,
+    /// 改网关 LLM_MODEL 一处即控制全部;凭证未就绪(冷启动/续签空窗)回落 cloudDefaultModel。
     public static func modelName(for template: LLMProviderTemplate, role: AgentModelRole) -> String {
-        if AIServiceMode.current == .freeTrial { return LLMPresets.cloudFlashModel }
+        if AIServiceMode.current != .byok {
+            return (try? RecapCredentialProvider.shared.current())?.llmModel ?? LLMPresets.cloudDefaultModel
+        }
         if template == .deepseek {
             switch role {
             case .quick: return LLMPresets.deepSeekFlash

@@ -14,7 +14,7 @@ public struct RecapIssuedCredential: Sendable, Equatable {
     public let remainingSeconds: Int?
     /// 服务端统一下发的 ASR 模型(默认 fun-asr-realtime)。FunASREngine 用此替代硬编码常量。
     public let asrModel: String
-    /// 服务端统一下发的 LLM 模型(默认 qwen-plus)。LLMProviderFactory 用此替代模板硬编码。
+    /// 服务端统一下发的 LLM 模型(网关 LLM_MODEL,现 qwen-plus);缺省回落 LLMPresets.cloudDefaultModel。
     public let llmModel: String
 }
 
@@ -227,7 +227,7 @@ public final class RecapCredentialProvider: @unchecked Sendable {
             llmBase: decoded.llm_base,
             remainingSeconds: decoded.remaining_seconds,
             asrModel: decoded.asr_model ?? ASRPresets.funRealtimeModel,
-            llmModel: decoded.llm_model ?? "qwen-plus",
+            llmModel: decoded.llm_model ?? LLMPresets.cloudDefaultModel,
             expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in))
         )
     }
