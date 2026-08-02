@@ -15,3 +15,9 @@ xcuserdata/
 
 # Swift Package Manager & CocoaPods
 .swiftpm/
+Pods/
+
+# Compiled binaries / object files (build artifacts)
+*.a
+*.o
+*.dylib
