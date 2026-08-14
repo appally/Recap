@@ -14,6 +14,8 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
     public var endSeconds: Double?
     /// 端侧 ASR 置信度（方言检测信号），从 TranscriptSegment 透传；云端/旧数据为 nil。
     public var confidence: Double?
+    /// 该段期间有第二说话人显著重叠（plan 047 Wave C）；nil/nil-safe。
+    public var isOverlapped: Bool?
 
     public init(id: String = UUID().uuidString,
                 speaker: Speaker,
@@ -23,7 +25,8 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
                 isFinal: Bool,
                 startSeconds: Double? = nil,
                 endSeconds: Double? = nil,
-                confidence: Double? = nil) {
+                confidence: Double? = nil,
+                isOverlapped: Bool? = nil) {
         self.id = id
         self.speaker = speaker
         self.timestamp = timestamp
@@ -33,6 +36,7 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
         self.startSeconds = startSeconds
         self.endSeconds = endSeconds
         self.confidence = confidence
+        self.isOverlapped = isOverlapped
     }
 
     public init(segment: TranscriptSegment, speakers: [Speaker], isFinal: Bool = true) {
@@ -60,7 +64,8 @@ public struct TranscriptBlock: Identifiable, Hashable, Sendable {
             isFinal: isFinal,
             startSeconds: segment.startSeconds,
             endSeconds: segment.endSeconds,
-            confidence: segment.confidence
+            confidence: segment.confidence,
+            isOverlapped: segment.isOverlapped
         )
     }
 }

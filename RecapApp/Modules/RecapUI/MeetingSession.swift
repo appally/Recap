@@ -61,7 +61,8 @@ public final class MeetingSession: ObservableObject {
     @Published public var statusMessage: String = ""
     @Published public var isUsingMockAudio = false
     /// LIVE 真实麦克风收音音量振幅 (0.0 ~ 1.0)。
-    @Published public var liveAudioPower: Float = 0.0
+    /// LIVE 收音频段（低/中/高 + 整体电平，0.0~1.0），驱动顶栏声波频谱分层。
+    @Published public var liveAudioBands: AudioBands = .zero
     /// LIVE 引擎启动失败；供 UI 显示重试 / DEBUG 演示入口。
     @Published public var liveStartFailed = false
     /// LIVE 已暂停（停麦、停表，仍为 phase=.live；可继续 / 完成 / 删除）。
@@ -116,12 +117,14 @@ public final class MeetingSession: ObservableObject {
     /// 当前 LIVE 解析出的转写引擎；仅 LIVE 中有意义，未开麦为 nil（方言判定用）。
     public var liveEngineKind: AsrEngineKind? { recording?.engineKind }
 
-    /// 是否已开过麦（有时长/字幕）；用于区分启动台与暂停决策台。
+    /// 是否已开过麦并录到实质内容（有时长/字幕）；用于区分启动台与暂停决策台，
+    /// 也用于离场/冷启动的空壳清理判定。≥3s 或任意字幕才算「录过」——
+    /// 开麦 1-2 秒即走的空壳（duration=1、无字幕）不应留下草稿会议。
     public var hasStartedRecording: Bool {
-        meeting.durationSeconds >= 1
+        meeting.durationSeconds >= 3
             || !meeting.segments.isEmpty
             || !blocks.isEmpty
-            || elapsed > 0
+            || elapsed >= 3
     }
 
     /// REVIEW 态任一会后计算在飞（重转 / 分离 / 润色）。供菜单禁用镜像守卫条件。
@@ -243,8 +246,58 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
+    /// 导入音频的首转编排（结构照抄 `regenerateWithRetranscribe`，差异仅一处：允许 blocks 为空——
+    /// 导入会议在首次转写前没有任何字幕）。
+    /// 串行：云端重转（此处即首转）→ 幂等补润色 → 纪要管线；重转/润色失败则回 REVIEW，
+    /// 不双扣 LLM 额度。diarize 不阻塞纪要；管线提交后由 commitAISummary 自动 schedule。
+    public func processImportedAudio(
+        clearDraftTodos: @escaping () -> Void,
+        persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+        persistSummary: @escaping (MeetingSummary, String) -> Void
+    ) {
+        guard meeting.audioSource == .imported,
+              meeting.audioPath != nil,
+              blocks.isEmpty,
+              !isRetranscribing, !isDiarizing, !isPolishing else { return }
+        revealTask?.cancel()
+        self.endMinutesBackgroundTask()
+        clearDraftTodos()
+        summary = MeetingSummary(tldr: "", decisions: [], openQuestions: [])
+        todoCount = 0
+        revealStep = 0
+        statusMessage = "转写导入的音频…"
+        meeting.phase = .processing
+        withAnimation(.recapSheet) { phase = .processing }
+
+        // 同步置位防重入（045 B8 的教训）：堵住「Task 尚未起跑、flag 仍 false」的竞态窗口。
+        isRetranscribing = true
+        retranscribeTask = Task { [weak self] in
+            guard let self else { return }
+            // ① 首转 = 云端重转（不联动下游，编排方接管）
+            let ok = await self.performRetranscribe(intent: .cloudFirst, chainPostProcess: false)
+            if Task.isCancelled { return }
+            guard ok, !self.blocks.isEmpty else {
+                self.statusMessage = "转写失败，可稍后在会议页手动重试"
+                self.finishReviewWithoutMock()
+                return
+            }
+            // ② 幂等补润色：确保纪要管线吃到干净文本（同 regenerateWithRetranscribe ②）
+            if self.meeting.polishedSegmentsData == nil {
+                self.isPolishing = true
+                await self.performPolish()
+            }
+            if Task.isCancelled { return }
+            // ③ 纪要管线（内部含 LLM 闸门；blocks 此时已带 polished）
+            self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+        }
+    }
+
     /// 重新打开卡在 processing 的会议：有纪要则收尾进 review，否则继续跑管线。
+    /// - Parameter clearDraftTodos: 重跑管线前清空本场 draft 待办——管线可能在
+    ///   `persistTodos` 落库后、`commitAISummary` 前被杀/失败，DB 留有 draft 待办但无纪要；
+    ///   不清理则重跑会插入第二批相同待办（重复）。
     public func resumeOrRecoverProcessing(
+        clearDraftTodos: @escaping () -> Void,
         persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
         persistSummary: @escaping (MeetingSummary, String) -> Void
     ) {
@@ -268,12 +321,65 @@ public final class MeetingSession: ObservableObject {
         // 已有进行中的揭示任务则不重复启动
         if let revealTask, !revealTask.isCancelled { return }
 
+        // 另一 session 的管线仍在跑（用户结束 → 回首页 → 快速重进：旧视图过渡期仍存活）：
+        // 等旧管线退出后按结果收尾（有纪要进 review，无则补跑），绝不再起一条——
+        // 双管线会双扣 LLM 额度 + 重复待办 + 互覆 meeting.segments。
+        if let running = MinutesTaskRegistry.shared.runningTask(for: meeting.id) {
+            statusMessage = "上一轮整理仍在进行…"
+            revealTask = Task { [weak self] in
+                await running.value
+                guard let self, !Task.isCancelled else { return }
+                self.finishAfterRegistryPipeline(
+                    clearDraftTodos: clearDraftTodos,
+                    persistTodos: persistTodos,
+                    persistSummary: persistSummary
+                )
+            }
+            return
+        }
+
         if blocks.isEmpty {
+            // 导入会议的首转：音频在盘但尚无字幕——走导入编排而非「无转写内容」退出。
+            if meeting.audioSource == .imported, meeting.audioPath != nil {
+                clearDraftTodos()
+                processImportedAudio(
+                    clearDraftTodos: clearDraftTodos,
+                    persistTodos: persistTodos,
+                    persistSummary: persistSummary
+                )
+                return
+            }
             statusMessage = "无转写内容"
             finishReviewWithoutMock()
             return
         }
 
+        // 重跑前清残留 draft 待办（崩溃/失败可能已落库但无纪要），保证幂等
+        clearDraftTodos()
+        startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
+    }
+
+    /// 等旧 session 的管线（registry 登记）退出后：有纪要直接收尾进 review；无产出则补跑一次。
+    private func finishAfterRegistryPipeline(
+        clearDraftTodos: @escaping () -> Void,
+        persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
+        persistSummary: @escaping (MeetingSummary, String) -> Void
+    ) {
+        if let existing = meeting.latestSummary {
+            let clean = MinutesMarkdownParser.sanitizedSummary(existing)
+            if !clean.tldr.isEmpty || !clean.decisions.isEmpty || !clean.topics.isEmpty {
+                summary = clean
+                revealStep = 5
+                statusMessage = ""
+                todoCount = meeting.actionItems.count
+                meeting.phase = .review
+                withAnimation(.recapSheet) { phase = .review }
+                checkpointSaver?()
+                return
+            }
+        }
+        // 旧管线未产出（失败/取消）：清残留 draft 后补跑一次
+        clearDraftTodos()
         startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
     }
 
@@ -281,9 +387,25 @@ public final class MeetingSession: ObservableObject {
         guard blocks.isEmpty else { return }
         guard !meeting.segments.isEmpty else { return }
         merger.loadCheckpoint(segments: meeting.segments)
+        blocks = blocks(from: meeting.segments)
+    }
+
+    /// 从 segments 构造 blocks（isFinal 全定稿），按段 id 合并 polished 文本。
+    /// 与 `adoptSegmentsAsBlocks` 共用：保证「热路径（同 session）与冷路径（重进/重启）」
+    /// 都吃到润色稿——旧实现 loadBlocksIfNeeded 不带 polished，重进 REVIEW 后转写 Tab 与
+    /// 纪要管线会静默回退到 raw。
+    private func blocks(from segments: [TranscriptSegment]) -> [TranscriptBlock] {
         let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
-        blocks = meeting.segments.map {
-            TranscriptBlock(segment: $0, speakers: speakers, isFinal: true)
+        // 若已润色，按段 id 把润色文本并入 block.polished（≠ raw 时转写行切到优化稿单行）
+        let polishedById = Dictionary(
+            uniqueKeysWithValues: meeting.polishedSegments.map { ($0.id, $0.text) }
+        )
+        return segments.map { seg in
+            var block = TranscriptBlock(segment: seg, speakers: speakers, isFinal: true)
+            if let polished = polishedById[seg.id], !polished.isEmpty {
+                block.polished = polished
+            }
+            return block
         }
     }
 
@@ -309,18 +431,7 @@ public final class MeetingSession: ObservableObject {
 
     private func adoptSegmentsAsBlocks(_ segments: [TranscriptSegment]) {
         merger.loadCheckpoint(segments: segments)
-        let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
-        // 若已润色，按段 id 把润色文本并入 block.polished（≠ raw 时转写行切到优化稿单行）
-        let polishedById = Dictionary(
-            uniqueKeysWithValues: meeting.polishedSegments.map { ($0.id, $0.text) }
-        )
-        blocks = segments.map { seg in
-            var block = TranscriptBlock(segment: seg, speakers: speakers, isFinal: true)
-            if let polished = polishedById[seg.id], !polished.isEmpty {
-                block.polished = polished
-            }
-            return block
-        }
+        blocks = blocks(from: segments)
     }
 
     // MARK: LIVE
@@ -360,6 +471,7 @@ public final class MeetingSession: ObservableObject {
         powerCancellable = nil
         endingLive = false
         setIdleTimerDisabled(false)
+        liveEpoch += 1
 
         let recordingToFlush = recording
         recording = nil
@@ -407,6 +519,24 @@ public final class MeetingSession: ObservableObject {
         startLive()
     }
 
+    /// App 切后台：LIVE 中先落 checkpoint 再停麦——进程在后台被杀（划掉/系统回收）时
+    /// 自上次 checkpoint 以来的字幕与时长不再丢失；回前台自动续录。
+    /// 手动暂停后切后台不自动恢复（用户已显式停麦）。
+    public func pauseForBackgroundIfLive() {
+        guard phase == .live || meeting.phase == .live else { return }
+        backgroundedWhileLive = recording?.isRunning == true || !isLivePaused
+        pauseLive()
+    }
+
+    /// App 回前台：切后台时正在录音则自动续录（等同来电中断恢复语义）。
+    /// 若 AudioRecorder 恢复失败（isRunning=false 且引擎未在飞），由 startLive 失败路径给出可操作提示。
+    public func resumeFromForegroundIfLive() {
+        let shouldResume = backgroundedWhileLive
+        backgroundedWhileLive = false
+        guard shouldResume, phase == .live, isLivePaused else { return }
+        resumeLive()
+    }
+
     private func startLive() {
         restoreElapsedIfNeeded()
         // 已有字幕再开麦：引擎时间轴从 0 起，必须抬高 absolute offset
@@ -427,17 +557,44 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
-    /// 端侧 ASR 热词：底稿实体（人名/公司/术语）+ 已知说话人名。注入 SpeechAnalyzer。
+    /// ASR 热词（plan 050 扩容）：底稿实体（人名/公司/术语）→ 本场说话人名 →
+    /// 声纹画廊跨会议名（047 纠错后持久）→ 用户全局常用词。
+    /// 端侧 SA contextualStrings 直接收；云端 fun-asr-realtime 经 input.context（≤400 字符）。
     private var liveContextualHints: [String] {
         var hints = meeting.brief?.entityHints ?? []
         for s in meeting.speakers where !s.name.isEmpty && !hints.contains(s.name) {
             hints.append(s.name)
         }
-        return Array(hints.prefix(50))
+        if VoiceprintConsent.granted {
+            for s in VoiceprintGallery.shared.snapshot() {
+                // 过滤引擎数字 id 兜底名与「我」：无转写价值的占位
+                let n = s.name.trimmingCharacters(in: .whitespaces)
+                guard n.count >= 2, n != "我", !n.allSatisfy(\.isNumber),
+                      !hints.contains(n) else { continue }
+                hints.append(n)
+            }
+        }
+        for w in UserVocabulary.words where !hints.contains(w) {
+            hints.append(w)
+        }
+        return Array(hints.prefix(100))
     }
 
     private func startRecordingOrMock() async {
         liveStartFailed = false
+        // 等离场后台停录落地再开新麦：同一 PCM 文件绝不允许双写（旧句柄残余写与新句柄交错
+        // 会损坏母带，致会后重转/分离/回放读到坏数据）。
+        if let t = teardownStopTask {
+            teardownStopTask = nil
+            await t.value
+        }
+        // 暂停 flush 同理：resume 已 cancel 其 UI 应用，但底层 stop() 不响应协作取消、
+        // 必然跑完才关文件句柄——await 它落地，防止旧 recorder 句柄与新 recorder 双写。
+        if let f = pauseFlushTask {
+            pauseFlushTask = nil
+            await f.value
+        }
+        let epoch = liveEpoch
         let session = RecordingSession()
         session.onPartial = { [weak self] text in
             self?.applyPartial(text)
@@ -477,16 +634,19 @@ public final class MeetingSession: ObservableObject {
             }
 
             try await session.start(audioFileURL: audioURL, contextualHints: liveContextualHints)
-            // 暂停后若用户未 resume，丢弃迟到的 start 成功回调
-            guard !self.isLivePaused else {
+            // 录音母带已落盘：排除 iCloud 备份（230MB/小时级，见 BackupExclusion）。
+            BackupExclusion.excludeMeetingAudio(meetingId: meeting.id)
+            // 启动期间被暂停/结束/离场：epoch 已变，丢弃迟到的 start 成功回调——
+            // 旧实现仅查 isLivePaused，pause 发生在 guard 之后会错误复位暂停态并续接旧引擎。
+            guard epoch == liveEpoch, !self.isLivePaused else {
                 _ = try? await session.stop()
                 self.recording = nil
                 return
             }
-            powerCancellable = session.$currentAudioPower
+            powerCancellable = session.$currentAudioBands
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] power in
-                    self?.liveAudioPower = power
+                .sink { [weak self] bands in
+                    self?.liveAudioBands = bands
                 }
             isUsingMockAudio = false
             liveStartFailed = false
@@ -600,10 +760,15 @@ public final class MeetingSession: ObservableObject {
     private static func segments(from blocks: [TranscriptBlock]) -> [TranscriptSegment] {
         blocks.map { block in
             let start = block.startSeconds ?? parseTimestamp(block.timestamp)
+            // 未标注说话人（fallback "?" / LIVE 转写 "asr-live"）输出 speakerId: nil——
+            // 把假 id 写成真值会污染持久化：diarize 守卫按 spk* 前缀判定虽能放行，
+            // 但其他按「speakerId 非 nil」消费的路径会误判为已标注。
+            let sid = block.speaker.id
+            let effectiveSpeakerId = (sid == "?" || sid == "asr-live") ? nil : sid
             return TranscriptSegment(
                 startSeconds: start,
                 endSeconds: block.endSeconds ?? start,
-                speakerId: block.speaker.id,
+                speakerId: effectiveSpeakerId,
                 text: block.raw,
                 confidence: block.confidence
             )
@@ -654,6 +819,55 @@ public final class MeetingSession: ObservableObject {
     /// 避免 Pro 用户在重转写路径看到误导性的「免费额度已用完」。
     private static func quotaFailureMessage(_ error: Error) -> String {
         (error as? RecapCredentialError)?.userMessage ?? "凭证准备失败，请检查网络后重试"
+    }
+
+    // MARK: - 说话人纠错（plan 047：纠错一次 → 跨会议终身生效）
+
+    /// 重命名说话人：画廊层写回（voiceprintId 键，重跑分离后名字跟人走）+ 本场即时生效。
+    /// 无 voiceprintId（SpeakerKit 路径/旧数据）仅改本场显示名。
+    public func renameSpeaker(_ speaker: Speaker, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if let vp = speaker.voiceprintId, VoiceprintConsent.granted {
+            VoiceprintGallery.shared.rename(voiceprintId: vp, name: trimmed)
+        }
+        meeting.speakers = meeting.speakers.map {
+            $0.id == speaker.id
+                ? Speaker(id: $0.id, name: trimmed, colorIndex: $0.colorIndex, voiceprintId: $0.voiceprintId)
+                : $0
+        }
+        republishBlocksAfterSpeakerChange()
+        checkpointSaver?()
+    }
+
+    /// 合并说话人（「这两位是同一个人」）：本场段级 speakerId 重映射 + 画廊 embedding 合并，
+    /// 下场会议起合并身份自动生效。保留 target 的名字与色环。
+    public func mergeSpeaker(_ source: Speaker, into target: Speaker) {
+        guard source.id != target.id else { return }
+        if let sv = source.voiceprintId, let tv = target.voiceprintId,
+           sv != tv, VoiceprintConsent.granted {
+            VoiceprintGallery.shared.merge(sourceId: sv, intoId: tv, keepName: target.name)
+        }
+        meeting.segments = meeting.segments.map { seg in
+            guard seg.speakerId == source.id else { return seg }
+            return TranscriptSegment(
+                id: seg.id,
+                startSeconds: seg.startSeconds,
+                endSeconds: seg.endSeconds,
+                speakerId: target.id,
+                text: seg.text,
+                confidence: seg.confidence,
+                isOverlapped: seg.isOverlapped
+            )
+        }
+        meeting.speakers = meeting.speakers.filter { $0.id != source.id }
+        republishBlocksAfterSpeakerChange()
+        checkpointSaver?()
+    }
+
+    /// 说话人变更后从 segments 重建 blocks（同步 UI 显示名/色环）。
+    private func republishBlocksAfterSpeakerChange() {
+        adoptSegmentsAsBlocks(meeting.segments)
     }
 
     /// - Parameter chainPostProcess: true（默认）= 完成后自动联动润色 + 分离；false = 编排方自行接管
@@ -901,6 +1115,7 @@ public final class MeetingSession: ObservableObject {
     public func startExplicitDemoLive() {
         guard phase == .live else { return }
         streamTask?.cancel()
+        liveEpoch += 1
         recording = nil
         isUsingMockAudio = true
         liveStartFailed = false
@@ -999,9 +1214,16 @@ public final class MeetingSession: ObservableObject {
         statusMessage = "正在收尾…"
         setIdleTimerDisabled(false)
 
+        // 收尾窗口安全网：切态前先同步落一次 checkpoint——`stop()` 带 5s 超时，
+        // 若此窗口内进程被杀，至少保住用户点「完成」瞬间的字幕与时长
+        // （旧实现要等 stop 完成才写，且 phase 已切 .processing 使节流守卫不再兜底）。
+        persistLiveCheckpoint()
+        checkpointSaver?()
+
         // 同步立刻切态，不等 stop()；否则按钮像失灵
         meeting.phase = .processing
         withAnimation(.recapSheet) { phase = .processing }
+        liveEpoch += 1
 
         let recordingToStop = recording
         recording = nil
@@ -1010,6 +1232,13 @@ public final class MeetingSession: ObservableObject {
         revealTask = Task { [weak self] in
             guard let self else { return }
             defer { self.endingLive = false }
+
+            // 暂停离场后直接「完成」：旧 stop 可能仍在后台写盘，先等它落地再读文件/收尾，
+            // 否则 mmap 读到的文件大小不含末段（静默截断），且映射后追加有 SIGBUS 隐患。
+            if let t = self.teardownStopTask {
+                self.teardownStopTask = nil
+                _ = await t.value
+            }
 
             // #M2：暂停后立即完成时，等暂停 flush 落地再收尾，避免丢末段
             if let flush = self.pauseFlushTask {
@@ -1286,6 +1515,9 @@ public final class MeetingSession: ObservableObject {
         if phase != .review {
             withAnimation(.recapSheet) { phase = .review }
         }
+        // phase 改 .review 立即落盘：管线可能在用户离屏后跑完（bg task），
+        // 若后续无润色/分离触发 save，DB 会停留 .processing，首页一直显示「处理中」。
+        checkpointSaver?()
         scheduleDiarizationIfNeeded()
         schedulePolishIfNeeded()
     }
@@ -1296,6 +1528,7 @@ public final class MeetingSession: ObservableObject {
         setStep(5)
         meeting.phase = .review
         withAnimation(.recapSheet) { phase = .review }
+        checkpointSaver?()
         scheduleDiarizationIfNeeded()
         schedulePolishIfNeeded()
     }
@@ -1424,7 +1657,7 @@ public final class MeetingSession: ObservableObject {
                 provider.streamText(system: system, user: user,
                                      model: LLMPresets.deepSeekFlash, temperature: 0.1)
             }
-            let polished = try await polisher.polish(source)
+            let polished = try await polisher.polish(source, hints: liveContextualHints)
             meeting.polishedSegmentsData = try? JSONEncoder().encode(polished)
             meeting.polishedModelId = LLMPresets.deepSeekFlash
             // 用「当前」meeting.segments 重建，而非开跑时的 source 快照：polish 与 diarization 并发，
@@ -1496,9 +1729,10 @@ public final class MeetingSession: ObservableObject {
         guard !isUsingMockAudio || !blocks.isEmpty else { return }
         meeting.durationSeconds = Double(max(elapsed, Int(meeting.durationSeconds), 1))
         meeting.segments = Self.segments(from: blocks)
-        // 说话人列表：已有 spk* 时保留；否则从 blocks 汇总
+        // 说话人列表：已有 spk* 时保留；否则从 blocks 汇总（过滤 fallback "?" / "asr-live"，
+        // 避免把未标注占位写成真实说话人）
         if meeting.speakers.isEmpty || !meeting.speakers.contains(where: { $0.id.hasPrefix("spk") }) {
-            let unique = blocks.map(\.speaker)
+            let unique = blocks.map(\.speaker).filter { $0.id != "?" && $0.id != "asr-live" }
             var seen = Set<String>()
             meeting.speakers = unique.filter { seen.insert($0.id).inserted }
         }
@@ -1526,11 +1760,27 @@ public final class MeetingSession: ObservableObject {
         }
         endingLive = false
         setIdleTimerDisabled(false)
+        liveEpoch += 1
         if let recording, recording.isRunning {
-            Task { _ = try? await recording.stop() }
+            // 后台停录：不阻塞离场；结果由 teardownStopTask 串行化——新开麦/endLive 会先 await 它，
+            // 避免同一 PCM 文件双写损坏母带（旧句柄残余写 + 新句柄 seekToEnd 追加交错）。
+            teardownStopTask = Task {
+                _ = try? await recording.stop()
+            }
         }
         recording = nil
     }
+
+    /// 离场/切后台后台停录的任务：新开麦 / endLive 读盘前必须等它落地——
+    /// 同一 audio.pcm 若被两个 FileHandle 交错写（旧句柄残余写 + 新句柄追加）会损坏母带。
+    private var teardownStopTask: Task<Void, Never>?
+    /// LIVE 引擎启动代际：pause/endLive/teardown 递增。startRecordingOrMock 在
+    /// `session.start` 返回后校验代际，丢弃暂停/结束之后才到达的迟到成功回调
+    /// （旧实现仅靠 isLivePaused 守卫，pause 发生在 guard 之后会错误复位 isLivePaused=false
+    /// 并续接已被停止的旧引擎 →「假录音」）。
+    private var liveEpoch: Int = 0
+    /// 切后台时是否正在 LIVE 录音：回前台据此自动续录（与来电中断恢复语义一致）。
+    private var backgroundedWhileLive = false
 
     /// 真正丢弃会话（会丢未保存数据）；优先用 `pauseOrTeardownForDisappear`。
     public func reset() {
@@ -1541,8 +1791,10 @@ public final class MeetingSession: ObservableObject {
     private func checkpointIfNeeded(force: Bool) {
         guard phase == .live, !blocks.isEmpty else { return }
         if !force {
-            // segment 高频路径：最多约 5s 落一次；pause/end 走 force
-            if let last = lastCheckpointAt, Date().timeIntervalSince(last) < 5 { return }
+            // segment 高频路径：最多约 10s 落一次（60min 会约 360 次全量 encode + 主线程
+            // save；5s 与 10s 对崩溃恢复的丢字差异可忽略，save 频率减半缓解长会议卡顿）。
+            // pause / endLive 仍走 force 落盘，末段不丢。
+            if let last = lastCheckpointAt, Date().timeIntervalSince(last) < 10 { return }
         }
         persistLiveCheckpoint()
         checkpointSaver?()

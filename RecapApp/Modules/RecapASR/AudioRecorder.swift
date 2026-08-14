@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 
 /// 实时麦克风录音，线性插值重采样为 targetSampleRate(默认 16k) mono Float32。
 /// installTap 用硬件格式(48k)；handle 内做线性插值降采样——
@@ -9,12 +10,15 @@ public actor AudioRecorder {
         case permissionDenied
         case invalidInputFormat
         case diskWriteFailed
+        /// 录音被打断（来电/其他 App 抢音频）后恢复 AVAudioSession/engine 失败。
+        case sessionRestoreFailed
 
         public var errorDescription: String? {
             switch self {
             case .permissionDenied:    return "麦克风权限被拒"
             case .invalidInputFormat:  return "输入格式无效"
             case .diskWriteFailed:     return "存储空间不足或录音写入失败"
+            case .sessionRestoreFailed: return "录音被来电等打断后恢复失败，请暂停后重试"
             }
         }
     }
@@ -34,14 +38,36 @@ public actor AudioRecorder {
 
     /// true = 中断开始；false = 中断结束并已尝试恢复。
     private var onInterrupted: (@Sendable (Bool) -> Void)?
-    private var onAudioPower: (@Sendable (Float) -> Void)?
+    private var onAudioBands: (@Sendable (AudioBands) -> Void)?
+
+    // MARK: - 频谱分析（三分频）缓存状态
+    /// real-FFT setup（log2n=12 → 4096 点）。懒创建、复用，避免热路径反复建（建一次约 µs 级）。
+    private var fftSetup: FFTSetup?
+    private var hannWindow: [Float] = []
+    /// FFT 点数：固定 4096（每 tap 的 48k/4096 缓冲天然满窗；bin 宽 ≈ 11.7Hz，低频 60–320Hz 有足量分辨率）。
+    private let fftSize = 4096
+    private var fftLog2n: UInt { 12 }
+    /// 复用缓冲（每 tap ~85ms 热路径，避免逐帧 4-5 次 alloc）；随 setup 一起建、stop 时清零。
+    private var fftScratch: FFTScratch?
+    /// 包络跟随上一帧值：非对称 attack(快)/release(慢)，去逐 tap 抖动、给音节弹跳。stop 时随 setup 一起清零。
+    private var prevBands: AudioBands = .zero
+
+    /// FFT 工作缓冲：windowed/realp/imagp/mag 复用数组 + n/half 快照。
+    private struct FFTScratch {
+        var windowed: [Float]
+        var realp: [Float]
+        var imagp: [Float]
+        var mag: [Float]
+        let n: Int
+        let half: Int
+    }
 
     public func setOnInterrupted(_ handler: (@Sendable (Bool) -> Void)?) {
         onInterrupted = handler
     }
 
-    public func setOnAudioPower(_ handler: (@Sendable (Float) -> Void)?) {
-        onAudioPower = handler
+    public func setOnAudioBands(_ handler: (@Sendable (AudioBands) -> Void)?) {
+        onAudioBands = handler
     }
 
     /// 落盘写入失败（如磁盘满/IO 错）回调；触发后停止继续写盘并上报，避免「哑录」（isRunning 真却无 PCM）。
@@ -66,7 +92,7 @@ public actor AudioRecorder {
 
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                options: [.defaultToSpeaker, .allowBluetooth])
+                                options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setPreferredSampleRate(targetSampleRate)
         try session.setActive(true)
 
@@ -202,7 +228,10 @@ public actor AudioRecorder {
             wasInterrupted = false
             onInterrupted?(false)
         } catch {
+            // 恢复失败：同时上报「中断态（停表）」与「错误文案（用户可见）」，避免静默哑录。
+            // 引擎此时仍在 isRunning 但无 PCM 产出，UI 须明确提示用户暂停/重试。
             onInterrupted?(true)
+            onError?(.sessionRestoreFailed)
         }
     }
 
@@ -215,8 +244,11 @@ public actor AudioRecorder {
                 sum += s * s
             }
             let rms = sqrt(sum / Float(samples.count))
-            let power = min(1.0, max(0.0, rms * 6.0))
-            onAudioPower?(power)
+            let level = min(1.0, max(0.0, rms * 6.0))
+            // 三分频：在原始 PCM 上算 FFT → 按 inSampleRate 分桶。失败/不足窗长则只上报 level，
+            // 视图层会回落到仅电平驱动（仍优于无信号）。不动 resample/落盘/ASR 喂帧——纯只读旁路。
+            let bands = analyzeBands(samples: samples, sampleRate: inSampleRate, level: level)
+            onAudioBands?(bands)
         }
 
         guard let continuation else { return }
@@ -236,6 +268,118 @@ public actor AudioRecorder {
         }
         yieldCount += 1
         continuation.yield(out)
+    }
+
+    // MARK: - 三分频频谱（FFT 旁路，纯只读）
+
+    /// 懒建 FFT setup + Hann 窗 + 复用缓冲（不在每个 tap 重建）。
+    private func ensureFFT() {
+        guard fftSetup == nil else { return }
+        fftSetup = vDSP_create_fftsetup(fftLog2n, FFTRadix(kFFTRadix2))
+        var w = [Float](repeating: 0, count: fftSize)
+        vDSP_hann_window(&w, vDSP_Length(fftSize), Int32(vDSP_HANN_NORM))
+        hannWindow = w
+        let half = fftSize / 2
+        fftScratch = FFTScratch(
+            windowed: [Float](repeating: 0, count: fftSize),
+            realp: [Float](repeating: 0, count: half),
+            imagp: [Float](repeating: 0, count: half),
+            mag: [Float](repeating: 0, count: half),
+            n: fftSize,
+            half: half
+        )
+    }
+
+    /// 在原始 PCM 上做 real-FFT → 按 sampleRate 分桶低/中/高，软压缩到 0..1。
+    /// 不足窗长则补零（仍按 4096 点算，分辨率不变）。任何环节失败只丢 bands、保留 level。
+    private func analyzeBands(samples: [Float], sampleRate: Double, level: Float) -> AudioBands {
+        guard sampleRate > 0, !samples.isEmpty else { return AudioBands(level: level) }
+        ensureFFT()
+        guard let setup = fftSetup, var scratch = fftScratch else { return AudioBands(level: level) }
+
+        let n = scratch.n
+        let half = scratch.half
+
+        // 取末段对齐窗起点 + Hann 加窗；不足 n 补零。
+        scratch.windowed.withUnsafeMutableBufferPointer { win in
+            win.baseAddress!.update(repeating: 0, count: n)
+        }
+        let m = min(samples.count, n)
+        let base = samples.count - m
+        for i in 0..<m {
+            scratch.windowed[i] = samples[base + i] * hannWindow[i]
+        }
+
+        // real → split complex（偶下标实部、奇下标虚部）→ real-FFT → 幅度谱。
+        // 指针经 withUnsafeMutableBufferPointer 显式取、且存活于整个闭包块，
+        // 规避 Swift 6 对 `&array` 隐式临时指针的存活警告（Release 下地址暴露崩溃风险）。
+        scratch.windowed.withUnsafeBufferPointer { buf in
+            buf.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { cplx in
+                scratch.realp.withUnsafeMutableBufferPointer { rp in
+                    scratch.imagp.withUnsafeMutableBufferPointer { ip in
+                        var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                        vDSP_ctoz(cplx, 2, &split, 1, vDSP_Length(half))
+                    }
+                }
+            }
+        }
+        scratch.realp.withUnsafeMutableBufferPointer { rp in
+            scratch.imagp.withUnsafeMutableBufferPointer { ip in
+                var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                vDSP_fft_zrip(setup, &split, 1, fftLog2n, FFTDirection(1))
+            }
+        }
+        scratch.realp.withUnsafeMutableBufferPointer { rp in
+            scratch.imagp.withUnsafeMutableBufferPointer { ip in
+                scratch.mag.withUnsafeMutableBufferPointer { mg in
+                    var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
+                    vDSP_zvabs(&split, 1, mg.baseAddress!, 1, vDSP_Length(half))
+                }
+            }
+        }
+        fftScratch = scratch
+
+        let binHz = sampleRate / Double(n)
+        let mag = scratch.mag
+        func bandMean(_ loHz: Double, _ hiHz: Double) -> Float {
+            let lo = max(1, Int((loHz / binHz).rounded()))
+            let hi = min(half - 1, Int((hiHz / binHz).rounded()))
+            guard hi > lo else { return 0 }
+            var s: Float = 0
+            for k in lo..<hi { s += mag[k] }
+            return s / Float(hi - lo)
+        }
+
+        // bandScale：把 raw 幅度谱均值映射到 0..1 区间（软压缩 + clamp 兜底，不会溢出）。
+        // 常态人声 raw 均值约 5~30 → 0.3~0.95；可按真机麦克风/AGC 微调。
+        let bandScale: Float = 0.06
+        let norm: (Float) -> Float = { x in
+            let v = max(0, x * bandScale)
+            return min(1, v / (1 + v * 0.55))
+        }
+        let raw = AudioBands(
+            low: norm(bandMean(60, 320)),
+            mid: norm(bandMean(320, 1600)),
+            high: norm(bandMean(1600, 6000)),
+            level: level
+        )
+        // 非对称包络跟随：快 attack（音节弹开）/ 慢 release（缓落），消逐 tap 抖动。
+        // dt 取名义 tap 间隔（≈ fftSize/sampleRate，足够准；follow 已 min(1,) 兜底）。
+        let dt: Float = Float(fftSize) / Float(max(sampleRate, 1))
+        let target = raw
+        var out = AudioBands()
+        out.low   = follow(prevBands.low,   target.low,   dt, attack: 22, release: 4.5)
+        out.mid   = follow(prevBands.mid,   target.mid,   dt, attack: 22, release: 4.5)
+        out.high  = follow(prevBands.high,  target.high,  dt, attack: 26, release: 5.0)
+        out.level = follow(prevBands.level, target.level, dt, attack: 20, release: 4.0)
+        prevBands = out
+        return out
+    }
+
+    /// 单极非对称跟随：target 上升走 attack（大=快）、下降走 release（小=慢）。
+    private func follow(_ current: Float, _ target: Float, _ dt: Float, attack: Float, release: Float) -> Float {
+        let rate = target > current ? attack : release
+        return current + (target - current) * min(1, dt * rate)
     }
 
     /// 线性插值重采样（任意比率，无状态）。
@@ -260,6 +404,7 @@ public actor AudioRecorder {
         guard isRunning else { return }
         removeSessionObservers()
         setOnInterrupted(nil)
+        setOnAudioBands(nil)
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         continuation?.finish()
@@ -267,6 +412,12 @@ public actor AudioRecorder {
         closeFileHandle()
         isRunning = false
         wasInterrupted = false
+        // 释放 FFT setup（下次录音 ensureFFT() 重建，µs 级），避免 opaque 指针跨实例泄漏。
+        if let setup = fftSetup { vDSP_destroy_fftsetup(setup) }
+        fftSetup = nil
+        hannWindow.removeAll()
+        fftScratch = nil
+        prevBands = .zero
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 

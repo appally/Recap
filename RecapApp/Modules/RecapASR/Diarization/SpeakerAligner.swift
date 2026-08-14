@@ -30,37 +30,73 @@ public enum SpeakerAligner {
                 endSeconds: ends[seg.id] ?? max(seg.endSeconds, seg.startSeconds + 1),
                 speakerId: seg.speakerId,
                 text: seg.text,
-                confidence: seg.confidence
+                confidence: seg.confidence,
+                isOverlapped: seg.isOverlapped
             )
         }
     }
 
     /// 对每个转写段，取时间重叠最长的说话人；无重叠则 `speakerId` 保持原值（可为 nil）。
+    /// 次优重叠/最优重叠 ≥ 阈值且说话人不同时标记 `isOverlapped`（引擎产出双段时间轴、
+    /// 赢家通吃的单标签在此补曝光——plan 047 Wave C）。
     public static func assignSpeakers(
         segments: [TranscriptSegment],
         timeline: [SpeakerTimelineSegment],
-        speakerIdPrefix: String = "spk"
+        speakerIdPrefix: String = "spk",
+        overlapRatioThreshold: Double = 0.8
     ) -> [TranscriptSegment] {
         guard !timeline.isEmpty else { return segments }
         let normalized = normalizeEnds(segments)
         return normalized.map { seg in
             guard let idx = bestSpeakerIndex(for: seg, in: timeline) else { return seg }
+            let secondaryRatio = secondaryOverlapRatio(for: seg, in: timeline, excluding: idx)
             return TranscriptSegment(
                 id: seg.id,
                 startSeconds: seg.startSeconds,
                 endSeconds: seg.endSeconds,
                 speakerId: "\(speakerIdPrefix)\(idx)",
                 text: seg.text,
-                confidence: seg.confidence
+                confidence: seg.confidence,
+                isOverlapped: secondaryRatio >= overlapRatioThreshold
             )
         }
     }
 
+    /// 次优说话人的重叠时长 / 主说话人的重叠时长（无有效次优返回 0）。
+    /// ≥0.8 即「两人同时说话」的高置信信号（引擎 overlap 段会给两人各产一段时间轴）。
+    public static func secondaryOverlapRatio(
+        for segment: TranscriptSegment,
+        in timeline: [SpeakerTimelineSegment],
+        excluding primaryIndex: Int
+    ) -> Double {
+        let segStart = segment.startSeconds
+        let segEnd = max(segment.endSeconds, segStart)
+        var primaryOverlap = 0.0
+        var otherBest = 0.0
+        for piece in timeline {
+            let overlap = overlapDuration(
+                aStart: segStart, aEnd: segEnd,
+                bStart: piece.startSeconds, bEnd: piece.endSeconds
+            )
+            if piece.speakerIndex == primaryIndex {
+                primaryOverlap = max(primaryOverlap, overlap)
+            } else {
+                otherBest = max(otherBest, overlap)
+            }
+        }
+        guard primaryOverlap > 0, otherBest > 0 else { return 0 }
+        return otherBest / primaryOverlap
+    }
+
     /// 按时间轴首次出现顺序生成 `Speaker` 列表（发言人1…）。
+    /// - Parameter voiceprintNames: 跨录音稳定 key（voiceprintId → 用户纠错名）。
+    ///   spk 索引在重跑分离后会按出现顺序重排（不稳定），voiceprintId 才是终身身份——
+    ///   名字优先按它重放，`existingNames`（spk id 键）仅作旧数据回退（plan 047 Wave A）。
     public static func makeSpeakers(
         from timeline: [SpeakerTimelineSegment],
         speakerIdPrefix: String = "spk",
-        existingNames: [String: String] = [:]
+        existingNames: [String: String] = [:],
+        voiceprintNames: [String: String] = [:]
     ) -> [Speaker] {
         var order: [Int] = []
         var seen = Set<Int>()
@@ -75,9 +111,12 @@ public enum SpeakerAligner {
         }
         return order.enumerated().map { colorIndex, speakerIndex in
             let id = "\(speakerIdPrefix)\(speakerIndex)"
-            let name = existingNames[id] ?? "发言人\(colorIndex + 1)"
+            let voiceprintId = voiceprintByIndex[speakerIndex]
+            let name = (voiceprintId.flatMap { voiceprintNames[$0] })
+                ?? existingNames[id]
+                ?? "发言人\(colorIndex + 1)"
             return Speaker(id: id, name: name, colorIndex: colorIndex,
-                           voiceprintId: voiceprintByIndex[speakerIndex])
+                           voiceprintId: voiceprintId)
         }
     }
 

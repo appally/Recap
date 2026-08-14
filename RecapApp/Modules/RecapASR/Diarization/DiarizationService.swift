@@ -77,10 +77,22 @@ public enum DiarizationService {
             throw DiarizationError.engineFailed("未检测到说话人片段")
         }
 
-        // uniquingKeysWith 防御：Speaker.id 理论唯一，但多次重转/手改/迁移残留可能产生重复 id，
-        // uniqueKeysWithValues 遇重复 key 会 trap 致进程崩溃；取首个（保留最初命名）。
+        // 名字重放双层 key（plan 047 Wave A）：voiceprintId（跨跑稳定，优先）+ spk id（旧数据回退）。
+        // spk 索引在重跑分离后按出现顺序重排，以其为 key 会把纠错名贴错人。
+        // uniquingKeysWith 防御：多次重转/手改/迁移残留可能产生重复，取首个（保留最初命名）。
         let nameMap = Dictionary(preserveSpeakerNames.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
-        let speakers = SpeakerAligner.makeSpeakers(from: timeline, existingNames: nameMap)
+        let voiceprintNameMap = Dictionary(
+            preserveSpeakerNames.compactMap { sp -> (String, String)? in
+                guard let vp = sp.voiceprintId, !vp.isEmpty else { return nil }
+                return (vp, sp.name)
+            },
+            uniquingKeysWith: { a, _ in a }
+        )
+        let speakers = SpeakerAligner.makeSpeakers(
+            from: timeline,
+            existingNames: nameMap,
+            voiceprintNames: voiceprintNameMap
+        )
         let labeled = SpeakerAligner.assignSpeakers(segments: segments, timeline: timeline)
         return Outcome(segments: labeled, speakers: speakers, timeline: timeline)
     }

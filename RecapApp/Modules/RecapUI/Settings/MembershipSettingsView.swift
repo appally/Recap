@@ -21,10 +21,10 @@ struct MembershipSettingsView: View {
             VStack(alignment: .leading, spacing: Spacing.xxxl) {
                 if membership.isPro {
                     activeHero
+                    usageStatsSection
                 } else {
                     purchaseBlock
                 }
-                usageStatsSection
                 footerSection
                 SettingsInlineNotice(message: $store.lastMessage)
             }
@@ -434,7 +434,7 @@ struct MembershipSettingsView: View {
             .frame(maxWidth: .infinity)
 
             VStack(spacing: Spacing.sm) {
-                Text("订阅经 Apple 账户扣款，可随时在系统「订阅」中取消。")
+                Text("订阅通过 Apple 账户扣款并自动续期（当前周期结束前 24 小时内扣费，除非提前至少 24 小时取消），可在系统「设置 → Apple ID → 订阅」中随时管理或取消。")
                     .font(.recapMeta)
                     .foregroundStyle(Color.recapTea.opacity(0.55))
                     .multilineTextAlignment(.center)

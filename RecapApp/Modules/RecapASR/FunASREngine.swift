@@ -20,6 +20,9 @@ public actor FunASREngine: AsrEngine {
     private var apiKey: String = ""
     /// 当前会话使用的 ASR 模型(从 cred.asrModel 拿,BYOK 路径用 ASRPresets.funRealtimeModel 兜底)。runTask 协议用。
     private var model: String = ""
+    /// 会话热词（plan 050 Wave A）：底稿实体/说话人名/用户常用词。仅 fun-asr-realtime
+    /// 支持 `input.context`（≤400 字符）；托管档 paraformer-realtime-v2 无此能力，忽略。
+    private var contextualHints: [String] = []
 
     private var wsBox: WSTaskBox?
     private var recvTask: Task<Void, Never>?
@@ -53,6 +56,12 @@ public actor FunASREngine: AsrEngine {
     private var isStreaming = false
 
     public init() {}
+
+    /// plan 050 Wave A：云端 Fun-ASR 也消费热词——fun-asr-realtime 经 run-task 的
+    /// `input.context`（≤400 字符）注入；paraformer（托管档）无此能力，存下但不起作用。
+    public func setContextualHints(_ hints: [String]) async {
+        contextualHints = hints
+    }
 
     public func prepare() async throws {
         let key: String
@@ -137,7 +146,18 @@ public actor FunASREngine: AsrEngine {
             }
         }
 
-        try await sendJSON(FunASRProtocol.runTask(taskId: String(taskId), model: self.model), box: box)
+        try await sendJSON(
+            FunASRProtocol.runTask(
+                taskId: String(taskId),
+                model: self.model,
+                // input.context 仅 fun-asr 家族支持（BYOK）；paraformer 传了也会被忽略，
+                // 但为稳妥显式 gate，避免未来模型校验收紧时报参数错。
+                context: model.contains("fun-asr")
+                    ? FunASRProtocol.contextPayload(from: contextualHints)
+                    : nil
+            ),
+            box: box
+        )
         try await waitUntilTaskStarted(timeoutSeconds: 8)
 
         if let failed = taskFailedMessage {
@@ -635,7 +655,9 @@ final class WSTaskBox: @unchecked Sendable {
 }
 
 enum FunASRProtocol {
-    static func runTask(taskId: String, model: String = ASRPresets.funRealtimeModel) -> [String: Any] {
+    static func runTask(taskId: String,
+                        model: String = ASRPresets.funRealtimeModel,
+                        context: String? = nil) -> [String: Any] {
         [
             "header": [
                 "action": "run-task",
@@ -651,9 +673,24 @@ enum FunASRProtocol {
                     "format": "pcm",
                     "sample_rate": 16000,
                 ],
-                "input": [:] as [String: Any],
+                "input": context.map { ["context": $0] as [String: Any] } ?? [:] as [String: Any],
             ],
         ]
+    }
+
+    /// 热词 → `input.context`（官方上限 400 字符，逗号拼接；超限截断保整词）。
+    static func contextPayload(from hints: [String]) -> String? {
+        let cleaned = hints.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return nil }
+        var parts: [String] = []
+        var count = 0
+        for word in cleaned {
+            let piece = parts.isEmpty ? word : "," + word
+            if count + piece.count > 400 { break }
+            parts.append(word)
+            count += piece.count
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: ",")
     }
 
     static func finishTask(taskId: String) -> [String: Any] {

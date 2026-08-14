@@ -37,6 +37,8 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
                 verbose: false
             )
             _ = try? await SpeakerKit(config)
+            // 下载完成：模型缓存排除 iCloud 备份（可重下，见 BackupExclusion）。
+            BackupExclusion.excludeHuggingFaceCache()
         }
     }
 
@@ -105,13 +107,18 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
             }
             let config = Self.pyannoteConfig(modelFolder: modelFolder)
             do {
-                return try await SpeakerKit(config)
+                let kit = try await SpeakerKit(config)
+                // 缓存已落盘（下载或命中既有缓存）：排除 iCloud 备份（可重下）。
+                BackupExclusion.excludeHuggingFaceCache()
+                return kit
             } catch {
                 // 被动兜底：SpeakerKit 命中坏缓存即返回、不会自愈——MLModel.load 才抛
                 // "Failed to open file ... It is not a valid .mlmodelc file."。
                 // 删缓存重下再试一次；仍失败则抛出，由调用方友好提示。
                 Self.purgeCachedModels()
-                return try await SpeakerKit(config)
+                let kit = try await SpeakerKit(config)
+                BackupExclusion.excludeHuggingFaceCache()
+                return kit
             }
         }
         preparing = task

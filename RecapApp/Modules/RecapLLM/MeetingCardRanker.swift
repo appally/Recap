@@ -10,6 +10,8 @@ public enum MeetingCardRanker {
         public var actionTasks: [String]
         /// 笔记层产物（对外纪要/邮件/周报等的 title + body）。
         public var notes: [String]
+        /// 已命名的说话人（plan 051：人物维度召回——「搜人名找会议」；默认名过滤在组装侧）。
+        public var speakers: [String]
 
         public init(
             title: String,
@@ -17,7 +19,8 @@ public enum MeetingCardRanker {
             decisions: [String] = [],
             openQuestions: [String] = [],
             actionTasks: [String] = [],
-            notes: [String] = []
+            notes: [String] = [],
+            speakers: [String] = []
         ) {
             self.title = title
             self.tldr = tldr
@@ -25,6 +28,7 @@ public enum MeetingCardRanker {
             self.openQuestions = openQuestions
             self.actionTasks = actionTasks
             self.notes = notes
+            self.speakers = speakers
         }
     }
 
@@ -74,6 +78,14 @@ public enum MeetingCardRanker {
         if aHits > 0 {
             total += aHits
             reasons.append("待办")
+        }
+        // 人物命中权重同决策/遗留（×2）：搜人名是强意图（「这个客户的会」），
+        // 但说话人名只在纠错命名后存在，命中即高置信（plan 051）。
+        let speakerText = fields.speakers.joined(separator: "\n")
+        let sHits = countHits(in: speakerText, tokens: tokens)
+        if sHits > 0 {
+            total += sHits * 2
+            reasons.append("说话人")
         }
 
         guard total > 0 else { return nil }

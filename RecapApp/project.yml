@@ -1,3 +1,6 @@
+# RecapApp 迁移计划:本文件由 xcodegen 驱动（RecapApp/RecapApp.xcodeproj 由它生成）。
+# ⚠️ regenerate 后必须执行: sh scripts/fix_scheme.sh
+#    （xcodegen 不识别 PRODUCT_NAME=Recap，会把 scheme 的 BuildableName 误生成为 RecapApp.app）
 name: RecapApp
 options:
   bundleIdPrefix: com.recap
@@ -27,6 +30,12 @@ settings:
     DEVELOPMENT_TEAM: WTG6UTV87R
     TARGETED_DEVICE_FAMILY: "1,2"
     IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    # 所有 target(含 5 个 framework)继承版本号。embedded framework 的自动生成 Info.plist
+    # 会据此写入 CFBundleShortVersionString/CFBundleVersion, 否则 ASC 报 90057。
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "2"
+    # 自动签名：Xcode 据 DEVELOPMENT_TEAM 自动选证书。
+    CODE_SIGN_STYLE: Automatic
 
 targets:
 
@@ -45,6 +54,10 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        # xcodegen 会在 target 级写死 CURRENT_PROJECT_VERSION=1 覆盖 project 级版本号,
+        # 显式继承让 framework 与主 App 版本号同步 bump(否则 ASC 90057 修复失效/漂移)。
+        CURRENT_PROJECT_VERSION: "$(inherited)"
+        MARKETING_VERSION: "$(inherited)"
 
   # ─────────────────────────────────────────────
   # ASR：SpeechAnalyzer + FunASR + VolcASR（备）+ AudioRecorder
@@ -66,6 +79,10 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        # xcodegen 会在 target 级写死 CURRENT_PROJECT_VERSION=1 覆盖 project 级版本号,
+        # 显式继承让 framework 与主 App 版本号同步 bump(否则 ASC 90057 修复失效/漂移)。
+        CURRENT_PROJECT_VERSION: "$(inherited)"
+        MARKETING_VERSION: "$(inherited)"
 
   # ─────────────────────────────────────────────
   # LLM：MacPaw/OpenAI + MinutesPipeline + Keychain
@@ -86,6 +103,10 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        # xcodegen 会在 target 级写死 CURRENT_PROJECT_VERSION=1 覆盖 project 级版本号,
+        # 显式继承让 framework 与主 App 版本号同步 bump(否则 ASC 90057 修复失效/漂移)。
+        CURRENT_PROJECT_VERSION: "$(inherited)"
+        MARKETING_VERSION: "$(inherited)"
 
   # ─────────────────────────────────────────────
   # Persistence：ModelContainer 装配
@@ -105,6 +126,10 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        # xcodegen 会在 target 级写死 CURRENT_PROJECT_VERSION=1 覆盖 project 级版本号,
+        # 显式继承让 framework 与主 App 版本号同步 bump(否则 ASC 90057 修复失效/漂移)。
+        CURRENT_PROJECT_VERSION: "$(inherited)"
+        MARKETING_VERSION: "$(inherited)"
 
   # ─────────────────────────────────────────────
   # UI：DesignSystem + Views（@Model 直驱）
@@ -127,6 +152,10 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         DEFINES_MODULE: YES
         SKIP_INSTALL: YES
+        # xcodegen 会在 target 级写死 CURRENT_PROJECT_VERSION=1 覆盖 project 级版本号,
+        # 显式继承让 framework 与主 App 版本号同步 bump(否则 ASC 90057 修复失效/漂移)。
+        CURRENT_PROJECT_VERSION: "$(inherited)"
+        MARKETING_VERSION: "$(inherited)"
 
   # ─────────────────────────────────────────────
   # App：入口 + RecordingSession + Settings
@@ -164,6 +193,9 @@ targets:
         UIBackgroundModes:
           - audio
         UILaunchScreen: {}
+        # 退出 iPad 多任务(Slide Over/分屏)。iPad 只支持 3 个方向, 不满足多任务所需的全部 4 方向,
+        # 故必须声明 UIRequiresFullScreen=true 以过 ASC 90474。
+        UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:
@@ -180,21 +212,30 @@ targets:
         # com.recap.app 已被占用，不可注册；开发期用个人唯一 ID
         PRODUCT_BUNDLE_IDENTIFIER: com.liuyong.recap
         PRODUCT_NAME: Recap
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
-        # 自动签名：Xcode 据 DEVELOPMENT_TEAM 自动选 Apple Development(Debug)/Apple Distribution(Archive)。
-        # 覆盖 xcodegen 默认的 "iPhone Developer"（遗留值，Release/Archive 非标准且脆弱）。
+        # MARKETING_VERSION / CURRENT_PROJECT_VERSION 已上提到 project 级 settings.base,
+        # app 与各 framework 共用同一版本号(见文件顶部 settings.base)。
+        # 自动签名：Xcode 据 DEVELOPMENT_TEAM 自动选证书。分级：
+        #   Debug   = Apple Development(真机调试)
+        #   Release = 空(不锁身份)→ 自动签名在 Archive 时选 Apple Distribution。
+        # ⚠️ 不要全局锁 "Apple Development"(Archive 仍用开发证书) 也不要留 xcodegen 默认
+        #    "iPhone Developer"(非标准遗留值)。
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "Apple Development"
         # 使用 Icon_v3 应用图标 (1024x1024)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_IDENTITY: ""
     dependencies:
       - target: RecapModels
       - target: RecapASR
       - target: RecapLLM
       - target: RecapPersistence
       - target: RecapUI
+      # 控制中心/锁屏/Action Button 控件 extension（plan 049 Wave B）
+      - target: RecapControls
     scheme:
       storeKitConfiguration: App/Recap.storekit
       testTargets:
@@ -202,6 +243,38 @@ targets:
         - RecapLLMTests
         - RecapASRTests
         - RecapUITests
+
+  # ─────────────────────────────────────────────
+  # Controls：系统控件 extension（控制中心/锁屏/Action Button，plan 049）
+  # ─────────────────────────────────────────────
+  RecapControls:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Controls
+        excludes:
+          - "Info.plist"
+      # intent 须双 target 编译：Control 的 action 类型要在 extension 内可解析，
+      # 只编译进 extension 时 openAppWhenRun 失效（社区验证坑，见 plans/049 Wave B.3）。
+      - path: App/Intents/StartRecordingIntent.swift
+    dependencies:
+      # RecapDeepLink（深链枚举）在 RecapModels，两 target 共享同一静态桥
+      - target: RecapModels
+    info:
+      path: Controls/Info.plist
+      properties:
+        CFBundleDisplayName: 纪要控件
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.liuyong.recap.controls
+        PRODUCT_NAME: RecapControls
+        SKIP_INSTALL: YES
+        # xcodegen target 级写死 CURRENT_PROJECT_VERSION=1 会覆盖 project 级版本号
+        #（ASC 90057 坑，见各 framework 同款注释）——显式继承。
+        CURRENT_PROJECT_VERSION: "$(inherited)"
+        MARKETING_VERSION: "$(inherited)"
 
   # ─────────────────────────────────────────────
   # Tests

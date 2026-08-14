@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cloud:
+    name: Cloud gateway (tsc + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+
+  ios:
+    name: iOS build + unit tests
+    runs-on: macos-latest
+    env:
+      # 部署目标 iOS 26；runner 默认装最新 Xcode（含 iOS 26 SDK）。设备名可在此处覆盖。
+      TEST_DESTINATION: platform=iOS Simulator,name=iPhone 16 Pro
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest
+      - name: Show Xcode & SDK
+        run: |
+          xcodebuild -version
+          xcrun simctl list devices available | head -20
+      - name: Build (simulator)
+        run: |
+          xcodebuild build \
+            -project RecapApp/RecapApp.xcodeproj \
+            -scheme RecapApp \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Run unit tests (393 cases: Models/LLM/ASR/UI)
+        run: |
+          xcodebuild test \
+            -project RecapApp/RecapApp.xcodeproj \
+            -scheme RecapApp \
+            -destination "$TEST_DESTINATION" \
+            CODE_SIGNING_ALLOWED=NO

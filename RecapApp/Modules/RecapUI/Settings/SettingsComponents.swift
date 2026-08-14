@@ -491,6 +491,8 @@ struct SettingsPreloadCard: View {
     var errorMessage: String? = nil
     let action: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -498,6 +500,7 @@ struct SettingsPreloadCard: View {
                     Image(systemName: currentIcon)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(Color.recapInk)
+                        .contentTransition(.symbolEffect(.replace))
                     VStack(alignment: .leading, spacing: 4) {
                         Text(currentTitle)
                             .font(.recapHeading)
@@ -534,6 +537,8 @@ struct SettingsPreloadCard: View {
                 RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
             )
+            // 状态驱动：图标/标题/进度条随 idle→preparing→ready 平滑替换（recapValueSwap 无位移）
+            .animation(reduceMotion ? nil : .recapValueSwap, value: state)
         }
         .buttonStyle(SettingsPressStyle())
         .disabled(state == .preparing)

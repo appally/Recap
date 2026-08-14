@@ -53,15 +53,14 @@ public struct MeetingNoteView: View {
     // 声纹「标记我」（Phase 3）：跨会议识别用户本人
     @State private var showVoiceprintConsent = false
     @State private var pendingMeVoiceprintId: String?
+    /// 说话人纠错 sheet（plan 047）：长按转写行说话人名弹出。
+    @State private var pendingSpeakerCorrection: Speaker?
     @AppStorage("recap.voiceprint.meId") private var meVoiceprintId: String = ""
     // 「发言复盘」picker：多人未标注时让用户指认自己（transient 标签驱动；可选持久 enroll）。
     @State private var showSpeakerPicker = false
     @State private var pendingSpeakerPickSkill: AgentSkill?
     /// 手写画布当前笔画（真相源在父 View，modal 关闭/重开不丢笔画）。
     @State private var liveDrawing: PKDrawing = PKDrawing()
-    /// 会中手写预览：停笔 1.5s 后异步识别，画布上方渐进出文字（不落库）。
-    @State private var liveRecognizedPreview: String = ""
-    @State private var liveRecognizeTask: Task<Void, Never>?
     /// 会中手写全屏画布（tap 动作坞手写钮打开；PKToolPicker 在其内部浮起，不挡主界面）。
     @State private var showLiveHandwriting = false
     /// 会后「手写」tab 续写编辑器。
@@ -267,6 +266,31 @@ public struct MeetingNoteView: View {
             )
             .presentationDetents([.large])
         }
+        .sheet(item: $pendingSpeakerCorrection) { speaker in
+            SpeakerDetailSheet(
+                speaker: speaker,
+                allSpeakers: meeting.speakers,
+                meeting: meeting,
+                session: session,
+                onAskRecap: { name in
+                    // plan 051：dismiss sheet 后带 prefill 打开对话窗，autoSendInitial 自动发问；
+                    // 模型经 search_meetings(名字) → get_meeting_transcript 完成跨会检索
+                    // （rankerFields 已含 speaker 维度）。
+                    openAgent(prefill: "上次和「\(name)」聊了什么？TA 当时答应过什么、还有哪些遗留问题没有解决？")
+                }
+            )
+        }
+        .sheet(item: $exportPayload) { payload in
+            ExportActivitySheet(url: payload.url)
+        }
+        .alert("导出失败", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(exportError ?? "")
+        }
         .sheet(isPresented: $showVoiceprintConsent) {
             VoiceprintConsentSheet {
                 VoiceprintConsent.granted = true
@@ -356,6 +380,7 @@ public struct MeetingNoteView: View {
             }
             if meeting.phase == .processing || session.phase == .processing {
                 session.resumeOrRecoverProcessing(
+                    clearDraftTodos: clearDraftTodos,
                     persistTodos: persistTodos,
                     persistSummary: persistSummary
                 )
@@ -386,9 +411,13 @@ public struct MeetingNoteView: View {
             case .background:
                 // #6a：后台取消会后 CoreML 重负载（ANE 后台可能被系统拒）；LLM 纪要管线由自身 bg task 保护
                 session.cancelPostMeetingCompute()
+                // LIVE：先落 checkpoint 再停麦，防进程被杀丢字幕/丢时长；回前台自动续录
+                session.pauseForBackgroundIfLive()
             case .active:
                 // #6a：回前台重排被后台取消的会后任务（幂等：已完成/在跑均跳过）
                 session.reschedulePostMeetingCompute()
+                // LIVE：切后台时在录音则自动恢复（等同来电中断恢复）
+                session.resumeFromForegroundIfLive()
             default:
                 break
             }
@@ -407,11 +436,11 @@ public struct MeetingNoteView: View {
         MinutesPipelineSmoke.canRunMinutesPipeline ? "整理中" : "已保存"
     }
 
-    /// 仅无 Key 时给次行；有 Key 时不说话，留给动效。免费档始终显示剩余次数。
+    /// 仅无可用模型/额度耗尽时给次行引导；正常处理时保持纯净专注，留给阶段动效。
     private var processHeroSubtitle: String? {
         if AIServiceMode.current == .freeTrial {
             return MinutesPipelineSmoke.canRunMinutesPipeline
-                ? "免费试用 · 本月剩 \(FreeTrialQuota.remainingThisMonth) 次"
+                ? nil
                 : "免费额度已用完，升级 Pro 或解锁自备密钥"
         }
         return MinutesPipelineSmoke.canRunMinutesPipeline
@@ -493,7 +522,7 @@ public struct MeetingNoteView: View {
             // 全宽声波带：屏内唯一声波，视觉上连接左状态与右控制组
             PlaudLiveWaveformVisualizer(
                 isPaused: session.isLivePaused,
-                audioPower: session.liveAudioPower,
+                bands: session.liveAudioBands,
                 isCompact: true
             )
 
@@ -601,13 +630,106 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// 分享：整篇纪要 Markdown。仅分享可见时出现，永远栖于胶囊内 → 裸图标（玻璃由外层胶囊提供）。
+    /// 分享/导出（plan 048）：总结 Tab → 复制 / .md / PDF / 长图；转写 Tab → 逐字稿 .md / SRT。
+    /// 仅分享可见时出现，永远栖于胶囊内 → 裸图标（玻璃由外层胶囊提供）。
     private var reviewShareAction: some View {
-        ShareLink(item: currentNoteMarkdown, subject: Text(meeting.title)) {
+        Menu {
+            switch reviewTab {
+            case .summary, .note:
+                Button {
+                    UIPasteboard.general.string = currentNoteMarkdown
+                    Haptics.notify(.success)
+                } label: {
+                    Label("复制 Markdown", systemImage: "doc.on.doc")
+                }
+                Button { export(.markdown) } label: {
+                    Label("导出 Markdown（.md）", systemImage: "doc.plaintext")
+                }
+                Button { export(.pdf) } label: {
+                    Label("导出 PDF", systemImage: "doc.richtext")
+                }
+                Button { export(.longImage) } label: {
+                    Label("导出长图", systemImage: "photo")
+                }
+            case .transcript:
+                Button { export(.transcriptMarkdown) } label: {
+                    Label("导出逐字稿（.md）", systemImage: "doc.plaintext")
+                }
+                Button { export(.srt) } label: {
+                    Label("导出字幕（.srt）", systemImage: "captions.bubble")
+                }
+            case .handwriting:
+                // 手写画布是图形交付物，文本导出无意义；维持隐藏（plan 048 决策）
+                EmptyView()
+            }
+        } label: {
             RecapToolbarIconImage(RecapSymbol.share)
         }
         .buttonStyle(RecapPressStyle())
-        .accessibilityLabel("分享")
+        .accessibilityLabel("分享或导出")
+    }
+
+    /// 导出格式（plan 048）。
+    private enum ExportKind {
+        case markdown, pdf, longImage
+        case transcriptMarkdown, srt
+    }
+
+    /// 导出产物（sheet(item:) 载荷；临时文件经系统分享面板送出）。
+    private struct ExportPayload: Identifiable {
+        let id = UUID()
+        let url: URL
+    }
+
+    @State private var exportPayload: ExportPayload?
+    @State private var exportError: String?
+
+    private func export(_ kind: ExportKind) {
+        let title = meeting.title
+        do {
+            let url: URL
+            switch kind {
+            case .markdown:
+                url = try MeetingExportComposer.writeTemporary(currentNoteMarkdown, fileName: "\(title).md")
+            case .transcriptMarkdown:
+                let polishedById = Dictionary(
+                    uniqueKeysWithValues: meeting.polishedSegments.map { ($0.id, $0.text) }
+                )
+                let content = MeetingExportComposer.transcriptMarkdown(
+                    segments: meeting.segments,
+                    speakers: meeting.speakers,
+                    polishedById: polishedById
+                )
+                url = try MeetingExportComposer.writeTemporary(content, fileName: "\(title)·逐字稿.md")
+            case .srt:
+                let content = MeetingExportComposer.srtContent(
+                    segments: meeting.segments,
+                    speakers: meeting.speakers
+                )
+                url = try MeetingExportComposer.writeTemporary(content, fileName: "\(title).srt")
+            case .pdf:
+                let data = MeetingExportRenderers.renderPDF(
+                    markdown: currentNoteMarkdown,
+                    title: title,
+                    dateText: meeting.startedAt.formatted(.dateTime.year().month().day())
+                )
+                url = try MeetingExportComposer.writeTemporary(data, fileName: "\(title).pdf")
+            case .longImage:
+                let image = MeetingExportRenderers.renderLongImage(
+                    markdown: currentNoteMarkdown,
+                    title: title,
+                    dateText: meeting.startedAt.formatted(.dateTime.year().month().day())
+                )
+                guard let data = image.pngData() else {
+                    throw CocoaError(.fileWriteUnknown)
+                }
+                url = try MeetingExportComposer.writeTemporary(data, fileName: "\(title).png")
+            }
+            Haptics.notify(.success)
+            exportPayload = ExportPayload(url: url)
+        } catch {
+            exportError = "导出失败：\(error.localizedDescription)"
+        }
     }
 
     /// 顶栏·暂停/继续：Transport 胶囊左段。录音态被动、声波已承担「录音中」信号，
@@ -732,12 +854,19 @@ public struct MeetingNoteView: View {
     /// drawing 真相源为本 View 的 @State liveDrawing，modal 关闭/重开笔画结构性保留。
     private var liveHandwritingCover: some View {
         VStack(spacing: 0) {
-            // 顶部栏：标题居左，撤销 + 完成居右（操作区）；撤销不独居左上，免被误认为「返回」。
+            // 顶部栏：左 返回（存盘+关闭），右 撤销——对齐会后编辑器的 xmark + 撤销 视觉语言。
             HStack(spacing: Spacing.sm) {
-                Text("手写")
-                    .font(.recapBodyS.weight(.medium))
-                    .foregroundStyle(Color.recapTea)
-                    .lineLimit(1)
+                Button {
+                    Haptics.impact(.light)
+                    commitLiveHandwriting()
+                    showLiveHandwriting = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.recapInk)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
                 Spacer(minLength: 0)
                 Button {
                     Haptics.impact(.light)
@@ -746,60 +875,22 @@ public struct MeetingNoteView: View {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(Color.recapInk)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
-                Button {
-                    Haptics.impact(.light)
-                    commitLiveHandwriting()
-                    showLiveHandwriting = false
-                } label: {
-                    Text("完成")
-                        .font(.recapHeading)
-                        .foregroundStyle(Color.recapInk)
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, Spacing.xs)
-                }
-                .buttonStyle(RecapPressStyle())
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.lg)
             .padding(.bottom, Spacing.sm)
-
-            if !liveRecognizedPreview.isEmpty {
-                Text(liveRecognizedPreview)
-                    .font(.recapBodyS)
-                    .foregroundStyle(Color.recapTea)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, Spacing.xl)
-                    .padding(.bottom, Spacing.xs)
-                    .transition(.opacity)
-            }
 
             HandwritingCanvasView(drawing: $liveDrawing, controller: liveHandwritingController)
                 .background(Color.recapPaper)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.recapPaper)
-        .animation(.recapSoft, value: liveRecognizedPreview.isEmpty)
-        .onChange(of: liveDrawing) { _, newDrawing in
-            scheduleLiveHandwritingPreview(newDrawing)
-        }
     }
 
-    /// 停笔 debounce 预览识别：每次 drawing 变化重置 1.5s 计时，停笔后异步识别填预览。
-    private func scheduleLiveHandwritingPreview(_ drawing: PKDrawing) {
-        liveRecognizeTask?.cancel()
-        guard !drawing.strokes.isEmpty else {
-            liveRecognizedPreview = ""
-            return
-        }
-        liveRecognizeTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            if Task.isCancelled { return }
-            liveRecognizedPreview = await HandwritingRecognitionService.shared.previewText(for: drawing)
-        }
-    }
-
-    /// 保存当前手写：1:1 upsert——取本场已有 HandwritingNote 或新建，覆盖落盘 + 重识别，然后清空画布。
+    /// 保存当前手写：1:1 upsert——取本场已有 HandwritingNote 或新建，覆盖落盘，存盘后异步重识别，然后清空画布。
     private func commitLiveHandwriting() {
         guard !liveDrawing.strokes.isEmpty else { return }
         // 取或建：一场会议仅一条。
@@ -814,21 +905,11 @@ public struct MeetingNoteView: View {
         // 落盘（覆盖写；失败则路径留空，识别仍可走内存 drawing）。
         note.drawingRelativePath = (try? HandwritingStore.save(
             liveDrawing, meetingId: meeting.id)) ?? ""
-        // 若已有 debounce 预览结果，直接用（省一次 OCR）；否则置空后强制重识别（drawing 已变）。
-        let preview = liveRecognizedPreview
-        if !preview.isEmpty {
-            note.recognizedText = String(preview.prefix(2_000))
-            note.title = preview.split(separator: "\n").first.map(String.init)
-        } else {
-            note.recognizedText = nil
-            note.title = nil
-        }
+        // drawing 已变，置空后强制重识别（与会后 commitReviewHandwriting 一致；识别异步回填）。
+        note.recognizedText = nil
+        note.title = nil
         try? modelContext.save()
-        if note.recognizedText == nil {
-            HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: liveDrawing)
-        }
-        liveRecognizeTask?.cancel()
-        liveRecognizedPreview = ""
+        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: liveDrawing)
         liveDrawing = PKDrawing()   // 清空；下次打开从磁盘 load 续写
     }
 
@@ -846,6 +927,7 @@ public struct MeetingNoteView: View {
                             AgentPresenceBar(todoCount: session.todoCount)
                                 .padding(.horizontal, Spacing.xl)
                                 .padding(.bottom, Spacing.md)
+                                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
                         }
 
                         // 声波已上移至顶栏 Transport Bar（屏内唯一一条，避免双声波抢戏）
@@ -918,6 +1000,8 @@ public struct MeetingNoteView: View {
             .animation(reduceMotion ? nil : .recapSonicMorph, value: session.blocks.isEmpty)
             // 方言提示出现/消失：顶部占位高度变化，字幕随之平滑下推/回弹
             .animation(reduceMotion ? nil : .recapNotice, value: session.liveDialectSuspected)
+            // 待办在场条出现/消失：随暂停/恢复滑入淡出（顶部占位高度同步变化）
+            .animation(reduceMotion ? nil : .recapNotice, value: session.isLivePaused)
         }
     }
 
@@ -953,9 +1037,9 @@ public struct MeetingNoteView: View {
 
     /// REVIEW 顶栏 SafeArea + Floating Bar 避让（Color.clear 占位高度），与 customTopBar 实际高度对齐。
     private var reviewTopClear: CGFloat { 60 }
-    /// REVIEW 正文底部留白 = PlaudAskBar(44) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 130。
-    /// 与 liveBottomInset 同源：safeAreaInset 涌现高度的反向工程补偿，改底栏高度须同步改这里。
-    private var reviewBottomPadding: CGFloat { 130 }
+    /// REVIEW 正文底部留白 = PlaudAskBar(44) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 140。
+    /// 确保滚动到最底部时所有文字与待办完全露出，不被悬浮输入栏遮挡。
+    private var reviewBottomPadding: CGFloat { 140 }
 
     private func scrollLiveToLatest(proxy: ScrollViewProxy) {
         guard session.blocks.last != nil else { return }
@@ -1444,13 +1528,10 @@ public struct MeetingNoteView: View {
     /// 单层 Tab 栏：转写 / 手写 / 总结 / 笔记∨。复用「H1 + 墨色下划线」视觉语言，
     /// sticky 挂在正文顶部，扁平化原「来源/笔记」二分（去掉一层认知负担）。
     private var reviewTabBar: some View {
-        // 横向滚动：笔记标题可长（自定义模板名）、Tab 数随笔记增长，固定 HStack 在窄屏会挤压换行。
-        // 滚动 + lineLimit(1) 保证单行不折、溢出可滑；选中 Tab 由 onChange 最小幅度滚入视野
-        // （已可见则不动，遵循克制不抖）。每条模板笔记 = 一个独立平级 Tab（不再下拉收纳）；
-        // 生成中草稿单独一个流式 Tab；调研草稿/进行中任务仅在存在时收进尾部小菜单；「＋ 笔记」常驻末位。
+        // 横向滚动流体分段胶囊：每条模板笔记为一个独立平级 Tab
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 24) {
+                HStack(spacing: 8) {
                     reviewTabButton("转写", .transcript).id(ReviewTab.transcript)
                     reviewTabButton("手写", .handwriting).id(ReviewTab.handwriting)
                     reviewTabButton("总结", .summary).id(ReviewTab.summary)
@@ -1475,8 +1556,8 @@ public struct MeetingNoteView: View {
                     reviewNewNoteButton
                 }
                 .padding(.horizontal, Spacing.xl)
-                .padding(.top, Spacing.sm)
-                .padding(.bottom, Spacing.md)
+                .padding(.top, Spacing.xs)
+                .padding(.bottom, Spacing.sm)
             }
             .onChange(of: reviewTab) { _, tab in
                 withAnimation(.recapSoft) { proxy.scrollTo(tab) }
@@ -1565,36 +1646,39 @@ public struct MeetingNoteView: View {
         .accessibilityLabel("新建笔记")
     }
 
-    /// Tab 标签：标题 + 可选下拉箭头，底部 24×2.5 墨色下划线指示选中态。
-    /// 下划线用 matchedGeometryEffect 单指示器滑动：选中态切换时一条线整体滑到新标签，
-    /// 而非旧标签淡出、新标签淡入两条线交叉。固定 24×2.5 占位槽恒定，避免滑动时挤动标签布局。
+    /// Tab 标签：流体磨砂胶囊底板（Fluid Segmented Capsule）。
+    /// 选中态由 matchedGeometryEffect 驱动平滑滑动，辅以细微阴影与单像素微边框。
     @ViewBuilder
     private func tabLabel(_ title: String, isActive: Bool, showChevron: Bool) -> some View {
-        VStack(spacing: 5) {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.recapTitleS.weight(isActive ? .semibold : .medium))
-                    .tracking(Tracking.titleS)
+        HStack(spacing: 4) {
+            Text(title)
+                .font(.recapBodyS.weight(isActive ? .semibold : .medium))
+                .tracking(Tracking.titleS)
+                .foregroundStyle(isActive ? Color.recapInk : Color.recapTea.opacity(0.85))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            if showChevron {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(isActive ? Color.recapInk : Color.recapTea.opacity(0.85))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                if showChevron {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(isActive ? Color.recapInk : Color.recapTea.opacity(0.85))
-                }
             }
-            Rectangle()
-                .fill(Color.clear)
-                .frame(width: 20, height: 2)
-                .overlay {
-                    if isActive {
-                        Capsule()
-                            .fill(Color.recapInk)
-                            .frame(width: 20, height: 2)
-                            .matchedGeometryEffect(id: "reviewTabIndicator", in: reviewTabNS)
-                    }
-                }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background {
+            if isActive {
+                Capsule(style: .continuous)
+                    .fill(Color.recapPaper)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.6)
+                    )
+                    .shadow(color: Color.recapShadow.opacity(0.8), radius: 4, x: 0, y: 1.5)
+                    .matchedGeometryEffect(id: "reviewTabIndicator", in: reviewTabNS)
+            } else {
+                Capsule(style: .continuous)
+                    .fill(Color.clear)
+            }
         }
     }
 
@@ -1719,12 +1803,13 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// 分享钮仅在内容可分享的 Tab 出现（总结/笔记）。转写/手写无对应文本分享路径，
-    /// 隐藏以免「点了分享却静默给出总结」的误导（P0：消除分享路由的不对称）。
+    /// 分享钮在总结/笔记/转写 Tab 出现。转写 Tab 自 plan 048 起给出真实交付物
+    /// （带说话人逐字稿 .md / SRT 字幕），消除了 001 时代「点了分享却静默给出总结」的
+    /// 不对称——那条隐藏规则随之解除（plans/048 记录了推翻理由）。手写画布是图形，维持隐藏。
     private var currentTabSupportsShare: Bool {
         switch reviewTab {
-        case .summary, .note: return true
-        case .transcript, .handwriting: return false
+        case .summary, .note, .transcript: return true
+        case .handwriting: return false
         }
     }
 
@@ -2371,7 +2456,8 @@ public struct MeetingNoteView: View {
                         onSeek: hasLocalAudio
                             ? { openAudioPlayer(seekTo: blockStartSeconds(block), autoplay: true) }
                             : nil,
-                        onMarkMe: { handleMarkMe(block) }
+                        onMarkMe: { handleMarkMe(block) },
+                        onSpeakerInfo: { pendingSpeakerCorrection = block.speaker }
                     )
                     .id(row.id)
                 case .moment(let moment):
@@ -2491,8 +2577,14 @@ public struct MeetingNoteView: View {
     /// 打开 AI 对话窗：底栏胶囊淡出、对话窗从底部 spring 滑起、compose 聚焦键盘只升一次。
     /// prefill 恒空 → AgentInvokeSheet 落到 focus 分支，键盘不中断。
     private func openAgent() {
+        openAgent(prefill: "")
+    }
+
+    /// 带预填变体（plan 051）：非空 prefill → AgentInvokeSheet `autoSendInitial` 自动发一轮
+    /// （人物视图「上次和 TA 聊了什么」等带上下文入口）。
+    private func openAgent(prefill: String) {
         Haptics.impact(.soft)
-        agentPrefill = ""
+        agentPrefill = prefill
         // 先以空快照翻转 showAgent：sheet 用空 context 轻量构造，spring 首帧得以正常提交。
         agentTranscript = ""
         agentSegments = []
@@ -2890,7 +2982,16 @@ public struct MeetingNoteView: View {
     }
 
     private func persistTodos(_ items: [TodoListPayload.Item]) {
+        // 幂等双保险：跨管线 run 去重（崩溃后重跑 / 双 session 竞态）——
+        // 同 (task, owner) 的 draft 待办已存在则跳过，避免重复插入。
+        let existing = Set(
+            meeting.actionItems
+                .filter { $0.status == .draft }
+                .map { "\($0.task)|\($0.owner ?? "")" }
+        )
         for item in items {
+            let key = "\(item.task)|\(item.owner ?? "")"
+            if existing.contains(key) { continue }
             let due = item.due_text.flatMap { DueTextParser.parse($0) }
             let anchored = item.start_seconds
                 ?? TranscriptAnchor.startSeconds(
@@ -3329,29 +3430,23 @@ private struct TransportStatusDot: View {
 
 private struct PlaudLiveWaveformVisualizer: View {
     let isPaused: Bool
-    let audioPower: Float
+    let bands: AudioBands
     var isCompact: Bool = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 录音↔暂停 平滑插值（0 录音中 · 1 已暂停）。始终保持朱砂渐变，靠幅度下沉 + 整体淡出表达暂停，
-    /// 不在颜色间硬切（避免周期性跳变）。
+    /// 录音↔暂停 平滑插值（0 录音中 · 1 已暂停）。幅度下沉 + 整体淡出，颜色不硬切。
     @State private var pausedBlend = 0.0
+
+    private var barCount: Int { isCompact ? 28 : 36 }
+    private var maxAmp: CGFloat { isCompact ? 10 : 44 }
+    private var base: CGFloat { isCompact ? 3 : 4 }
+    private var cap: CGFloat { isCompact ? 16 : 48 }
 
     var body: some View {
         VStack(spacing: isCompact ? Spacing.xs : Spacing.md) {
             TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                HStack(alignment: .center, spacing: isCompact ? 3 : 3.5) {
-                    ForEach(0..<(isCompact ? 28 : 36), id: \.self) { i in
-                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color.recapCinnabar, Color(hex: 0xE15A4E)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .frame(width: 3, height: barHeight(for: i, time: t))
-                    }
+                let t = reduceMotion ? 0.0 : context.date.timeIntervalSinceReferenceDate
+                Canvas { ctx, size in
+                    drawBars(ctx: ctx, size: size, t: t)
                 }
             }
             .frame(height: isCompact ? 18 : 52)
@@ -3378,31 +3473,65 @@ private struct PlaudLiveWaveformVisualizer: View {
         }
     }
 
-    /// 单根柱高：钟形包络 × (时间波动 · 音量增益) + 基底；暂停时向基底平滑下沉（pausedBlend 插值）。
-    private func barHeight(for index: Int, time t: Double) -> CGFloat {
-        let count = isCompact ? 28.0 : 36.0
-        let center = (count - 1) / 2
-        let centerDist = abs(Double(index) - center) / center
+    // MARK: - 绘制（Canvas 三层叠加：bloom 宽淡 + halo 柔边 + 亮芯渐变，单色朱砂「发射光」）
+    private func drawBars(ctx: GraphicsContext, size: CGSize, t: Double) {
+        let count = barCount
+        let gap: CGFloat = isCompact ? 3 : 3.5
+        let barWidth: CGFloat = 3
+        let totalW = CGFloat(count) * barWidth + CGFloat(max(0, count - 1)) * gap
+        let originX = (size.width - totalW) * 0.5
+        let midY = size.height * 0.5
+        let cinnabar = Color.recapCinnabar
+        let grad = Gradient(colors: [Color(hex: 0xF27464), cinnabar])
+
+        for i in 0..<count {
+            let h = barHeight(for: i, count: count, t: t)
+            let cx = originX + CGFloat(i) * (barWidth + gap) + barWidth * 0.5
+            let topY = midY - h * 0.5
+
+            // 1. bloom：宽淡柱，铺出发射光软尾（相邻柱 bloom 交叠 → 融成连续光带）。
+            let bloomW = barWidth * 3.2
+            let bloomRect = CGRect(x: cx - bloomW * 0.5, y: midY - max(h, barWidth) * 0.5,
+                                   width: bloomW, height: max(h, barWidth))
+            ctx.fill(Path(roundedRect: bloomRect, cornerRadius: bloomW * 0.5),
+                     with: .color(cinnabar.opacity(0.18)))
+            // 2. halo：紧贴柱体的柔边，过渡芯与辉光。
+            let haloW = barWidth * 1.7
+            let haloRect = CGRect(x: cx - haloW * 0.5, y: topY, width: haloW, height: h)
+            ctx.fill(Path(roundedRect: haloRect, cornerRadius: haloW * 0.5),
+                     with: .color(cinnabar.opacity(0.5)))
+            // 3. 亮芯：竖向亮→深渐变，光的内核。
+            let coreRect = CGRect(x: cx - barWidth * 0.5, y: topY, width: barWidth, height: h)
+            ctx.fill(Path(roundedRect: coreRect, cornerRadius: 1.5),
+                     with: .linearGradient(grad,
+                                           startPoint: CGPoint(x: cx, y: topY),
+                                           endPoint: CGPoint(x: cx, y: topY + h)))
+        }
+    }
+
+    /// 单根柱高：钟形包络 × (主体波动 + 高频 shimmer) + 基底。
+    /// 主体由 low+mid 驱动（元音让中段鼓起），shimmer 由 high 驱动（擦音让边缘起细纹），
+    /// 暂停向基底平滑下沉（pausedBlend 插值）。reduceMotion 走静态钟形。
+    private func barHeight(for index: Int, count: Int, t: Double) -> CGFloat {
+        let center = Double(count - 1) / 2
+        let centerDist = abs(Double(index) - center) / max(center, 1)
         let bellFactor = cos(centerDist * .pi * 0.42)
-        let maxAmp: CGFloat = isCompact ? 10 : 44
-        let base: CGFloat = isCompact ? 3 : 4
-        let cap: CGFloat = isCompact ? 16 : 48
 
         let activeClamped: CGFloat
         if reduceMotion {                                            // 静态钟形，无时间动画
             activeClamped = min(cap, max(base, bellFactor * maxAmp * 0.45 + base))
         } else {
-            // 相位错开：每根柱独立呼吸，读起来像声场起伏而非整体齐跳
             let phase = t * 2.6 + Double(index) * 0.45
-            let wave = 0.5 + 0.5 * sin(phase)                        // 0~1
-            // 音量增益：非线性放大低位 power（人声常处 0.05~0.4），安静保底噪呼吸、说话显著放大
-            let raw = max(0, min(1, Double(audioPower)))
-            let power = pow(raw, 0.55)
-            let gain = isCompact ? (0.4 + 0.6 * power) : (0.28 + 0.72 * power)
-            let h = CGFloat(wave) * CGFloat(gain) * bellFactor * maxAmp + base
-            activeClamped = min(cap, max(base, h))
+            let body = 0.5 + 0.5 * sin(phase)                        // 0~1
+            // 主体增益：low/mid 非线性放大（人声常处低位），安静保底呼吸、元音显著鼓起
+            let lm = pow(Double(bands.low) * 0.6 + Double(bands.mid) * 0.4, 0.8)
+            let bodyGain = isCompact ? (0.4 + 0.6 * lm) : (0.28 + 0.72 * lm)
+            // 高频细纹：更快相位、更小幅度，high band 越强越显（擦音边缘起毛），仍乘 bell 不外溢
+            let shimmerPhase = t * 6.5 + Double(index) * 1.7
+            let shimmer = (0.5 + 0.5 * sin(shimmerPhase)) * Double(bands.high) * 0.28
+            let h = (body * bodyGain + shimmer) * bellFactor * Double(maxAmp) + Double(base)
+            activeClamped = min(cap, max(base, CGFloat(h)))
         }
-        // 暂停时向基底下沉；录音时 pausedBlend=0 原样返回
         return activeClamped + (base - activeClamped) * CGFloat(pausedBlend)
     }
 }

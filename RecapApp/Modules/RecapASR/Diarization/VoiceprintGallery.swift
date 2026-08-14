@@ -58,6 +58,55 @@ public final class VoiceprintGallery: @unchecked Sendable {
         save([speaker])
     }
 
+    // MARK: - 纠错写回（plan 047：手动纠错一次 → 跨会议终身生效）
+
+    /// 画廊说话人查询（纠错 UI 展示现名用）。
+    public func speaker(id voiceprintId: String) -> Speaker? {
+        lock.lock(); defer { lock.unlock() }
+        return speakersStorage.first { $0.id == voiceprintId }
+    }
+
+    /// 重命名画廊说话人（纠错写回）。不置 isPermanent——命名是纠错，「我」是身份标注，语义不同。
+    public func rename(voiceprintId: String, name: String) {
+        lock.lock()
+        if let i = speakersStorage.firstIndex(where: { $0.id == voiceprintId }) {
+            speakersStorage[i].name = name
+        }
+        let snapshot = speakersStorage
+        lock.unlock()
+        persist(snapshot)
+    }
+
+    /// 合并两个画廊说话人（「这两位其实是同一个人」的终身纠错）：source 并入 target
+    /// （FluidAudio `mergeWith` 吸收 embedding/时长，保留最近 50 条 raw），source 移出画廊。
+    /// 下场会议 `initializeKnownSpeakers` 载入快照后，合并身份即跨会议生效。
+    public func merge(sourceId: String, intoId: String, keepName: String? = nil) {
+        lock.lock()
+        guard let s = speakersStorage.firstIndex(where: { $0.id == sourceId }),
+              let t = speakersStorage.firstIndex(where: { $0.id == intoId }),
+              s != t else {
+            lock.unlock()
+            return
+        }
+        var target = speakersStorage[t]
+        target.mergeWith(speakersStorage[s], keepName: keepName)
+        speakersStorage[t] = target
+        // remove(at:) 前确保 s 仍有效（t != s 已守卫，但索引位移需重算）
+        if let s2 = speakersStorage.firstIndex(where: { $0.id == sourceId }) {
+            speakersStorage.remove(at: s2)
+        }
+        let snapshot = speakersStorage
+        lock.unlock()
+        persist(snapshot)
+    }
+
+    /// 持久化快照（锁外调用；encode 失败静默——与既有 save 族一致）。
+    private func persist(_ snapshot: [Speaker]) {
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
     // MARK: - "标记我"（Phase 3）：把某 voiceprintId 标记为用户本人
 
     private static let meIdKey = "recap.voiceprint.meId"

@@ -60,6 +60,22 @@ public struct PreferencesSettingsView: View {
                     }
                     .buttonStyle(SettingsPressStyle())
                 }
+
+                // plan 049：零摩擦入口引导（纯文案——快捷指令自动化与 Action Button
+                // 的配置在系统设置里，App 内只做指路）。
+                SettingsSection(
+                    title: "快捷开始录音",
+                    footnote: "「开始录音」已加入快捷指令 App，可配置到系统的各个快捷入口："
+                ) {
+                    VStack(alignment: .leading, spacing: Spacing.md) {
+                        Label("控制中心或锁屏：添加「开始录音」控件", systemImage: "slider.horizontal.3")
+                        Label("Action Button：设置 → Action Button → 快捷指令", systemImage: "circle.button.2")
+                        Label("自动化：快捷指令 App → 自动化（如「到公司时开始录音」）", systemImage: "clock.arrow.circlepath")
+                    }
+                    .font(.recapBodyS)
+                    .foregroundStyle(Color.recapTea)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.lg)

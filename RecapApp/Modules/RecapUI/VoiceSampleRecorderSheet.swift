@@ -46,8 +46,8 @@ final class VoiceSampleEnroller: ObservableObject {
             phase = .failed("声纹模型准备失败：\(error.localizedDescription)")
             return
         }
-        await recorder.setOnAudioPower { [weak self] level in
-            Task { @MainActor in self?.audioLevel = level }
+        await recorder.setOnAudioBands { [weak self] bands in
+            Task { @MainActor in self?.audioLevel = bands.level }
         }
         let stream: AsyncStream<[Float]>
         do {

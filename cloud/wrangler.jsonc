@@ -19,11 +19,19 @@
   "durable_objects": {
     "bindings": [{ "name": "QUOTA", "class_name": "QuotaDO" }]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QuotaDO"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["QuotaDO"] }],
+
+  // Workers Logs(免费内置,保留 3 天):prove/issue/quota 路径的 console.log 由此可查,
+  // 上线后排障不再盲查。head_sampling_rate=1 记录全部请求(量小,成本为零)。
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 
   // Secrets(部署后注入,wrangler secret put):
-  //   DASHSCOPE_API_KEY     阿里主 key(RAM 最小权限子账号,白名单须含 ASR_MODEL 用到的模型
-  //                        fun-asr-realtime + paraformer-realtime-v2 + 指定 qwen;漏开则 st-token 403)
+  //   DASHSCOPE_API_KEY     阿里主 key(RAM 最小权限子账号)。⚠️ 必须在百炼控制台配「模型访问限制」白名单:
+  //                        fun-asr-realtime + paraformer-realtime-v2 + qwen-plus(漏开则 st-token 403;
+  //                        多开则免费用户可持 ASR 桶 token 调高价模型——临时 token 继承 key 全部权限)。
+  //                        部署后跑 scripts/verify-gateway-asr.mjs(含负向探针)+ verify-sts-llm.mjs 双确认。
+  //   DASHSCOPE_ASR_API_KEY (可选加固)ASR 专用子账号 key,白名单仅开两个 ASR 模型;
+  //                        配置后 ASR 桶与 LLM 桶 token 物理隔离,主 key 白名单误配也刷不了 LLM。
   //   APPLE_PRIVATE_KEY / APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_BUNDLE_ID   Phase 2 真实验证
   //
   // Phase 2(用户量起来):加 Durable Object 做 per-user 配额(需 Workers Paid plan $5/月),

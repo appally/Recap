@@ -39,6 +39,8 @@ public actor FluidAudioEngine: AsrEngine {
         do {
             let precision: SenseVoiceEncoderPrecision = preferInt8 ? .int8 : .fp16
             engine = try await SenseVoiceManager.load(precision: precision)
+            // 模型已落盘（可能现场下载/命中缓存）：排除 iCloud 备份（447MB 级，可重下）。
+            BackupExclusion.excludeFluidAudioModels()
         } catch {
             // 下载失败 / 网络问题 / 资产未就绪：统一成可引导用户的文案
             throw FluidAudioEngineError.assetDownloadFailed(error.localizedDescription)
@@ -163,8 +165,10 @@ public enum FluidAudioBootstrap {
 
     /// 在 App 启动时调用一次：把 FluidAudio 模型下载源指向国内镜像（HuggingFace 直连不稳）。
     /// SpeakerKit 无全局 registry，改为在构造 `PyannoteConfig` 时直接传 `mirrorBaseURL`。
+    /// 顺带对已存在的模型目录做 iCloud 备份排除（下载完成后还会再排一次，见 preloadASRModels）。
     public static func configureModelEndpoint() {
         ModelRegistry.baseURL = mirrorBaseURL
+        BackupExclusion.excludeFluidAudioModels()
     }
 
     /// 端侧 ASR 模型（SenseVoice）是否已预下载完成。
@@ -185,6 +189,8 @@ public enum FluidAudioBootstrap {
         _ = try await SenseVoiceManager.load(precision: .fp16) { p in
             progress(p.fractionCompleted, "SenseVoice")
         }
+        // 模型已落盘：排除 iCloud 备份（447MB 级，可重下，见 BackupExclusion）。
+        BackupExclusion.excludeFluidAudioModels()
         modelsPreloaded = true   // SenseVoice 就绪；后续 maybeOnDeviceUpgrade 据此放行自动重转
     }
 }

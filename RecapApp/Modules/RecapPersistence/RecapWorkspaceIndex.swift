@@ -196,7 +196,10 @@ public actor RecapWorkspaceIndex: AgentWorkspaceQuerying {
             decisions: summary?.decisions ?? [],
             openQuestions: summary?.openQuestions ?? [],
             actionTasks: actionTasks,
-            notes: notes
+            notes: notes,
+            // 人物维度（plan 051）：只进已纠错命名的说话人——默认名无身份语义。
+            // search_meetings 与 searchForUI 共用此处，Agent 与 UI 口径自动同步。
+            speakers: meeting.speakers.filter { !$0.isUnnamed }.map(\.name)
         )
     }
 

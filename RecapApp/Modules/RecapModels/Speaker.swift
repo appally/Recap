@@ -21,4 +21,12 @@ public struct Speaker: Identifiable, Hashable, Sendable, Codable {
     public var nameInitial: String {
         String(name.prefix(1))
     }
+
+    /// 是否仍是未纠错的默认名（发言人N/转写占位）——人物视图（plan 051）与检索的
+    /// speaker 维度应忽略：默认名无身份语义，搜「发言人1」没有用户意图。
+    public var isUnnamed: Bool {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        if n.isEmpty || n == "转写" || n == "?" { return true }
+        return n.hasPrefix("发言人")
+    }
 }

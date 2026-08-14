@@ -13,7 +13,7 @@ struct OpenMeetingIntent: AppIntent {
     var meeting: MeetingEntity
 
     func perform() async throws -> some IntentResult {
-        RecapDeepLink.pendingMeetingId = meeting.id
+        RecapDeepLink.pending = .openMeeting(meeting.id)
         return .result()
     }
 }

@@ -21,6 +21,9 @@ public struct PersonalizationSettingsView: View {
 
                 // Section 2: 输出偏好
                 outputPreferenceSection
+
+                // Section 3: 常用词（plan 050）
+                vocabularySection
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.top, Spacing.lg)
@@ -70,6 +73,89 @@ public struct PersonalizationSettingsView: View {
                 placeholder: "希望如何输出？如：简明直接、务必列出待办与截止日期、标注风险与待确认事项。"
             )
         }
+    }
+
+    // MARK: - 常用词（plan 050 Wave A）
+
+    @State private var vocabDraft = ""
+    @State private var vocabWords: [String] = UserVocabulary.words
+
+    /// 常用词（人名/公司/术语）：注入本机转写热词与润色纠错提示，只在本机使用、不上传。
+    private var vocabularySection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("常用词")
+                    .font(.recapEyebrow)
+                    .tracking(Tracking.eyebrow)
+                    .foregroundStyle(Color.recapTea)
+                Text("常被听错的人名、公司、术语。用于本机转写与润色纠错，不会上传。")
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea)
+            }
+
+            HStack(spacing: Spacing.md) {
+                TextField("添加一个词（≤15 字）", text: $vocabDraft)
+                    .textFieldStyle(.plain)
+                    .font(.recapBodyS)
+                    .foregroundStyle(Color.recapInk)
+                    .onSubmit(addVocabWord)
+                Button(action: addVocabWord) {
+                    Image(systemName: RecapSymbol.add)
+                        .font(.recapBody.weight(.medium))
+                        .foregroundStyle(Color.recapInk)
+                }
+                .buttonStyle(RecapPressStyle())
+                .disabled(vocabDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                Color(light: 0xF6F7F8, dark: 0x16191D),
+                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            )
+
+            if !vocabWords.isEmpty {
+                let columns = [GridItem(.adaptive(minimum: 84), spacing: 8)]
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(vocabWords, id: \.self) { word in
+                        HStack(spacing: 4) {
+                            Text(word)
+                                .font(.recapBodyS)
+                                .foregroundStyle(Color.recapInk)
+                                .lineLimit(1)
+                            Button {
+                                UserVocabulary.remove(word)
+                                vocabWords = UserVocabulary.words
+                            } label: {
+                                Image(systemName: RecapSymbol.close)
+                                    .font(.system(size: 9, weight: .medium))
+                                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            Color.recapInk.opacity(0.04),
+                            in: Capsule()
+                        )
+                    }
+                }
+                if vocabWords.count >= UserVocabulary.maxWords {
+                    Text("已达 \(UserVocabulary.maxWords) 词上限。")
+                        .font(.recapMeta)
+                        .foregroundStyle(Color.recapTea.opacity(0.7))
+                }
+            }
+        }
+        .onAppear { vocabWords = UserVocabulary.words }
+    }
+
+    private func addVocabWord() {
+        guard UserVocabulary.add(vocabDraft) else { return }
+        vocabDraft = ""
+        vocabWords = UserVocabulary.words
+        Haptics.notify(.success)
     }
 }
 

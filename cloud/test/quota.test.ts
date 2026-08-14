@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkQuota, MONTH_MS } from '../src/core/quota';
+import { checkQuota, mergeIfSamePeriod, MONTH_MS } from '../src/core/quota';
 
 describe('checkQuota', () => {
   const limit = 108000; // 30h/月
@@ -59,6 +59,43 @@ describe('checkQuota — 免费档固定扣额(FREE_PER_ISSUE=120)', () => {
     const over = checkQuota(state, anonLimit, now, perIssue);
     expect(over.allow).toBe(false);
     expect(over.remainingSeconds).toBe(0);
+  });
+});
+
+describe('mergeIfSamePeriod — 设备桶用量并入 apple 共享桶', () => {
+  const now = 1_700_000_000_000;
+  const currentPeriod = now - (now % MONTH_MS);
+
+  it('同月并入:用量累加', () => {
+    const target = { usedSeconds: 600, periodStart: currentPeriod };
+    const r = mergeIfSamePeriod(target, currentPeriod, 240, now);
+    expect(r.merged).toBe(true);
+    expect(r.next.usedSeconds).toBe(840);
+  });
+
+  it('被并入桶已跨月(periodStart 旧):目标桶用量按当前周期为 0 时仍可并入新量', () => {
+    // 设备桶上月用满、本月还没用过 → 迁移量 0 才合理;此处验证跨月桶迁移量被丢弃
+    const oldPeriod = currentPeriod - MONTH_MS;
+    const target = { usedSeconds: 0, periodStart: currentPeriod };
+    const r = mergeIfSamePeriod(target, oldPeriod, 600, now);
+    expect(r.merged).toBe(false);
+    expect(r.next.usedSeconds).toBe(0);
+  });
+
+  it('目标桶跨月(未重置):先并入到当前周期(0)再累加', () => {
+    // 目标桶 periodStart 还是上月(上月 108000 满) → 并入量应只按当前周期计
+    const oldPeriod = currentPeriod - MONTH_MS;
+    const target = { usedSeconds: 108000, periodStart: oldPeriod };
+    const r = mergeIfSamePeriod(target, currentPeriod, 240, now);
+    expect(r.merged).toBe(true);
+    expect(r.next.usedSeconds).toBe(240);
+  });
+
+  it('并入量为 0:同月并入为幂等 no-op', () => {
+    const target = { usedSeconds: 300, periodStart: currentPeriod };
+    const r = mergeIfSamePeriod(target, currentPeriod, 0, now);
+    expect(r.merged).toBe(true);
+    expect(r.next.usedSeconds).toBe(300);
   });
 });
 

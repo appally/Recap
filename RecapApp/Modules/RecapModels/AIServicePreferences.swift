@@ -400,7 +400,7 @@ public enum AskPreferences {
 // MARK: - 法务 / 支持（App Store 过审必备入口）
 
 public enum RecapLegal {
-    /// 上架前替换为真实托管地址；设置内另有摘要页可供审核查看。
+    /// 已上线托管地址（2026-08-14 验证可达）；设置内另有摘要页可供审核查看。
     public static let privacyURL = URL(string: "https://recap.manymind.chat/privacy")!
     public static let termsURL = URL(string: "https://recap.manymind.chat/terms")!
     public static let supportURL = URL(string: "https://recap.manymind.chat/support")!

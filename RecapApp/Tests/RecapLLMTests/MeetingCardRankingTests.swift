@@ -41,4 +41,29 @@ final class MeetingCardRankingTests: XCTestCase {
         XCTAssertNotNil(score)
         XCTAssertTrue(score!.matchReason.contains("纪要") || score!.matchReason.contains("决策"))
     }
+
+    // MARK: - 人物维度（plan 051）
+
+    func testSpeakerNameHitRecallsMeeting() {
+        // 标题/纪要都没提「王工」，只有说话人名单里命中——人物追问（「上次和王工聊了什么」）
+        // 的召回路径；修复前该会议搜不到（rankerFields 无 speaker 维度）。
+        let score = MeetingCardRanker.score(
+            fields: .init(title: "客户拜访", tldr: "同步了方案进展", speakers: ["王工", "李总"]),
+            tokens: ["王工"]
+        )
+        XCTAssertNotNil(score, "说话人命中应召回会议")
+        XCTAssertEqual(score!.matchReason, "说话人")
+    }
+
+    func testSpeakerWeightMatchesDecisionLevel() {
+        let speakerOnly = MeetingCardRanker.score(
+            fields: .init(title: "客户拜访", speakers: ["王工"]),
+            tokens: ["王工"]
+        )
+        let decisionOnly = MeetingCardRanker.score(
+            fields: .init(title: "评审", decisions: ["王工负责报价"]),
+            tokens: ["王工"]
+        )
+        XCTAssertEqual(speakerOnly?.value, decisionOnly?.value, "人物命中权重 = 决策级（×2）")
+    }
 }

@@ -28,6 +28,19 @@ final class MinutesTaskRegistry {
         entries[meetingID] = nil
     }
 
+    /// 取消前查询：该会议是否有仍在跑的纪要管线。
+    /// `resumeOrRecoverProcessing` 用它防止双管线——旧 session 的管线在飞（视图过渡期仍存活）
+    /// 时重进详情，若再启动一条会双扣 LLM 额度 + 重复待办。返回的 Task 可 `await .value`
+    /// 等待旧管线退出（不阻塞主线程）。
+    func runningTask(for meetingID: UUID) -> Task<Void, Never>? {
+        entries[meetingID]?.task
+    }
+
+    /// 该会议是否有在跑的纪要管线（布尔语义，测试/守卫用）。
+    func isRunning(for meetingID: UUID) -> Bool {
+        entries[meetingID] != nil
+    }
+
     /// 删除会议前调用：协作式取消纪要管线（管线在下一 `Task.isCancelled` 检查点退出，
     /// 并经 catch 兜底不再写回部分结果）。
     func cancel(for meetingID: UUID) {

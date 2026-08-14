@@ -24,14 +24,18 @@ public struct TranscriptPolisher: Sendable {
     }
 
     /// 润色一组分段，返回保段的润色分段（id/时间戳/说话人不变，text 已润色）。
-    public func polish(_ segments: [TranscriptSegment]) async throws -> [TranscriptSegment] {
+    /// - Parameter hints: 本场专名提示（底稿实体/说话人名/用户常用词，plan 050 Wave B）。
+    ///   注入 user 侧编号文本前缀（caching 安全——system 保持静态）。
+    public func polish(_ segments: [TranscriptSegment],
+                       hints: [String] = []) async throws -> [TranscriptSegment] {
         guard !segments.isEmpty else { return [] }
+        let hintBlock = Self.hintBlock(hints)
         // 全局 1-based 编号，跨批唯一，便于解析后映射回 index。
         var polishedByNum: [Int: String] = [:]
         for batch in Self.batches(of: segments, maxChars: batchMaxChars) {
             let numbered = batch.map { "⟦\($0.0 + 1)⟧\($0.1.text)" }.joined(separator: "\n")
             var output = ""
-            for try await delta in self.stream(Self.systemPrompt, numbered) {
+            for try await delta in self.stream(Self.systemPrompt, hintBlock + numbered) {
                 if Task.isCancelled { break }
                 output += delta
             }
@@ -100,9 +104,23 @@ public struct TranscriptPolisher: Sendable {
     3. 对口语化的重复、口误做最小的书面化（如「那个那个」删一词、「就是就是」删一）。
 
     铁律：
-    - 绝不改变语义、绝不增加或删除信息、绝不合并或拆分段落、绝不改写专有名词/数字/人名。
+    - 绝不改变语义、绝不增加或删除信息、绝不合并或拆分段落。
+    - 人名/公司/产品/术语等专有名词与数字保持原样。唯一例外：输入若带【专名提示】词表，
+      与词表明显冲突的同音/形近误识（音近人名、术语拼写/大小写/中英分词错）按词表纠正；
+      词表之外的专有名词与所有数字一律不动。
     - 严格保持段编号；输出格式必须「⟦编号⟧润色」逐段对应，编号与输入完全一致。
     - 某段无需改动，原样输出该段原文。
     - 只输出带编号的段落，不要任何前言、解释、标题或总结。
     """
+
+    /// 【专名提示】user 侧前缀（nil = 无提示词表，请求与旧行为逐字节一致）。
+    /// 词表截 60 词：提示过多会稀释「仅冲突才纠」的指令密度。
+    static func hintBlock(_ hints: [String]) -> String {
+        let cleaned = hints
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return "" }
+        let words = cleaned.prefix(60).joined(separator: "、")
+        return "【专名提示】\(words)\n（仅当原文中专有名词与上表明显冲突时才按表纠正，其余一律保持原样。）\n\n"
+    }
 }

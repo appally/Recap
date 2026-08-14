@@ -32,10 +32,13 @@ struct HandwritingCanvasView: UIViewRepresentable {
         let canvas = PKCanvasView()
         override init(frame: CGRect) {
             super.init(frame: frame)
-            // .anyInput：手指 + Apple Pencil 都能画（会议中可能用手指速记，Pencil 缺电也能写）。
-            // 注：牺牲 .default 的 palm rejection（手掌排斥）—— 能写优先于手掌排斥。
-            // 若确认全程用 Pencil 且要手掌排斥，可改 .default，但要确保用户不会用手指。
+            // 真机 .default：仅 Apple Pencil 落墨，手指只滚/缩放，手掌排斥生效（对齐 Notes）——
+            // 避免手指/手掌误写。模拟器无 Pencil，退回 .anyInput 以便鼠标/触摸测试。
+            #if targetEnvironment(simulator)
             canvas.drawingPolicy = .anyInput
+            #else
+            canvas.drawingPolicy = .default
+            #endif
             canvas.alwaysBounceVertical = false
             canvas.alwaysBounceHorizontal = false
             canvas.translatesAutoresizingMaskIntoConstraints = false

@@ -48,7 +48,7 @@ struct SpeakerPickerSheet: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Image(systemName: "figure.speech")
+            Image(systemName: "person.wave.2")
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(Color.recapCinnabar)
             Text("这场会议里，哪位是你？")

@@ -30,6 +30,8 @@ public struct SpeakerBlockView: View {
     public var onSeek: (() -> Void)?
     /// 「标记为我自己」入口（仅 REVIEW 转写传入）：点说话人名触发，经声纹同意门后登记。
     public var onMarkMe: (() -> Void)?
+    /// 「纠正发言人」入口（仅 REVIEW 转写传入，plan 047）：长按说话人名弹纠错 sheet。
+    public var onSpeakerInfo: (() -> Void)?
 
     public init(
         block: TranscriptBlock,
@@ -38,7 +40,8 @@ public struct SpeakerBlockView: View {
         showLiveMeter: Bool = false,
         isMe: Bool = false,
         onSeek: (() -> Void)? = nil,
-        onMarkMe: (() -> Void)? = nil
+        onMarkMe: (() -> Void)? = nil,
+        onSpeakerInfo: (() -> Void)? = nil
     ) {
         self.block = block
         self.isCurrent = isCurrent
@@ -47,13 +50,14 @@ public struct SpeakerBlockView: View {
         self.isMe = isMe
         self.onSeek = onSeek
         self.onMarkMe = onMarkMe
+        self.onSpeakerInfo = onSpeakerInfo
     }
 
     public var body: some View {
         HStack(alignment: .top, spacing: Spacing.md) {
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                 .fill(railColor)
-                .frame(width: 2)
+                .frame(width: 2.5)
                 .padding(.top, 2)
 
             VStack(alignment: .leading, spacing: 6) {
@@ -61,24 +65,24 @@ public struct SpeakerBlockView: View {
                 polishedLine
             }
         }
-        .padding(.vertical, Spacing.md)
+        .padding(.vertical, Spacing.sm + 2)
         .padding(.trailing, Spacing.xl)
         .padding(.horizontal, isListening ? Spacing.sm : 0)
         .background(
             isListening
-                ? Color.recapInk.opacity(0.06)
+                ? Color.recapInk.opacity(0.04)
                 : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
         )
-        .opacity(block.isFinal ? 1.0 : (showLiveMeter ? 0.92 : 0.62))
+        .opacity(block.isFinal ? 1.0 : (showLiveMeter ? 0.95 : 0.65))
         .animation(.recapSoft, value: block.isFinal)
         .animation(.recapSoft, value: isListening)
         .animation(.recapSoft, value: showLiveMeter)
     }
 
     private var railColor: Color {
-        if isCurrent || showLiveMeter { return Color.recapCinnabar }
-        if isListening { return Color.recapInk }
+        if isCurrent || showLiveMeter { return Color.recapCinnabar.opacity(0.85) }
+        if isListening { return Color.recapInk.opacity(0.5) }
         return Color.clear
     }
 
@@ -105,6 +109,13 @@ public struct SpeakerBlockView: View {
                     .accessibilityHidden(true)
             } else if showsSpeakerIdentity {
                 speakerNameView
+                if block.isOverlapped == true {
+                    // 重叠说话标记（plan 047 Wave C）：极简双人剪影，不加文字噪音
+                    Image(systemName: "person.2")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.recapTea.opacity(0.6))
+                        .accessibilityLabel("此段有两人同时说话")
+                }
             }
             Spacer(minLength: 0)
         }
@@ -112,9 +123,25 @@ public struct SpeakerBlockView: View {
         .accessibilityLabel(headerAccessibilityLabel)
     }
 
-    /// 说话人名：isMe 时显示朱砂「我」；onMarkMe 提供时（REVIEW）可点按标记。
+    /// 说话人名：isMe 时显示朱砂「我」；onMarkMe 提供时（REVIEW）可点按标记；
+    /// onSpeakerInfo 提供时（REVIEW）长按弹「纠正发言人」（重命名/合并/上次见 TA）。
     @ViewBuilder
     private var speakerNameView: some View {
+        if let onSpeakerInfo {
+            markMeView.contextMenu {
+                Button {
+                    onSpeakerInfo()
+                } label: {
+                    Label("纠正发言人", systemImage: "person.crop.circle.badge.questionmark")
+                }
+            }
+        } else {
+            markMeView
+        }
+    }
+
+    @ViewBuilder
+    private var markMeView: some View {
         let display = isMe ? "我" : block.speaker.name
         let styled = Text(display)
             .font(.recapMeta.weight(isMe ? .bold : .medium))
@@ -213,6 +240,7 @@ public struct ActionItemCard: View {
     @State private var errorMessage: String?
     @State private var dispatchAccessDenied = false
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
         item: ActionItem,
@@ -316,9 +344,11 @@ public struct ActionItemCard: View {
                     .foregroundStyle(item.status == .dispatched ? Color.recapOchre : Color.recapTea)
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
+                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(RecapPressStyle())
             .disabled(isDispatching)
+            .animation(reduceMotion ? nil : .recapValueSwap, value: isDispatching)
             .accessibilityLabel(item.status == .dispatched ? "需重新加入提醒事项" : "加入提醒事项")
             .accessibilityHint("写入系统提醒事项 App")
         }
@@ -409,7 +439,15 @@ public struct ActionItemCard: View {
         HStack(spacing: Spacing.sm) {
             assigneeBadge
             if item.isLowConfidence {
-                confirmButton
+                HStack(spacing: 5) {
+                    Text("待确认")
+                        .font(.recapCaption)
+                        .foregroundStyle(Color.recapOchre)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.recapOchre.opacity(0.12), in: Capsule())
+                    confirmButton
+                }
             } else if let due = item.dueText {
                 Text(due)
                     .font(.recapMeta)
@@ -503,13 +541,16 @@ public struct ActionItemCard: View {
     private var cardFill: some View {
         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
             .fill(Color.recapPaper)
+            .shadow(color: Color.recapShadow.opacity(0.6), radius: 4, x: 0, y: 1.5)
     }
 
     private var cardBorder: some View {
         RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
             .strokeBorder(
-                Color.recapTea.opacity(item.isLowConfidence ? 0.45 : 0),
-                style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                item.isLowConfidence
+                    ? Color.recapOchre.opacity(0.35)
+                    : Color.recapInk.opacity(0.06),
+                lineWidth: 0.8
             )
     }
 }
@@ -786,8 +827,10 @@ public struct AvatarGroup: View {
     }
 }
 
-// MARK: - 录音 FAB
+// MARK: - 录音 FAB（朱砂印）
 
+/// 录音钮 = 朱砂印章：录音即「落印」。squircle 印面 + 声波纹章（与空态图标同谱）+
+/// 印泥色柔影 + 离纸 4pt 的 hairline 边圈（印泥外圈）。按压 = 盖章（scale 回馈）。
 public struct RecordingButton: View {
     public let action: () -> Void
     /// 仅空状态轻呼吸引导；有列表后静止，反馈交给按压。
@@ -796,6 +839,8 @@ public struct RecordingButton: View {
     @State private var pulse = false
 
     private let size: CGFloat = 64
+    /// 印面圆角：squircle，非正圆非胶囊——印章的物理轮廓。
+    private let sealRadius: CGFloat = 20
 
     public init(allowsPulse: Bool = false, action: @escaping () -> Void) {
         self.allowsPulse = allowsPulse
@@ -807,15 +852,23 @@ public struct RecordingButton: View {
             Haptics.impact(.medium)
             action()
         } label: {
-            Image(systemName: "waveform")
-                .font(.system(size: 22, weight: .semibold))
+            let seal = RoundedRectangle(cornerRadius: sealRadius, style: .continuous)
+            return Image(systemName: "waveform")
+                .font(.system(size: 24, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: size, height: size)
-                .background(Color.recapCinnabar, in: Circle())
+                .background(seal.fill(Color.recapCinnabar))
+                // 印泥外圈：距印面 4pt 的 hairline 朱砂环，印章「离纸」的落款感
+                .overlay(
+                    RoundedRectangle(cornerRadius: sealRadius + 4, style: .continuous)
+                        .strokeBorder(Color.recapCinnabar.opacity(0.35), lineWidth: 0.8)
+                        .padding(-4)
+                        .allowsHitTesting(false)
+                )
                 .scaleEffect(reduceMotion || !allowsPulse ? 1 : (pulse ? 1.05 : 1.0))
-                // 两层柔影撑起浮感：近影给重量，远影给环境光。
-                .shadow(color: .black.opacity(0.10), radius: 4, x: 0, y: 2)
-                .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 7)
+                // 印泥色柔影撑起「印泥」感：近影给重量，远影用朱砂本身着色。
+                .shadow(color: .black.opacity(0.06), radius: 3, x: 0, y: 1)
+                .shadow(color: Color.recapCinnabar.opacity(0.24), radius: 12, x: 0, y: 6)
         }
         .buttonStyle(RecapPressStyle())
         .accessibilityLabel("新会议")

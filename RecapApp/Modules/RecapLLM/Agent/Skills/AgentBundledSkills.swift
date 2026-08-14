@@ -602,7 +602,7 @@ public enum AgentBundledSkills {
     id: speech-coach
     name: 发言复盘
     description: 针对你本人在会议中的发言，给出基于原话的反思与可执行建议
-    icon: figure.speech
+    icon: person.wave.2
     group: recap
     groupTitle: 纪要
     scenario: learning
@@ -623,14 +623,14 @@ public enum AgentBundledSkills {
 
     结构：
     # 发言复盘
-    ## ✨ 做得好的
+    ## 做得好的
     - 1–3 条。每条：观察 + 原话引文 + 为什么有效。
-    ## 🔧 可以更好的
+    ## 可以更好的
     - 2–4 条，按影响力排序。每条三行：
       - **观察**：你说了什么（原话引文）。
       - **影响**：这样表达可能带来的效果。
       - **建议**：下次可以怎么说——给一句改写示范。
-    ## 🎯 下次试试
+    ## 下次试试
     - 一句话：最重要的一个改变。
 
     建议要具体到可照做（给改写示范），不要空泛（如"加强沟通""注意表达"）。

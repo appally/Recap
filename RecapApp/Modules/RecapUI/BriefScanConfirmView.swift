@@ -12,6 +12,7 @@ struct BriefScanConfirmView: View {
     @State private var agenda: [AgendaItem] = []
     @State private var openItems: [OpenItem] = []
     @State private var suggestedTitle: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack {
@@ -33,29 +34,32 @@ struct BriefScanConfirmView: View {
 
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: Spacing.sm) {
-                        if role == .agenda {
-                            ForEach(Array(agenda.enumerated()), id: \.element.id) { index, item in
-                                editableRow(
-                                    indexLabel: "\(item.order)",
-                                    title: item.title,
-                                    subtitle: item.ownerHint
-                                ) {
-                                    agenda.remove(at: index)
-                                    renumberAgenda()
+                        Group {
+                            if role == .agenda {
+                                ForEach(Array(agenda.enumerated()), id: \.element.id) { index, item in
+                                    editableRow(
+                                        indexLabel: "\(item.order)",
+                                        title: item.title,
+                                        subtitle: item.ownerHint
+                                    ) {
+                                        removeAgendaItem(index)
+                                    }
                                 }
-                            }
-                        } else {
-                            ForEach(Array(openItems.enumerated()), id: \.element.id) { index, item in
-                                editableRow(
-                                    indexLabel: "○",
-                                    title: item.text,
-                                    subtitle: item.ownerHint
-                                ) {
-                                    openItems.remove(at: index)
+                            } else {
+                                ForEach(Array(openItems.enumerated()), id: \.element.id) { index, item in
+                                    editableRow(
+                                        indexLabel: "○",
+                                        title: item.text,
+                                        subtitle: item.ownerHint
+                                    ) {
+                                        removeOpenItem(index)
+                                    }
                                 }
                             }
                         }
+                        .id(role)
                     }
+                    .animation(reduceMotion ? nil : .recapSoft, value: role)
                 }
 
                 if agenda.isEmpty && openItems.isEmpty {
@@ -131,6 +135,31 @@ struct BriefScanConfirmView: View {
             .buttonStyle(.plain)
         }
         .padding(.vertical, 6)
+        .transition(rowTransition)
+    }
+
+    /// 行出入场：删除上移淡出（row 原位移除，其余行随布局动画上滑补齐）；
+    /// Reduce Motion 退化为纯淡出（无位移）。
+    private var rowTransition: AnyTransition {
+        reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top))
+    }
+
+    /// 行删除动画：RM 退化 nil（立即移除）。
+    private var removeAnimation: Animation? {
+        reduceMotion ? nil : .recapSoft
+    }
+
+    private func removeAgendaItem(_ index: Int) {
+        withAnimation(removeAnimation) {
+            agenda.remove(at: index)
+            renumberAgenda()
+        }
+    }
+
+    private func removeOpenItem(_ index: Int) {
+        withAnimation(removeAnimation) {
+            openItems.remove(at: index)
+        }
     }
 
     private func reparse(as role: BriefRole) {

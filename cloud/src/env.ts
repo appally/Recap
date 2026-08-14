@@ -1,8 +1,14 @@
 /** Worker 运行时绑定与配置(凭证签发器 + per-user 配额 DO + 法务页)。 */
 export interface Env {
   // Secrets(`wrangler secret put` 注入)
-  /** 阿里百炼主 key —— RAM 最小权限子账号,仅开 fun-asr-realtime(+指定 qwen)。永不下发客户端。 */
+  /** 阿里百炼主 key —— RAM 最小权限子账号,仅开 fun-asr-realtime + paraformer-realtime-v2 + 指定 qwen。永不下发客户端。
+   *  ⚠️ 临时 token 继承本 key 全部权限(阿里无独立 scope),故必须在百炼控制台给此 key 配「模型访问限制」白名单,
+   *  部署后跑 scripts/verify-gateway-asr.mjs + verify-sts-llm.mjs 确认白名单内外模型分别 放通/403。 */
   DASHSCOPE_API_KEY: string;
+  /** 可选加固:ASR 专用子账号 key(白名单只开 fun-asr-realtime / paraformer-realtime-v2)。
+   *  配置后 ASR 桶签发的 token 物理上无法调用任何 LLM/高价模型——即使主 key 白名单误配也被隔离。
+   *  未配置时回落 DASHSCOPE_API_KEY(须靠其模型白名单约束)。 */
+  DASHSCOPE_ASR_API_KEY?: string;
   /** App Store Connect .p8 + 元数据:Pro 权益服务端真校验(App Store Server API)。 */
   APPLE_PRIVATE_KEY?: string;
   APPLE_KEY_ID?: string;

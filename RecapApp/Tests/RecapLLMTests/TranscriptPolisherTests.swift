@@ -73,4 +73,46 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = try await polisher.polish([])
         XCTAssertTrue(result.isEmpty)
     }
+
+    // MARK: - 专名提示（plan 050 Wave B）
+
+    func testHintBlockEmptyWhenNoHints() {
+        XCTAssertEqual(TranscriptPolisher.hintBlock([]), "", "无提示词表时 user payload 与旧行为一致")
+        XCTAssertEqual(TranscriptPolisher.hintBlock(["  ", ""]), "")
+    }
+
+    func testHintBlockContainsWordsAndGuardrail() {
+        let block = TranscriptPolisher.hintBlock(["王工", "K8s"])
+        XCTAssertTrue(block.hasPrefix("【专名提示】王工、K8s"))
+        XCTAssertTrue(block.contains("仅当"), "必须带「仅冲突才纠」护栏指令")
+    }
+
+    func testHintBlockCapsAtSixtyWords() {
+        let words = (1...80).map { "词\($0)" }
+        let block = TranscriptPolisher.hintBlock(words)
+        XCTAssertFalse(block.contains("词61"), "第 61 个词起截断（稀释防线）")
+        XCTAssertTrue(block.contains("词60"))
+    }
+
+    func testPolish_IncludesHintBlockInUserPayload() async throws {
+        // 捕获 user payload，断言提示前缀进了 user 侧而非 system（caching 契约）
+        final class UserCapture: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _user = ""
+            var user: String { lock.lock(); defer { lock.unlock() }; return _user }
+            func set(_ u: String) { lock.lock(); _user = u; lock.unlock() }
+        }
+        let capture = UserCapture()
+        let polisher = TranscriptPolisher { _, user in
+            capture.set(user)
+            return AsyncThrowingStream { c in
+                c.yield("⟦1⟧王工负责 K8s 的 rollout。")
+                c.finish()
+            }
+        }
+        let segs = [TranscriptSegment(startSeconds: 0, endSeconds: 2, text: "王工负责开 eight s 的肉特")]
+        _ = try await polisher.polish(segs, hints: ["王工", "K8s"])
+        XCTAssertTrue(capture.user.contains("【专名提示】王工、K8s"))
+        XCTAssertTrue(capture.user.contains("⟦1⟧"), "编号正文仍在 user payload")
+    }
 }

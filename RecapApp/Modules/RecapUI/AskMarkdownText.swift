@@ -378,10 +378,29 @@ public enum AskMarkdownRenderer {
                 continue
             }
             if output[range].foregroundColor == nil {
+                // 彩色 emoji 所在 run 不强制着色：对它设 foregroundColor 会让系统放弃
+                // Apple Color Emoji 字体回退，emoji 渲染成缺失字形（外框问号）。这类 run 交由
+                // 容器 .foregroundStyle(recapInk) 统一着色——文字仍 recapInk，emoji 仍彩色。
+                guard !Self.runContainsEmoji(output, range) else { continue }
                 output[range].foregroundColor = Color.recapInk
             }
         }
         return output
+    }
+
+    /// 该 run 是否含彩色 emoji（非 ASCII 的 emoji scalar）；命中则跳过强制着色，
+    /// 避免其被渲染成缺失字形（外框问号）。容器 .foregroundStyle 仍保证正文着色。
+    private static func runContainsEmoji(
+        _ attributed: AttributedString,
+        _ range: Range<AttributedString.Index>
+    ) -> Bool {
+        for char in attributed[range].characters {
+            for scalar in char.unicodeScalars
+            where scalar.properties.isEmoji && !scalar.isASCII {
+                return true
+            }
+        }
+        return false
     }
 }
 

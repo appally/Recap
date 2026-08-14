@@ -44,14 +44,14 @@ private struct FluidGlowCanvas: View {
     let t: Double
     let intensity: Double
 
-    // MARK: - 调色板（冷色极光同谱，对齐 recapAI* 冷色语言；hueRotation 负责动态变色）
-    private static let teal   = Color(hex: 0x2DD4BF) // recapAITeal
-    private static let cyan   = Color(hex: 0x22D3EE) // recapAICyan
-    private static let blue   = Color(hex: 0x3B82F6) // recapAIBlue
-    private static let indigo = Color(hex: 0x6366F1) // 极光靛端，扩宽 hueRotation 游走范围
+    // MARK: - 调色板（青瓷晨雾色系，对齐 recapBg 青瓷暖白与纸墨语言；温润通透不刺眼）
+    private static let celadon   = Color(light: 0x98B9A6, dark: 0x2A463B) // 柔和青瓷绿
+    private static let porcelain = Color(light: 0xB0C8BE, dark: 0x243E38) // 瓷青
+    private static let teaMist   = Color(light: 0xC2D1C8, dark: 0x2E423E) // 雾灰绿
+    private static let warmLight = Color(light: 0xD6DDD7, dark: 0x334440) // 晨光微白
 
-    /// 推进速度：完整周期 ≈ 12.5s。
-    private static let speed: Double = 0.5
+    /// 推进速度：完整周期 ≈ 14s，极其舒缓。
+    private static let speed: Double = 0.45
 
     var body: some View {
         GeometryReader { geo in
@@ -61,35 +61,35 @@ private struct FluidGlowCanvas: View {
             ZStack {
                 // 1. 通透基底光池（固定垂直渐变，铺满整帧）——保证底部/两侧不漏背景。
                 basePool(w: w, h: h)
-                // 2. 连续色场：多团实色光晕重叠 → 全局 hueRotation 变色 → 重 blur 融成一片。
+                // 2. 连续色场：多团实色光晕重叠 → 全局轻微 hueRotation 变色 → 重 blur 融成一片。
                 ZStack {
-                    glowOrb(Self.cyan,   cx: 0.25, cy: 0.92, r: 0.42, peak: 0.50, phase: 0.0, w: w, h: h)
-                    glowOrb(Self.indigo, cx: 0.62, cy: 0.96, r: 0.40, peak: 0.48, phase: 1.6, w: w, h: h)
-                    glowOrb(Self.teal,   cx: 0.85, cy: 0.88, r: 0.36, peak: 0.44, phase: 3.1, w: w, h: h)
-                    glowOrb(Self.blue,   cx: 0.45, cy: 0.80, r: 0.34, peak: 0.42, phase: 0.8, w: w, h: h)
-                    glowOrb(Self.cyan,   cx: 0.12, cy: 0.86, r: 0.32, peak: 0.42, phase: 2.4, w: w, h: h)
+                    glowOrb(Self.celadon,   cx: 0.25, cy: 0.92, r: 0.42, peak: 0.40, phase: 0.0, w: w, h: h)
+                    glowOrb(Self.porcelain, cx: 0.62, cy: 0.96, r: 0.40, peak: 0.38, phase: 1.6, w: w, h: h)
+                    glowOrb(Self.teaMist,   cx: 0.85, cy: 0.88, r: 0.36, peak: 0.35, phase: 3.1, w: w, h: h)
+                    glowOrb(Self.warmLight, cx: 0.45, cy: 0.80, r: 0.34, peak: 0.35, phase: 0.8, w: w, h: h)
+                    glowOrb(Self.celadon,   cx: 0.12, cy: 0.86, r: 0.32, peak: 0.35, phase: 2.4, w: w, h: h)
                 }
-                // 全局色相旋转：±55°，整片色场 teal↔indigo 游走 = Gemini 式整体色彩过渡。
-                .hueRotation(.degrees(sin(t * Self.speed) * 55))
-                // 重 blur：团块边界消融、融成连续色场（无 mesh 网格 → 无面片接缝）。
-                .blur(radius: max(28, w * 0.10))
+                // 全局色相微旋转：±18°，整片色场在温润青瓷微调游走，消除突兀变色。
+                .hueRotation(.degrees(sin(t * Self.speed) * 18))
+                // 重 blur：团块边界消融、融成连续色场。
+                .blur(radius: max(32, w * 0.12))
             }
             .frame(width: w, height: h)
             .opacity(intensity)
-            // 3. 顶部柔和融边（不随强度衰减，保持顶部稳定融入背景）。
+            // 3. 顶部柔和融边。
             .overlay { topVignetteFade }
         }
         .ignoresSafeArea(.all, edges: .bottom)
     }
 
     // MARK: - 1. Base Pool
-    /// 全帧垂直渐变基底：保证光池铺满（消除底部/两侧漏背景），给色场一个柔和依托。
+    /// 全帧垂直渐变基底：保证光池铺满，给色场一个柔和依托。
     private func basePool(w: CGFloat, h: CGFloat) -> some View {
         LinearGradient(
             stops: [
                 .init(color: .clear, location: 0.0),
-                .init(color: Self.cyan.opacity(0.08), location: 0.55),
-                .init(color: Self.cyan.opacity(0.20), location: 1.0)
+                .init(color: Self.celadon.opacity(0.06), location: 0.55),
+                .init(color: Self.celadon.opacity(0.16), location: 1.0)
             ],
             startPoint: .top,
             endPoint: .bottom

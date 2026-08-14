@@ -529,27 +529,32 @@ public struct AgentInvokeSheet: View {
             VStack(alignment: .leading, spacing: Spacing.md) {
                 ForEach(suggestionChips, id: \.self) { chip in
                     Button { ask(chip) } label: {
-                        HStack(spacing: 8) {
+                        HStack(alignment: .center, spacing: 10) {
                             Text(chip)
                                 .font(.recapBodyS.weight(.medium))
                                 .foregroundStyle(Color.recapInk.opacity(0.88))
                                 .multilineTextAlignment(.leading)
-                                .lineLimit(2)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Spacer(minLength: 4)
 
                             Image(systemName: "arrow.up.right")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Color.recapInk.opacity(0.35))
                         }
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 11)
+                        .padding(.vertical, 12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .background(
-                            Color(light: 0xF1F3F1, dark: 0x1E2227),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            Color.recapPaper,
+                            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.8)
                         )
+                        .shadow(color: Color.recapShadow.opacity(0.5), radius: 3, x: 0, y: 1)
                     }
                     .buttonStyle(RecapPressStyle())
                 }
@@ -766,14 +771,7 @@ public struct AgentInvokeSheet: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [Color.recapAICyan.opacity(0.35), Color.recapAIBlue.opacity(0.2), Color.recapAITeal.opacity(0.35)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
+                .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.8)
         }
         .recapCardShadow()
     }
@@ -857,12 +855,12 @@ public struct AgentInvokeSheet: View {
                     Image(systemName: RecapSymbol.send)
                         .font(.system(size: 14, weight: .semibold))
                         .symbolRenderingMode(.monochrome)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(canSend ? .white : Color.recapTea)
                         .frame(width: 32, height: 32)
                         .background(
                             canSend
-                                ? AnyShapeStyle(LinearGradient(colors: [.recapAICyan, .recapAIBlue, .recapAITeal], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                : AnyShapeStyle(Color.recapTea.opacity(0.35)),
+                                ? AnyShapeStyle(Color.recapInk)
+                                : AnyShapeStyle(Color.recapInk.opacity(0.06)),
                             in: Circle()
                         )
                         .scaleEffect(canSend ? 1 : 0.95)
@@ -952,17 +950,10 @@ private struct GlowingThinkingDots: View {
                     let op = reduceMotion ? 0.6 : Self.waveOpacity(t: t, index: i)
                     let scale = reduceMotion ? 1.0 : Self.waveScale(t: t, index: i)
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.recapAICyan, Color.recapAITeal],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
+                        .fill(Color.recapInk)
                         .frame(width: 6, height: 6)
                         .scaleEffect(scale)
                         .opacity(op)
-                        .shadow(color: Color.recapAICyan.opacity(op * 0.6), radius: 3, x: 0, y: 0)
                 }
             }
         }

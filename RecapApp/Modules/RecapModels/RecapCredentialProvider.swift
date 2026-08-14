@@ -94,6 +94,9 @@ public final class RecapCredentialProvider: @unchecked Sendable {
     private let refreshLeadSeconds: TimeInterval = 300
     /// 缓存最低可用阈值:剩余 < 60s 视为过期(同步读取不再返回)。
     private let minValidSeconds: TimeInterval = 60
+    /// 续签失败退避:15s 起、指数翻倍、封顶 5min(断网时避免每 15s 唤醒耗电);成功即重置。
+    private var retryBackoff: TimeInterval = 15
+    private static let retryBackoffMax: TimeInterval = 300
 
     public init() {}
 
@@ -152,9 +155,13 @@ public final class RecapCredentialProvider: @unchecked Sendable {
                 guard let self else { return }
                 do {
                     try await self.ensureFresh()
+                    // 成功:重置退避(下次失败重新从 15s 起)
+                    self.retryBackoff = 15
                 } catch {
-                    // 续签失败:短等重试(旧 token 可能仍在有效期,不中断)
-                    try? await Task.sleep(for: .seconds(15))
+                    // 续签失败:指数退避后重试(旧 token 可能仍在有效期,不中断)。
+                    // 断网/网关不可达时避免每 15s 唤醒,省电;上限 5min 兜底(与 refresh 周期同量级)。
+                    try? await Task.sleep(for: .seconds(self.retryBackoff))
+                    self.retryBackoff = min(self.retryBackoff * 2, Self.retryBackoffMax)
                     continue
                 }
                 // 睡到「过期前 refreshLeadSeconds」;最长 5min 醒一次兜底

@@ -13,17 +13,23 @@ public struct TranscriptSegment: Sendable, Identifiable, Codable, Hashable {
     /// 云端引擎 / 反序列化旧数据为 nil。nil-safe，透传链各环节默认 nil。
     public let confidence: Double?
 
+    /// 该段期间有第二说话人显著重叠（分离引擎产出双段时间轴、对齐层级联暴露；
+    /// plan 047 Wave C）。nil/nil-safe：旧数据与非分离路径不标记。
+    public let isOverlapped: Bool?
+
     public init(id: UUID = UUID(),
                 startSeconds: Double,
                 endSeconds: Double,
                 speakerId: String? = nil,
                 text: String,
-                confidence: Double? = nil) {
+                confidence: Double? = nil,
+                isOverlapped: Bool? = nil) {
         self.id = id
         self.startSeconds = startSeconds
         self.endSeconds = endSeconds
         self.speakerId = speakerId
         self.text = text
         self.confidence = confidence
+        self.isOverlapped = isOverlapped
     }
 }

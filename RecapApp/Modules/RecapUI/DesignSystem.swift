@@ -24,13 +24,15 @@ public extension Color {
         )
     }
 
-    /// 纯净静谧纸底：高级冷瓷灰/黑曜石底色，无黄绿杂浊感。
-    static let recapBg = Color(light: 0xF8F9FA, dark: 0x0C0E11)
+    /// 纸底：暖骨色画布——纸感来自温度，冷灰读作「屏幕」、暖骨读作「纸」。
+    /// 纸面浮于画布之上靠两者色差 + hairline + 极淡投影分层；暗色黑曜石底不变。
+    static let recapBg = Color(light: 0xF6F5F1, dark: 0x0C0E11)
     static let recapPaper = Color(light: 0xFFFFFF, dark: 0x16191D)
     static let recapCurrentBg = Color(light: 0xFFFFFF, dark: 0x1C2025)
 
-    static let recapInk = Color(light: 0x111614, dark: 0xF0F2EE)
-    static let recapTea = Color(light: 0x6E7671, dark: 0x9CA29A)
+    /// 暖墨/暖茶灰：墨与灰都带一点纸的黄向，避免冷屏幕感；暗色侧不变。
+    static let recapInk = Color(light: 0x1D1B17, dark: 0xF0F2EE)
+    static let recapTea = Color(light: 0x6F6B62, dark: 0x9CA29A)
 
     /// 投影专用色。通透自然的软阴影，避免脏发灰。
     static let recapShadow = Color(light: 0x000000, lightAlpha: 0.04, dark: 0x000000, darkAlpha: 0.28)
@@ -38,6 +40,14 @@ public extension Color {
     // 原青瓷品牌色已退役并迁移至 recapInk（91 处引用已机械 rename）。朱砂/赭石仅作功能语义保留。
     static let recapCinnabar = Color(light: 0xC8463C, dark: 0xE15A4E)
     static let recapOchre = Color(light: 0xA87842, dark: 0xC99659)
+
+    // MARK: 双层容器（Double-Bezel）专用色
+    /// 外壳底：比纸面低一档的「哑光机壳」。light 半透白叠在 recapBg 上、dark 微亮于底。
+    static let recapShell = Color(light: 0xFFFFFF, lightAlpha: 0.55, dark: 0xFFFFFF, darkAlpha: 0.05)
+    /// 外壳 hairline：茶灰描边，dark 提档保证可见。
+    static let recapShellRing = Color(light: 0x6E7671, lightAlpha: 0.10, dark: 0x9CA29A, darkAlpha: 0.14)
+    /// 内芯顶部高光：只描上半段的 1px「车削反光」。
+    static let recapCoreGlow = Color(light: 0xFFFFFF, lightAlpha: 0.45, dark: 0xFFFFFF, darkAlpha: 0.08)
 
     /// AI 对话强调色谱（电光青·蓝·翠）——AskBar 边框/发送钮、AgentInvokeSheet 发送钮统一用此，
     /// 与 LIVE 推理绿光晕(GeminiFluidGlowView)的青色端同谱：科技/未来感，但不与既有绿光晕突兀。
@@ -164,6 +174,25 @@ public enum Radius {
     public static let stage: CGFloat = 28
     public static let sheet: CGFloat = 24
     public static let island: CGFloat = 999
+
+    /// 同心内芯半径 = 外壳半径 - 内衬。四周等距 inset 时 continuous 圆角内外自动同心，
+    /// 本 token 把这条不变式写死，防未来手写半径漂移。
+    public static func concentric(outer: CGFloat, inset: CGFloat) -> CGFloat {
+        max(0, outer - inset)
+    }
+}
+
+/// 双层容器（Double-Bezel）几何常量：外壳(壳底+hairline) → inset → 内芯(纸面+顶部反光)。
+/// 内芯半径一律取 `Radius.concentric`，与外壳数学同心。
+public enum Bezel {
+    /// 壳内衬：外壳与内芯之间的机加工留隙。
+    public static let inset: CGFloat = 6
+    /// hairline 宽（内外一致）。
+    public static let hairline: CGFloat = 0.8
+    /// 草稿卡外壳半径：内芯即 Radius.card(16)，与普通行卡片同半径，列表韵律不被打破。
+    public static let draftOuter: CGFloat = Radius.card + inset   // 22
+    /// 草稿卡内芯半径（= Radius.card，同心）。
+    public static let draftCore: CGFloat = Radius.concentric(outer: draftOuter, inset: inset)
 }
 
 public extension View {
@@ -187,6 +216,29 @@ public extension View {
         }
     }
 
+    /// 双层容器：内芯(纸面+顶光+内 hairline) → inset → 外壳(壳底+hairline)。
+    /// 用于静态展示场景；需左滑裁切的卡片（如首页草稿卡）在 SwipeableMeetingRow 内置实现，
+    /// 保证裁切形状与外壳同源。
+    func recapBezel(outerRadius: CGFloat = Bezel.draftOuter) -> some View {
+        let core = Radius.concentric(outer: outerRadius, inset: Bezel.inset)
+        let coreShape = RoundedRectangle(cornerRadius: core, style: .continuous)
+        let outerShape = RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
+        return self
+            .background(coreShape.fill(Color.recapPaper))
+            .overlay(
+                coreShape.strokeBorder(
+                    LinearGradient(
+                        colors: [Color.recapCoreGlow, .clear],
+                        startPoint: .top, endPoint: .center
+                    ),
+                    lineWidth: Bezel.hairline
+                )
+            )
+            .padding(Bezel.inset)
+            .background(outerShape.fill(Color.recapShell))
+            .overlay(outerShape.strokeBorder(Color.recapShellRing, lineWidth: Bezel.hairline))
+    }
+
     /// 玻璃仅作背景，不参与命中测试。用于包含 TextField 等需接收点击的容器。
     func recapGlassBackground(cornerRadius: CGFloat = Radius.card) -> some View {
         background {
@@ -207,8 +259,8 @@ public extension View {
 
 // MARK: - AI 输入栏统一皮肤（PlaudAskBar ↔ AgentInvokeSheet 共用，保证一致）
 
-/// 流光炫彩描边。锥形渐变沿胶囊边框缓慢旋转（≈45s/圈，色相流动）；reduceMotion 退化为静态线性渐变。
-/// 仅描边、无外发光——只要边框流光，不要光晕。
+/// 极简灵动输入栏边框与环境微光（Apple-grade 质感）
+/// 摒弃粗重高饱和荧光蓝，采用通透纸底、细微环境阴影与极细润色边框。
 public struct AIAuroraRing: View {
     let focused: Bool
     let reduceMotion: Bool
@@ -216,41 +268,33 @@ public struct AIAuroraRing: View {
         self.focused = focused
         self.reduceMotion = reduceMotion
     }
-    /// 首尾同色（青→青），保证旋转时接缝不可见。
-    private static let ring: [Color] = [.recapAICyan, .recapAIBlue, .recapAITeal, .recapAIBlue, .recapAICyan]
 
     public var body: some View {
-        Group {
-            if reduceMotion {
-                Capsule(style: .continuous)
-                    .stroke(
-                        LinearGradient(colors: [.recapAICyan, .recapAIBlue, .recapAITeal],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing),
-                        lineWidth: focused ? 2.5 : 2
-                    )
-            } else {
-                // 仅输入栏聚焦时才持续旋转锥形渐变；底栏（focused=false）与失焦态静止，省持续 30fps GPU。
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !focused)) { ctx in
-                    let a = (ctx.date.timeIntervalSinceReferenceDate * 8.0).truncatingRemainder(dividingBy: 360)
-                    Capsule(style: .continuous)
-                        .stroke(
-                            AngularGradient(colors: Self.ring, center: .center, angle: .degrees(a)),
-                            lineWidth: focused ? 2.5 : 2
-                        )
-                }
-            }
-        }
-        .allowsHitTesting(false)
+        Capsule(style: .continuous)
+            .strokeBorder(
+                focused
+                    ? Color.recapInk.opacity(0.22)
+                    : Color.recapInk.opacity(0.08),
+                lineWidth: focused ? 1.2 : 0.8
+            )
+            .animation(.recapSoft, value: focused)
+            .allowsHitTesting(false)
     }
 }
 
 public extension View {
-    /// AI compose 栏统一皮肤：纸底 + 流光炫彩描边（无光晕）。
-    /// PlaudAskBar(底栏) 与 AgentInvokeSheet(对话窗) 输入栏共用——保证「底栏发问 → 对话窗回答」视觉连续、一致。
+    /// AI compose 栏统一皮肤：温润纸底 + 浮动微阴影 + 精致单像素微边框。
+    /// PlaudAskBar(底栏) 与 AgentInvokeSheet(对话窗) 输入栏共用——保证「底栏发问 → 对话窗回答」视觉连续、温润自洽。
     func aiComposeBarStyle(focused: Bool, reduceMotion: Bool) -> some View {
         background {
             Capsule(style: .continuous)
                 .fill(Color.recapPaper)
+                .shadow(
+                    color: Color.recapShadow.opacity(focused ? 1.0 : 0.6),
+                    radius: focused ? 10 : 6,
+                    x: 0,
+                    y: focused ? 4 : 2
+                )
         }
         .overlay { AIAuroraRing(focused: focused, reduceMotion: reduceMotion) }
         .animation(.recapSoft, value: focused)

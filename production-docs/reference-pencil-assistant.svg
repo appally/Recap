@@ -1,0 +1,74 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="roughLine" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.014" numOctaves="2" seed="21" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.15" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="wax" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="3" seed="17" result="grain"/>
+      <feBlend in="SourceGraphic" in2="grain" mode="multiply"/>
+    </filter>
+    <style>
+      .line { fill: none; stroke: #171b1f; stroke-width: 11; stroke-linecap: round; stroke-linejoin: round; filter: url(#roughLine); }
+      .thin { fill: none; stroke: #171b1f; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; filter: url(#roughLine); }
+      .yellow { fill: #ffd92e; }
+      .yellow-dark { fill: #efbd20; }
+      .white { fill: #fbfaf5; }
+      .gray { fill: #e6e2da; }
+      .wood { fill: #f3dfbd; }
+      .black { fill: #191919; }
+      .spot { fill: #222222; }
+      .shine { opacity: .35; fill: #fff5a8; }
+      .crayon { opacity: .24; stroke-linecap: round; stroke-width: 8; }
+    </style>
+  </defs>
+  <rect width="1600" height="1200" fill="#ffffff"/>
+
+  <g transform="translate(410 580)">
+    <path class="white" d="M-146 -404 Q-146 -478 -74 -493 Q0 -506 74 -493 Q146 -478 146 -404 L146 -278 L-146 -278 Z"/>
+    <path class="line" d="M-146 -404 Q-146 -478 -74 -493 Q0 -506 74 -493 Q146 -478 146 -404 L146 -278 L-146 -278 Z"/>
+    <circle class="spot" cx="-72" cy="-410" r="31"/>
+    <circle class="spot" cx="73" cy="-413" r="31"/>
+    <circle class="spot" cx="0" cy="-344" r="32"/>
+    <circle class="spot" cx="-125" cy="-331" r="28"/>
+    <circle class="spot" cx="125" cy="-331" r="28"/>
+    <path class="gray" d="M-168 -286 Q-154 -320 -116 -320 L116 -320 Q154 -320 168 -286 L168 -189 Q154 -156 116 -156 L-116 -156 Q-154 -156 -168 -189 Z"/>
+    <path class="line" d="M-168 -286 Q-154 -320 -116 -320 L116 -320 Q154 -320 168 -286 L168 -189 Q154 -156 116 -156 L-116 -156 Q-154 -156 -168 -189 Z"/>
+    <path class="yellow" d="M-128 -160 L128 -160 L128 214 Q128 260 88 278 L0 345 L-88 278 Q-128 260 -128 214 Z"/>
+    <path class="line" d="M-128 -160 L128 -160 L128 214 Q128 260 88 278 L0 345 L-88 278 Q-128 260 -128 214 Z"/>
+    <path class="wood" d="M-88 278 Q-47 236 0 236 Q47 236 88 278 L0 345 Z"/>
+    <path class="thin" d="M-88 278 Q-47 236 0 236 Q47 236 88 278 L0 345 Z"/>
+    <path class="black" d="M-36 318 L0 381 L36 318 Q13 332 0 345 Q-13 332 -36 318 Z"/>
+    <path class="line" d="M-36 318 L0 381 L36 318 Q13 332 0 345 Q-13 332 -36 318 Z"/>
+    <circle class="line" cx="-56" cy="-20" r="50"/>
+    <circle class="line" cx="56" cy="-20" r="50"/>
+    <path class="thin" d="M-6 -20 L6 -20"/>
+    <circle class="black" cx="-56" cy="-20" r="15"/>
+    <circle class="black" cx="56" cy="-20" r="15"/>
+    <path class="thin" d="M-42 76 Q0 116 42 76"/>
+    <path class="shine" d="M-100 -135 L-64 -135 L-66 207 Q-69 235 -93 247 Q-104 218 -104 184 Z"/>
+    <path class="crayon" stroke="#ffe96d" d="M46 -135 Q68 -36 60 206"/>
+  </g>
+
+  <g transform="translate(1180 580)">
+    <path class="white" d="M-146 -404 Q-146 -478 -74 -493 Q0 -506 74 -493 Q146 -478 146 -404 L146 -278 L-146 -278 Z"/>
+    <path class="line" d="M-146 -404 Q-146 -478 -74 -493 Q0 -506 74 -493 Q146 -478 146 -404 L146 -278 L-146 -278 Z"/>
+    <circle class="spot" cx="-72" cy="-410" r="31"/>
+    <circle class="spot" cx="73" cy="-413" r="31"/>
+    <circle class="spot" cx="0" cy="-344" r="32"/>
+    <circle class="spot" cx="-125" cy="-331" r="28"/>
+    <circle class="spot" cx="125" cy="-331" r="28"/>
+    <path class="gray" d="M-168 -286 Q-154 -320 -116 -320 L116 -320 Q154 -320 168 -286 L168 -189 Q154 -156 116 -156 L-116 -156 Q-154 -156 -168 -189 Z"/>
+    <path class="line" d="M-168 -286 Q-154 -320 -116 -320 L116 -320 Q154 -320 168 -286 L168 -189 Q154 -156 116 -156 L-116 -156 Q-154 -156 -168 -189 Z"/>
+    <path class="yellow-dark" d="M-128 -160 L128 -160 L128 214 Q128 260 88 278 L0 345 L-88 278 Q-128 260 -128 214 Z"/>
+    <path class="line" d="M-128 -160 L128 -160 L128 214 Q128 260 88 278 L0 345 L-88 278 Q-128 260 -128 214 Z"/>
+    <path class="wood" d="M-88 278 Q-47 236 0 236 Q47 236 88 278 L0 345 Z"/>
+    <path class="thin" d="M-88 278 Q-47 236 0 236 Q47 236 88 278 L0 345 Z"/>
+    <path class="black" d="M-36 318 L0 381 L36 318 Q13 332 0 345 Q-13 332 -36 318 Z"/>
+    <path class="line" d="M-36 318 L0 381 L36 318 Q13 332 0 345 Q-13 332 -36 318 Z"/>
+    <path class="thin" d="M-121 -30 Q-60 -62 0 -54 Q60 -62 121 -30"/>
+    <path class="thin" d="M-126 -5 Q-64 20 0 12 Q64 20 126 -5"/>
+    <path class="shine" d="M-86 -135 L-50 -135 L-52 207 Q-55 235 -79 247 Q-90 218 -90 184 Z"/>
+    <path class="crayon" stroke="#e0aa1c" d="M58 -135 Q80 -36 72 206"/>
+  </g>
+</svg>

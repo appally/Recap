@@ -1,0 +1,91 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="roughLine" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.015" numOctaves="2" seed="7" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.2" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <filter id="wax" x="-5%" y="-5%" width="110%" height="110%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.045" numOctaves="3" seed="11" result="grain"/>
+      <feBlend in="SourceGraphic" in2="grain" mode="multiply"/>
+    </filter>
+    <style>
+      .line { fill: none; stroke: #17212b; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; filter: url(#roughLine); }
+      .thin { fill: none; stroke: #17212b; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; filter: url(#roughLine); }
+      .fill-cream { fill: #f4eee3; }
+      .fill-teal { fill: #2f6f73; }
+      .fill-skin { fill: #f1c7a9; }
+      .fill-hair { fill: #31373d; }
+      .fill-pants { fill: #27313a; }
+      .fill-shoe { fill: #1e252b; }
+      .crayon { opacity: .22; stroke-linecap: round; stroke-width: 7; }
+    </style>
+  </defs>
+  <rect width="1600" height="1200" fill="#ffffff"/>
+
+  <g transform="translate(410 575)">
+    <path class="fill-pants" d="M-82 205 L-18 205 L-4 492 Q-4 516 -31 516 L-61 516 Q-83 515 -83 493 Z"/>
+    <path class="line" d="M-82 205 L-18 205 L-4 492 Q-4 516 -31 516 L-61 516 Q-83 515 -83 493 Z"/>
+    <path class="fill-pants" d="M18 205 L82 205 L83 493 Q83 515 61 516 L31 516 Q4 516 4 492 Z"/>
+    <path class="line" d="M18 205 L82 205 L83 493 Q83 515 61 516 L31 516 Q4 516 4 492 Z"/>
+    <path class="fill-shoe" d="M-88 508 Q-67 528 -18 521 Q-3 519 -4 502 L-79 499 Q-92 500 -88 508 Z"/>
+    <path class="line" d="M-88 508 Q-67 528 -18 521 Q-3 519 -4 502 L-79 499 Q-92 500 -88 508 Z"/>
+    <path class="fill-shoe" d="M4 502 Q3 519 18 521 Q67 528 88 508 Q92 500 79 499 Z"/>
+    <path class="line" d="M4 502 Q3 519 18 521 Q67 528 88 508 Q92 500 79 499 Z"/>
+
+    <path class="fill-teal" d="M-108 -10 Q-126 30 -128 110 L-113 236 Q-63 262 0 262 Q63 262 113 236 L128 110 Q126 30 108 -10 Q64 -36 0 -38 Q-64 -36 -108 -10 Z"/>
+    <path class="line" d="M-108 -10 Q-126 30 -128 110 L-113 236 Q-63 262 0 262 Q63 262 113 236 L128 110 Q126 30 108 -10 Q64 -36 0 -38 Q-64 -36 -108 -10 Z"/>
+    <path class="fill-cream" d="M-44 -22 Q-26 -10 0 -8 Q26 -10 44 -22 L52 236 Q20 247 0 247 Q-20 247 -52 236 Z"/>
+    <path class="thin" d="M-44 -22 Q-26 -10 0 -8 Q26 -10 44 -22 L52 236 Q20 247 0 247 Q-20 247 -52 236 Z"/>
+    <path class="thin" d="M-10 -8 L-24 42 L0 66 L24 42 L10 -8"/>
+    <path class="line" d="M-126 42 Q-181 82 -173 166 Q-168 219 -126 230"/>
+    <path class="line" d="M126 42 Q181 82 173 166 Q168 219 126 230"/>
+    <circle class="fill-skin" cx="-129" cy="234" r="18"/>
+    <circle class="fill-skin" cx="129" cy="234" r="18"/>
+    <circle class="line" cx="-129" cy="234" r="18"/>
+    <circle class="line" cx="129" cy="234" r="18"/>
+
+    <circle class="fill-skin" cx="0" cy="-144" r="78"/>
+    <circle class="line" cx="0" cy="-144" r="78"/>
+    <path class="fill-hair" d="M-75 -150 Q-65 -221 2 -226 Q72 -223 79 -150 Q46 -176 9 -166 Q-34 -153 -75 -150 Z"/>
+    <path class="line" d="M-75 -150 Q-65 -221 2 -226 Q72 -223 79 -150 Q46 -176 9 -166 Q-34 -153 -75 -150 Z"/>
+    <path class="thin" d="M-26 -148 Q-34 -141 -26 -134"/>
+    <path class="thin" d="M32 -148 Q24 -141 32 -134"/>
+    <path class="thin" d="M0 -130 Q-6 -111 12 -112"/>
+    <path class="thin" d="M-22 -92 Q0 -78 24 -94"/>
+
+    <path class="crayon" stroke="#8ab8ad" d="M-92 23 Q-103 89 -97 202"/>
+    <path class="crayon" stroke="#8ab8ad" d="M93 23 Q103 89 97 202"/>
+    <path class="crayon" stroke="#fbf7ef" d="M-26 19 Q-30 107 -22 213"/>
+  </g>
+
+  <g transform="translate(1180 575)">
+    <path class="fill-pants" d="M-82 205 L-18 205 L-4 492 Q-4 516 -31 516 L-61 516 Q-83 515 -83 493 Z"/>
+    <path class="line" d="M-82 205 L-18 205 L-4 492 Q-4 516 -31 516 L-61 516 Q-83 515 -83 493 Z"/>
+    <path class="fill-pants" d="M18 205 L82 205 L83 493 Q83 515 61 516 L31 516 Q4 516 4 492 Z"/>
+    <path class="line" d="M18 205 L82 205 L83 493 Q83 515 61 516 L31 516 Q4 516 4 492 Z"/>
+    <path class="fill-shoe" d="M-88 508 Q-67 528 -18 521 Q-3 519 -4 502 L-79 499 Q-92 500 -88 508 Z"/>
+    <path class="line" d="M-88 508 Q-67 528 -18 521 Q-3 519 -4 502 L-79 499 Q-92 500 -88 508 Z"/>
+    <path class="fill-shoe" d="M4 502 Q3 519 18 521 Q67 528 88 508 Q92 500 79 499 Z"/>
+    <path class="line" d="M4 502 Q3 519 18 521 Q67 528 88 508 Q92 500 79 499 Z"/>
+
+    <path class="fill-teal" d="M-108 -10 Q-126 30 -128 110 L-113 236 Q-63 262 0 262 Q63 262 113 236 L128 110 Q126 30 108 -10 Q64 -36 0 -38 Q-64 -36 -108 -10 Z"/>
+    <path class="line" d="M-108 -10 Q-126 30 -128 110 L-113 236 Q-63 262 0 262 Q63 262 113 236 L128 110 Q126 30 108 -10 Q64 -36 0 -38 Q-64 -36 -108 -10 Z"/>
+    <path class="thin" d="M0 -27 L0 244"/>
+    <path class="thin" d="M-64 -8 Q-88 68 -86 214"/>
+    <path class="thin" d="M64 -8 Q88 68 86 214"/>
+    <path class="line" d="M-126 42 Q-181 82 -173 166 Q-168 219 -126 230"/>
+    <path class="line" d="M126 42 Q181 82 173 166 Q168 219 126 230"/>
+    <circle class="fill-skin" cx="-129" cy="234" r="18"/>
+    <circle class="fill-skin" cx="129" cy="234" r="18"/>
+    <circle class="line" cx="-129" cy="234" r="18"/>
+    <circle class="line" cx="129" cy="234" r="18"/>
+
+    <circle class="fill-skin" cx="0" cy="-144" r="78"/>
+    <circle class="line" cx="0" cy="-144" r="78"/>
+    <path class="fill-hair" d="M-70 -134 Q-75 -207 -1 -224 Q73 -207 70 -134 Q38 -116 0 -114 Q-38 -116 -70 -134 Z"/>
+    <path class="line" d="M-70 -134 Q-75 -207 -1 -224 Q73 -207 70 -134 Q38 -116 0 -114 Q-38 -116 -70 -134 Z"/>
+
+    <path class="crayon" stroke="#8ab8ad" d="M-92 23 Q-103 89 -97 202"/>
+    <path class="crayon" stroke="#8ab8ad" d="M93 23 Q103 89 97 202"/>
+  </g>
+</svg>

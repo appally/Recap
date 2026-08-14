@@ -63,6 +63,7 @@ struct SearchView: View {
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Color.recapTea)
                     }
+                    .buttonStyle(RecapPressStyle())
                 }
             }
             .padding(.horizontal, Spacing.md)
@@ -77,15 +78,31 @@ struct SearchView: View {
 
     @ViewBuilder
     private var content: some View {
-        if trimmedQuery.isEmpty {
-            emptyState
-        } else if results.isEmpty && isSearching {
-            searchingState
-        } else if results.isEmpty && hasSearched {
-            noResultState
-        } else {
-            resultList
+        Group {
+            if trimmedQuery.isEmpty {
+                emptyState
+            } else if results.isEmpty && isSearching {
+                searchingState
+            } else if results.isEmpty && hasSearched {
+                noResultState
+            } else {
+                resultList
+            }
         }
+        .transition(.opacity)
+        .animation(reduceMotion ? nil : .recapValueSwap, value: contentState)
+    }
+
+    /// 搜索内容四态：仅整态切换时交叉淡入，逐字输入期间不动画（避免抖动）。
+    private enum ContentState: Equatable {
+        case idle, searching, noResult, results
+    }
+
+    private var contentState: ContentState {
+        if trimmedQuery.isEmpty { return .idle }
+        if results.isEmpty && isSearching { return .searching }
+        if results.isEmpty && hasSearched { return .noResult }
+        return .results
     }
 
     private var resultList: some View {
@@ -397,6 +414,7 @@ private struct HistoryTags: View {
                             .padding(.vertical, 5)
                             .background(Color.recapTea.opacity(0.08), in: Capsule())
                     }
+                    .buttonStyle(RecapPressStyle())
                 }
             }
         }

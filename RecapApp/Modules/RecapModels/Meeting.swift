@@ -7,6 +7,13 @@ public enum TranscriptKind: String, Codable, Sendable {
     case polished   // LLM 纠错润色后
 }
 
+/// 音频来源：本机录音 / 外部导入。导入会议跳过 LIVE 专属逻辑，首转走导入编排
+/// （`processImportedAudio`）。
+public enum MeetingAudioSource: String, Codable, Sendable {
+    case recorded
+    case imported
+}
+
 /// 一次会议（录音 -> 转写 -> 理解 -> 行动 的聚合根）。
 @Model
 public final class Meeting {
@@ -15,6 +22,14 @@ public final class Meeting {
     public var startedAt: Date
     public var durationSeconds: Double
     public var audioPath: String?
+    /// 音频来源（`MeetingAudioSource.rawValue`）；旧数据缺省 recorded。
+    public var audioSourceRaw: String = MeetingAudioSource.recorded.rawValue
+
+    /// 便捷读写（rawValue 损坏时兜底 recorded）。
+    public var audioSource: MeetingAudioSource {
+        get { MeetingAudioSource(rawValue: audioSourceRaw) ?? .recorded }
+        set { audioSourceRaw = newValue.rawValue }
+    }
     /// 会话三态（LIVE / PROCESS / REVIEW），驱动首页列表与纪要界面。
     public var phase: MeetingPhase
 

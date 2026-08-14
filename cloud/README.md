@@ -34,6 +34,33 @@ node scripts/verify-sts-asr.mjs
 
 **安全**:主 key 只从环境变量读,本脚本绝不写凭证到文件。上线后这把主 key 只放 Cloudflare Secrets,**永不下发客户端**;客户端只拿到 60s–30min 的临时 token。
 
+## 上线前部署验证清单(按序执行)
+
+```bash
+# 0) 单元测试 + 类型检查
+npm test && npx tsc --noEmit
+
+# 1) 主 key 白名单核对(百炼控制台给子账号配「模型访问限制」):
+#    ASR: fun-asr-realtime + paraformer-realtime-v2 ; LLM: qwen-plus
+#    漏开 → st-token 403;多开 → 免费用户可持 ASR 桶 token 刷高价模型。
+DASHSCOPE_API_KEY=sk-xxxx node scripts/verify-sts-asr.mjs   # st-token 连 ASR wss
+DASHSCOPE_API_KEY=sk-xxxx node scripts/verify-sts-llm.mjs   # st-token 调 qwen-plus 白名单
+
+# 2) 网关端到端(先 wrangler deploy,再打生产域名):
+node scripts/verify-gateway-asr.mjs   # 含负向探针:ASR token 调 qwen-plus 必须 403(越权隔离)
+node scripts/verify-gateway-e2e.mjs   # 免费档 /v1/issue → 消费 → 配额耗尽 403 全链路
+
+# 3) Pro 真实验证(TestFlight 沙盒):
+#    a. wrangler secret put APPLE_PRIVATE_KEY/APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_BUNDLE_ID
+#    b. 沙盒期:APPLE_STOREKIT_HOST=https://api.storekit-sandbox.it.com(TestFlight 交易只在沙盒 API 可查;
+#       生产 host 查沙盒交易 → 404 → isPro=false)
+#    c. 真机 TestFlight 装包 → 购买订阅 → 走纪要管线 → 确认网关日志 verify 命中 + 配额 DO 扣减
+#    d. 正式提审前切回生产 host(wrangler secret put / env 移除覆盖)并再验一次真机购买
+
+# 4) 可观测性:Cloudflare 控制台 → Workers → recap-cloud → Logs(observability 已开启,保留 3 天)
+#    prove/issue/quota 路径的 console.log 在此可查;上线后每周扫一次 403/502 分布。
+```
+
 ## 技术要点(供后续步骤参考)
 
 - **签发**:`POST https://dashscope.aliyuncs.com/api/v1/tokens?expire_in_seconds=1800`,主 key Bearer 鉴权,返回临时 token(`st-` 前缀,有效期 1–1800s)。

@@ -334,6 +334,69 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rational
 - **衍生自动写回纪要/待办** / **跨会向量库**：仍拒。  
 - **LIVE 绿点跟衍生数量**：会把「补议程」语义污染成「有附件」；绿点只跟来料。
 
+### Batch P — P0 新功能包（2026-08-14 立项，产品调研驱动）
+
+诊断（三路调研：仓库盘点 + 竞品 + 用户痛点，结论存 memory `recap-feature-research-2026-08`）：
+品类最大痛点 = 说话人「分得出人分不清谁是谁」（Plaud 第一差评源）+ 订阅计量焦虑（导出锁付费
+是品类通病）；最大空白 = 非主持人的线上会议记录权（承接 = 外部音频导入）。三项 P0 全部
+复用现有管线，只补「导入 UI + 转码器 + 编排入口」「纠错 UI + voiceprintId-keyed 写回」
+「导出 composer + 渲染器」。
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 046  | 外部音频导入转纪要：fileImporter → 16k PCM 转码落盘 → 复用重转/分离/纪要管线 | P0 | M | — | DONE（2026-08-14 代码+单测绿；模拟器手测待用户：导入 m4a → 全管线） |
+| 047  | 声纹身份闭环：纠错写回画廊（voiceprintId-keyed）/ 上次见 TA / 重叠标记 | P0 | M | — | DONE（2026-08-14 代码+单测绿；真机验证「改名→重跑分离→名字跟人走」待用户） |
+| 048  | 导出体系：逐字稿 .md / SRT / PDF / 长图（免费能力，复用 shareMarkdown 真相源） | P0 | M | — | DONE（2026-08-14 代码+单测绿；模拟器手测 PDF/SRT/长图观感待用户） |
+
+执行：046 → 047 → 048（互不依赖，可任意顺序/并行；046 价值最高先行）。
+046 修订 001 时代「转写不可分享」决策（048 Wave C 记录了推翻理由）。
+
+### Batch Q — P1 新功能包（2026-08-14 立项，方案已拟、代码未实施）
+
+诊断（三路深勘：App Intents 资产 / 热词官方文档核查 / 047 产出与 Agent 检索地基）：
+P1 三项的关键取舍——Watch 独立 app 是 L 级工程砍掉（ControlWidget 一份覆盖三面）；
+vocabulary_id 受**每账号 10 张表**硬约束降为 POC-gated（同 039 模式）；人物视图单选
+扩展 SpeakerDetailSheet（撞第三主界面红线的独立入口砍掉），必修前置 = 检索 rankerFields
+补 speaker 维度（否则人物检索空手而归）。
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 049  | 零摩擦录音入口：StartRecording Intent + 深链枚举化 + ControlWidget（控制中心/锁屏/Action Button） | P1 | M | — | DONE（2026-08-14 代码绿+appex 已嵌入；控件/Action Button 需真机验证；Word hotwords 见 050） |
+| 050  | 专名修复：热词通道扩容（SA 100 词 + Fun input.context）+ 润色层纠专名；vocabulary_id POC-gated | P1 | S–M | 047 软 | DONE（2026-08-14 代码+单测绿；vocabulary_id 留 POC-gated 未实施） |
+| 051  | 人物中心视图：SpeakerDetailSheet 全部场次 + 问 Recap 跨会追问 + 检索 speaker 维度 | P1 | S–M | **047 硬** | DONE（2026-08-14 代码+单测绿；sheet 内嵌 NavigationStack 跳转待真机目检） |
+
+推荐顺序：**051 → 050 → 049**（已按此序完成，2026-08-14）。
+拒：Watch 独立开录（L）；锁屏 accessory Widget（ControlWidget 覆盖）；URL scheme
+（静态深链枚举够用）；EventKit 自动开录（v1 用自动化引导文案）；人物独立入口
+（第三主界面红线）；SearchView 人物聚合（Phase 3）；即时热词（模型不支持）。
+
+### Batch O — 全仓深度审计修复包（2026-08-14）
+
+诊断（improve 深度审计，7 个并行只读代理 + 逐条人工核实，HEAD 510a7fa）：67 条原始 findings
+去重后 ~55 条。四个立项包覆盖 P0；其余记录在下方「未立项 findings 索引」防重复审计。
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 042  | 商业化堵漏包：免费档 TTL 阀门 / revocationDate / 后台续签 guard / 502 透传 / Host 白名单 | P0 | S | — | TODO |
+| 043  | seed 失败不再藏走健康库 + 声纹文件排除 iCloud 备份（PIPL） | P0 | S | — | TODO |
+| 044  | 四条 LLM 旁路去硬编码模型名 + 两处误导性「免费额度已用完」文案 | P0 | S | — | TODO |
+| 045  | 录音会话小修包：pauseFlushTask 防双写 / onError 洪泛 / 重转置位与取消恢复 / unload 自旋 / ensureLoaded 守卫 | P0 | S | — | TODO |
+
+执行：042–045 互相独立，可任意顺序/并行。042 网关侧完成后需用户手动 `wrangler deploy`。
+
+#### Batch O 未立项 findings 索引（已核实，待拍板或后续批次）
+
+- **GW-05 QuotaDO 首签扣 0**（`quota-do.ts:79-82` 注释与代码矛盾）——需产品拍板口径后 S 修复。
+- **C1 匿名免费额度防刷**（/v1/issue 无限流 + 设备头可伪造 + UUID 重装即换）——CF WAF 规则 + UUID 校验，M。
+- **GW-03 Pro 无持有证明**（仅 transactionId 字符串，无 JWS）——客户端需同步改造，M。
+- **GW-09/E1-E5 测试覆盖专项**（QuotaDO/MembershipStore/MeetingDeletion/MeetingSession 状态机/Provider-MinutesPipeline 编排零覆盖）——建议整批立项（引入 vitest-pool-workers + in-memory ModelContainer fixture + 伪 recorder）。
+- **D1-D6 性能专项**（LIVE 三路 @Published 全树重绘 / publishMergerRows O(n²) / 回放 20Hz 全 body 重算 / 搜索与列表 JSON 重复解码 / 首页滚动每帧重算 / 方言检测全表排序）——建议先 Instruments 量化再立项，D6（方言检测前缀取段）是其中唯一 S 工作量快修。
+- **MON-04 设置页 onAppear 权益未加载覆写 mode**（双键漂移新入口）、**MON-05 免费档计数混桶**、**MON-07 删账户强制 .byok**、**MON-08 Keychain 非原子写**、**GW-08 elevate 非原子双计**、**GW-10 prove-free 静默吞错**（后两个 S 低危）。
+- **DATA-02 删除 save 失败不 rollback**、**DATA-03 删会议不清理 EKReminder**、**DATA-04 OCR 回填不查 isDeleted**、**DATA-05 弱 ID 反指针悬挂**、**DATA-06/MIN-07 39 处 try? save 静默吞错**、**DATA-10 照片先落盘后落库**——数据一致性批次候选。
+- **MIN-03 Agent 流式中追问孤儿化上一轮**（B4，多轮对话丢数据）、**MIN-04 MacPaw 无法关 thinking + 首 token 只计 content**、**MIN-05 收敛轮 5s 丢弃成果**、**MIN-02 待办抽取失败=零待办**、**MIN-06 todosTask 取消不传播**、**MIN-09 网页内容注入隔离**、**MIN-10 错误 body 进气泡**、**MIN-08 SSE 逐字节**。
+- **ASR-02 溢出后 sender 不停**、**ASR-03 续录 offset 取字幕末非 PCM**、**ASR-04 chunker <1s 直通**、**ASR-07 SA start 失败哑录**、**ASR-08 SA 输入流无界缓冲**、**ASR-09 路由变化哑录**、**ASR-10 FluidDiarizer 同步推理阻塞**、**ASR-11/12**。
+- **UI-07 空壳删除二次访问已删模型**、**UI-09 safeAreaInset 五处魔数**、**UI-06 搜索历史被中间查询污染**、**PERF-06 Moment 全图解码**、**PERF-08 mermaid N WebView**（investigate）。
+
 ## How to execute
 
 ```bash
