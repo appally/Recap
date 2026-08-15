@@ -165,6 +165,44 @@ public final class MeetingSession: ObservableObject {
         } else {
             self.summary = MeetingSummary(tldr: "", decisions: [], openQuestions: [])
         }
+        Self.registerForDeletionLink(self, meetingID: meeting.id)
+    }
+
+    // MARK: - 删除联动（C1：删会后写已销毁模型的系统性缺口）
+
+    /// 该会议是否仍可安全写入。删除会议后（`context.delete` 即刻置 isDeleted，save 后
+    /// modelContext 置空），在飞的后台任务（分离/润色/重转/checkpoint 回填）对已销毁
+    /// 模型写属性会触发 SwiftData BackingData 失效崩溃——所有「长 await 之后写回」的
+    /// 点都要先过此守卫（与 HandwritingRecognitionService / MomentOCRService 同范式）。
+    /// 守卫与写回之间不得有 await（MainActor 同步段不可被删除穿插）。
+    private var meetingIsWritable: Bool {
+        !meeting.isDeleted && meeting.modelContext != nil
+    }
+
+    /// 活跃 session 弱引用盒（按 meetingID 索引）。weak：视图释放即失效，
+    /// 查表时顺带清扫空盒，不延长 session 生命周期。
+    private final class WeakSessionRef {
+        weak var session: MeetingSession?
+        init(session: MeetingSession) { self.session = session }
+    }
+
+    private static var liveSessionsByMeeting: [UUID: [WeakSessionRef]] = [:]
+
+    private static func registerForDeletionLink(_ session: MeetingSession, meetingID: UUID) {
+        var boxes = (liveSessionsByMeeting[meetingID] ?? []).filter { $0.session != nil }
+        boxes.append(WeakSessionRef(session: session))
+        liveSessionsByMeeting[meetingID] = boxes
+    }
+
+    /// 删除会议前调用：取消该会议 session 在飞的会后计算（分离/润色/重转）。
+    /// CoreML 推理不响应取消，任务在当前推理块结束后退出——真正的崩溃防线是各
+    /// perform* 写回前的 `meetingIsWritable` 守卫；取消只是省 CPU/云端配额。
+    static func cancelPostMeetingCompute(for meetingID: UUID) {
+        let boxes = (liveSessionsByMeeting[meetingID] ?? []).filter { $0.session != nil }
+        liveSessionsByMeeting[meetingID] = boxes
+        for box in boxes {
+            box.session?.cancelPostMeetingCompute()
+        }
     }
 
     public func onAppear() {
@@ -775,6 +813,8 @@ public final class MeetingSession: ObservableObject {
                 )
             }
             let labeled = outcome.segments.filter { ($0.speakerId ?? "").hasPrefix("spk") }.count
+            // 删除竞态：分离是分钟级推理，期间会议可能已从首页删除（cascade 不含本任务句柄）
+            guard meetingIsWritable else { return }
             meeting.segments = outcome.segments
             meeting.speakers = outcome.speakers
             adoptSegmentsAsBlocks(outcome.segments)
@@ -987,6 +1027,8 @@ public final class MeetingSession: ObservableObject {
             }
             await engine.release()
             preparedEngine = nil
+            // 删除竞态：重转是分钟级（云端/端侧），期间会议可能已删除——不可再读/写 meeting
+            guard meetingIsWritable else { return false }
             // 拒收「部分成功」：云端分块重试耗尽后的段被静默跳过，返回的残缺结果若直接
             // 整表覆盖，会把原本更完整的转写抹掉且不可恢复。显著更短（<60% 字数）即保留旧稿。
             if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
@@ -1072,6 +1114,8 @@ public final class MeetingSession: ObservableObject {
             }
             await engine.release()
             preparedEngine = nil
+            // 删除竞态：方言重转期间会议可能已删除——不可再读/写 meeting
+            guard meetingIsWritable else { return false }
             guard !result.segments.isEmpty else {
                 RecapLog.session.info("dialect-retranscribe: 重转无字幕，保留原转写")
                 return false
@@ -1149,6 +1193,8 @@ public final class MeetingSession: ObservableObject {
             }
             await engine.release()
             preparedEngine = nil
+            // 删除竞态：端侧升级重转期间会议可能已删除——不可再读/写 meeting
+            guard meetingIsWritable else { return }
             guard !result.segments.isEmpty else {
                 RecapLog.session.info("on-device-upgrade: 重转无字幕，保留原转写")
                 return
@@ -1738,6 +1784,8 @@ public final class MeetingSession: ObservableObject {
                                      model: polishModel, temperature: 0.1)
             }
             let polished = try await polisher.polish(source, hints: liveContextualHints)
+            // 删除竞态：润色是分钟级 LLM 流式，期间会议可能已删除——不可再写 meeting
+            guard meetingIsWritable else { return }
             meeting.polishedSegmentsData = try? JSONEncoder().encode(polished)
             meeting.polishedModelId = polishModel
             // 用「当前」meeting.segments 重建，而非开跑时的 source 快照：polish 与 diarization 并发，
@@ -1898,7 +1946,7 @@ public final class MeetingSession: ObservableObject {
                 return (data, segments)
             }.value
             guard !Task.isCancelled, let self, generation == self.checkpointGeneration,
-                  self.phase == .live,
+                  self.phase == .live, self.meetingIsWritable,
                   let (data, segments) = payload else { return }
             self.meeting.durationSeconds = Double(max(self.elapsed, Int(self.meeting.durationSeconds), 1))
             self.meeting.adoptPreencodedSegments(data, decoded: segments)

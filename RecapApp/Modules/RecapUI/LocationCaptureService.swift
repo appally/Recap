@@ -34,6 +34,8 @@ public final class LocationCaptureService {
                             locality: placemark.locality,
                             thoroughfare: placemark.thoroughfare)
                   ) else { return }
+            // 删除竞态（C1）：定位 8s + 反编码 await 期间会议可能已删除——写已销毁模型会崩溃
+            guard !meeting.isDeleted, meeting.modelContext != nil else { return }
             meeting.location = MeetingLocation(
                 label: label,
                 coordinate: .init(latitude: coordinate.latitude, longitude: coordinate.longitude),

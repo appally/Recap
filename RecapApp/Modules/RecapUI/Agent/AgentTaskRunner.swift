@@ -198,6 +198,13 @@ public final class AgentTaskRunner {
         // 免费档 token 瞬时未就绪时强刷一次；失败按 catch 同模式标记 task failed。
         let availability = await MinutesPipelineSmoke.ensureCanRun()
         guard availability.available else {
+            // 删除竞态：凭证检查 await 期间会议被删（cascade 销毁 task/session）——直接收尾，不碰模型
+            if task.isDeleted || session.isDeleted {
+                kernel = nil
+                endBackgroundTask()
+                clearLiveMirror()
+                return
+            }
             let msg = availability.message ?? "未配置可用的大模型密钥"
             task.lastError = msg
             lastError = msg
@@ -288,6 +295,12 @@ public final class AgentTaskRunner {
                     }
                     break
                 }
+                // 删除竞态（C1）：调研是分钟级 LLM 轮次，期间会议可能已删除（cascade 销毁
+                // task/session/ChatMessageRecord）——后续 checkpoint()/finish()/失败分支都不可
+                // 再写已销毁模型。break 即取消 kernel 流；mirror 与后台名额由下方收尾清。
+                if task.isDeleted || session.isDeleted {
+                    break
+                }
                 switch event {
                 case .status(let s):
                     appendProgress(s)
@@ -351,19 +364,29 @@ public final class AgentTaskRunner {
                 }
             }
         } catch is CancellationError {
-            if task.state != .suspended, task.state != .cancelled {
+            // 删除竞态：会议删除触发的取消不可再写已销毁的 task 状态
+            if !task.isDeleted, task.state != .suspended, task.state != .cancelled {
                 _ = task.transition(to: .cancelled)
                 try? context.save()
             }
         } catch {
-            task.lastError = error.localizedDescription
+            if !task.isDeleted {
+                task.lastError = error.localizedDescription
+                _ = task.transition(to: .failed)
+                try? context.save()
+            }
             lastError = error.localizedDescription
-            _ = task.transition(to: .failed)
-            try? context.save()
         }
 
         kernel = nil
         endBackgroundTask()
+
+        // 删除竞态：会议已删（cascade 销毁 task/session）——挂起判定/终态收口/assistant
+        // 记录落库全部不可触碰模型，清场即退。
+        if task.isDeleted || session.isDeleted {
+            clearLiveMirror()
+            return
+        }
 
         // 终态收口
         let terminalState = task.state

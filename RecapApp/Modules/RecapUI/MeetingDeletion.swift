@@ -55,7 +55,7 @@ final class MinutesTaskRegistry {
 enum MeetingDeletion {
     static func delete(_ meeting: Meeting, in context: ModelContext) {
         let id = meeting.id
-        MinutesTaskRegistry.shared.cancel(for: id)
+        cancelInFlightWork(for: id)
         // Ask 会话 / 消息 / 步骤：Meeting.chatSessions cascade
         for session in meeting.chatSessions {
             context.delete(session)
@@ -74,7 +74,7 @@ enum MeetingDeletion {
     static func deleteAll(_ meetings: [Meeting], in context: ModelContext) {
         let ids = meetings.map(\.id)
         for id in ids {
-            MinutesTaskRegistry.shared.cancel(for: id)
+            cancelInFlightWork(for: id)
         }
         for meeting in meetings {
             for session in meeting.chatSessions {
@@ -89,6 +89,19 @@ enum MeetingDeletion {
         }
         for id in ids {
             MeetingAudioStore.deleteMeetingAudio(meetingId: id)
+        }
+    }
+
+    /// 删除前取消该会议的在飞后台工作（C1 删除竞态的取消半边；崩溃防线是各写回点的
+    /// isDeleted 守卫，取消负责省 CPU/云端配额/LLM 轮次）：
+    /// 1. 纪要管线（原 MinutesTaskRegistry 语义）；
+    /// 2. 会后分离/润色/重转（session 弱引用表反查）；
+    /// 3. 深度调研轮（单例 runner，仅当当前轮属于该会议才取消——不误伤其他会议的调研）。
+    private static func cancelInFlightWork(for id: UUID) {
+        MinutesTaskRegistry.shared.cancel(for: id)
+        MeetingSession.cancelPostMeetingCompute(for: id)
+        if AgentTaskRunner.shared.current?.meeting?.id == id {
+            AgentTaskRunner.shared.cancelCurrent()
         }
     }
 }
