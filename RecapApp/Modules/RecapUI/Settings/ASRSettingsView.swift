@@ -119,7 +119,7 @@ struct ASRSettingsView: View {
 
             Text(engineSummary)
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
         }
     }
@@ -497,7 +497,7 @@ struct ASRSettingsView: View {
 
             Text("开通模型 \(ASRPresets.funRealtimeModel)。实时转写不支持说话人分离，会后可用非实时模型补齐。")
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
         }
     }

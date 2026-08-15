@@ -20,7 +20,7 @@ struct AppleSignInSection: View {
 
             Text("登录后可绑定订阅。未登录也能用端侧能力与自备密钥；未经同意不会上传会议内容。")
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
         }
     }

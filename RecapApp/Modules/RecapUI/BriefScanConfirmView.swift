@@ -130,7 +130,7 @@ struct BriefScanConfirmView: View {
             Button(action: onDelete) {
                 Image(systemName: "xmark.circle.fill")
                     .font(.system(size: 16))
-                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
             }
             .buttonStyle(.plain)
         }

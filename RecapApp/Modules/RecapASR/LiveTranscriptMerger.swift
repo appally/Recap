@@ -34,6 +34,19 @@ public struct LiveCaptionRow: Equatable, Sendable, Identifiable {
 /// - partial：会话层传入的 `elapsed` 已是绝对会议墙钟（跨续录单调累加），直接用，
 ///   不再加 timelineOffset——否则续录后 elapsed 与 offset 各带一次会前基数，草稿时间戳翻倍。
 public struct LiveTranscriptMerger: Sendable {
+    /// 最近一次变更的形态（供会话层选增量/全量投影，O(n²) churn 治理）。
+    /// 标记由本类型显式维护——投影层不靠「行数/尾 id 推断」走快路径，
+    /// 否则 segment 的中间行同位更新（时间乱序重写）会被误判为尾部更新而丢变化。
+    public enum Mutation: Sendable, Equatable {
+        /// 仅尾部草稿行被重写（id 不变，最高频路径，可 O(1) 投影）。
+        case tailDraftUpdated
+        /// 尾部追加了一行草稿。
+        case appendedDraft
+        /// 其他一切（segment / 检查点 / 驱逐 / 定稿化）：需全量投影。
+        case rebuilt
+    }
+    public private(set) var lastMutation: Mutation = .rebuilt
+
     public private(set) var rows: [LiveCaptionRow] = []
     /// 绝对 startSeconds → rows 下标
     public private(set) var segmentIndex: [Int64: Int] = [:]
@@ -45,6 +58,7 @@ public struct LiveTranscriptMerger: Sendable {
 
     /// 从落盘 segments 恢复，并重建 index（修复冷启动叠行）。
     public mutating func loadCheckpoint(segments: [TranscriptSegment]) {
+        lastMutation = .rebuilt
         rows = segments.map { seg in
             LiveCaptionRow(
                 id: seg.id.uuidString,
@@ -95,6 +109,7 @@ public struct LiveTranscriptMerger: Sendable {
             rows[idx].text = text
             rows[idx].endSeconds = absoluteStart
             // 草稿 start 保持首次出现
+            lastMutation = .tailDraftUpdated
         } else {
             if !segmentDriven {
                 finalizeTrailingDraft()
@@ -107,6 +122,7 @@ public struct LiveTranscriptMerger: Sendable {
                     isFinal: false
                 )
             )
+            lastMutation = .appendedDraft
         }
     }
 
@@ -133,22 +149,37 @@ public struct LiveTranscriptMerger: Sendable {
         let text = seg.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         segmentDriven = true
+        lastMutation = .rebuilt
 
         let absoluteStart = seg.startSeconds + timelineOffset
         let absoluteEnd = max(seg.endSeconds + timelineOffset, absoluteStart)
 
-        // 吃掉当前草稿，避免定稿 + 草稿两行同文
-        rows.removeAll { !$0.isFinal }
+        // 吃掉当前草稿，避免定稿 + 草稿两行同文。
+        // 不变量：非 final 行只出现在尾部（applyPartial 只更新/追加尾草稿）→
+        // 尾段删除替代 removeAll 全表扫（每句一次 O(n)→O(尾草稿数)）。
+        if let draftIdx = rows.lastIndex(where: { !$0.isFinal }) {
+            rows.removeSubrange(draftIdx...)
+        }
 
         // 驱逐与新区段重叠的旧定稿（SpeechAnalyzer 假设拆句残留）
         // 同位段（量化键相等）保留以走 in-place 更新；与 segmentIndex 查表口径一致。
+        // 全表重叠检查保留（语义要求；时间乱序重写不限于尾部）。
         let newKey = Self.quantizeKey(absoluteStart)
+        var didEvict = false
         rows.removeAll { row in
             guard row.isFinal else { return false }
             if Self.quantizeKey(row.startSeconds) == newKey { return false }
-            return row.endSeconds > absoluteStart && row.startSeconds < absoluteEnd
+            if row.endSeconds > absoluteStart && row.startSeconds < absoluteEnd {
+                didEvict = true
+                return true
+            }
+            return false
         }
-        rebuildSegmentIndex()
+        // 索引只在真发生驱逐（下标位移）时重建：常态 append 路径已增量维护 segmentIndex，
+        // 每句一次的全量重建是 LIVE 后期 O(n²) 的主要来源之一。
+        if didEvict {
+            rebuildSegmentIndex()
+        }
 
         if let idx = segmentIndex[newKey], rows.indices.contains(idx) {
             let keepId = rows[idx].id
@@ -177,11 +208,13 @@ public struct LiveTranscriptMerger: Sendable {
 
     public mutating func finalizeAll() {
         for i in rows.indices { rows[i].isFinal = true }
+        lastMutation = .rebuilt
     }
 
     public mutating func finalizeTrailingDraft() {
         guard let idx = rows.lastIndex(where: { !$0.isFinal }) else { return }
         rows[idx].isFinal = true
+        lastMutation = .rebuilt
     }
 
     /// 导出为持久化分段（绝对秒）。

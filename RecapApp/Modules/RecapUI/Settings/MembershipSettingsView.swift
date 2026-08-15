@@ -257,7 +257,7 @@ struct MembershipSettingsView: View {
             } else {
                 Text("自备密钥商品暂不可用，请稍后重试。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Spacing.lg)
             }
@@ -440,16 +440,16 @@ struct MembershipSettingsView: View {
                      ? "买断为一次性付款，永久解锁，不限时长。可随时在同一 Apple ID 下通过「恢复购买」找回。"
                      : "订阅通过 Apple 账户扣款并自动续期（当前周期结束前 24 小时内扣费，除非提前至少 24 小时取消），可在系统「设置 → Apple ID → 订阅」中随时管理或取消。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.55))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .multilineTextAlignment(.center)
                     .lineSpacing(Leading.tight)
 
                 HStack(spacing: Spacing.md) {
-                    legalLink("用户协议", url: "https://recap.manymind.chat/terms")
+                    legalLink("用户协议", url: RecapLegal.termsURL)
                     legalDot
-                    legalLink("隐私政策", url: "https://recap.manymind.chat/privacy")
+                    legalLink("隐私政策", url: RecapLegal.privacyURL)
                     legalDot
-                    legalLink("支持", url: "https://recap.manymind.chat/support")
+                    legalLink("支持", url: RecapLegal.supportURL)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -463,9 +463,9 @@ struct MembershipSettingsView: View {
             .foregroundStyle(Color.recapTea.opacity(0.4))
     }
 
-    private func legalLink(_ title: String, url: String) -> some View {
+    private func legalLink(_ title: String, url: URL) -> some View {
         Button {
-            if let u = URL(string: url) { openURL(u) }
+            openURL(url)
         } label: {
             Text(title)
                 .font(.recapMeta.weight(.medium))

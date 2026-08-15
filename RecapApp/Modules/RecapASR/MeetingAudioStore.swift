@@ -63,16 +63,6 @@ public enum MeetingAudioStore {
         return UInt64(frame) * UInt64(MemoryLayout<Float>.size) * UInt64(channels)
     }
 
-    /// 读取 16k mono Float32 interleaved PCM（与录音写入格式一致）。
-    public static func loadFloatSamples(storedPath: String) throws -> [Float] {
-        let url = try resolveAudioURL(storedPath: storedPath)
-        let data = try Data(contentsOf: url)
-        guard data.count >= MemoryLayout<Float>.size else { return [] }
-        return data.withUnsafeBytes { raw in
-            Array(raw.bindMemory(to: Float.self))
-        }
-    }
-
     /// 以 mmap 懒加载 PCM 文件为 `Data`（页按需 fault-in、可被内核回收），用于会后长音频重转/分离。
     /// 配合按段切片物化，把 60min≈230MB 的整文件常驻降到单段 ~6MB，规避 jetsam OOM。
     /// 调用方按 Float32(4B) 解释字节；返回的 Data 生命周期需覆盖整个转写过程（映射在 Data 释放后失效）。

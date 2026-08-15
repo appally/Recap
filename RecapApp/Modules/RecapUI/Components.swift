@@ -113,7 +113,7 @@ public struct SpeakerBlockView: View {
                     // 重叠说话标记（plan 047 Wave C）：极简双人剪影，不加文字噪音
                     Image(systemName: "person.2")
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.recapTea.opacity(0.6))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                         .accessibilityLabel("此段有两人同时说话")
                 }
             }

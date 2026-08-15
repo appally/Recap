@@ -101,7 +101,7 @@ struct LLMSettingsView: View {
 
             Text(sourceFootnote)
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -153,7 +153,7 @@ struct LLMSettingsView: View {
                         : "开通 Pro 后由官方网关提供云端模型支持。也可随时改用「自备密钥」。"
                 )
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .lineSpacing(Leading.tight)
             }
             .padding(.vertical, Spacing.xs)
@@ -221,7 +221,7 @@ struct LLMSettingsView: View {
                  ? "已登录，每月自动续杯。升级 Pro 享云端高保真 + 智能纪要。"
                  : "登录 Apple 账号后额度升级、按月续杯。")
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
 
             SettingsDivider()
@@ -275,7 +275,7 @@ struct LLMSettingsView: View {
 
             Text("API Key 仅保存在本机 Keychain，不会上传至任何服务器，也不会进入 iCloud 备份。")
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.6))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
         }
     }

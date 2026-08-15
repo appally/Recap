@@ -1,5 +1,8 @@
 import Foundation
 import FluidAudio
+// 只引 RecapLog 单符号（作用域导入）：整包 import RecapModels 会让本文件的 `Speaker`
+// 与 RecapModels.Speaker 产生歧义——本文件约定 Speaker 指 FluidAudio 的声纹 Speaker。
+import enum RecapModels.RecapLog
 
 /// 跨会议说话人声纹画廊（app 级）。
 ///
@@ -48,9 +51,7 @@ public final class VoiceprintGallery: @unchecked Sendable {
         speakersStorage = Array(byId.values)
         let snapshot = speakersStorage
         lock.unlock()
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: url, options: .atomic)
-        }
+        writeSnapshot(snapshot)
     }
 
     /// 注册/更新单个说话人（供 Phase 3"标记我"用 `extractSpeakerEmbedding` 构造永久 Speaker）。
@@ -100,10 +101,23 @@ public final class VoiceprintGallery: @unchecked Sendable {
         persist(snapshot)
     }
 
-    /// 持久化快照（锁外调用；encode 失败静默——与既有 save 族一致）。
+    /// 持久化快照（锁外调用；委托 ``writeSnapshot(_:)`` 记失败日志）。
     private func persist(_ snapshot: [Speaker]) {
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: url, options: .atomic)
+        writeSnapshot(snapshot)
+    }
+
+    /// 快照落盘。失败记 error 日志：声纹演化 / 「标记我」/ 纠错命名在磁盘满等场景下
+    /// 静默回退到旧版（内存已更新、磁盘未动），下次启动即丢——至少留可诊断痕迹。
+    @discardableResult
+    private func writeSnapshot(_ snapshot: [Speaker]) -> Bool {
+        do {
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            RecapLog.session.error(
+                "VoiceprintGallery 持久化失败（磁盘满/IO 错），本次改动仅存活于内存，重启即丢：\(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -133,9 +147,7 @@ public final class VoiceprintGallery: @unchecked Sendable {
         }
         let snapshot = speakersStorage
         lock.unlock()
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: url, options: .atomic)
-        }
+        writeSnapshot(snapshot)
         UserDefaults.standard.set(voiceprintId, forKey: Self.meIdKey)
     }
 
@@ -160,8 +172,11 @@ public final class VoiceprintGallery: @unchecked Sendable {
         speakersStorage = []
         let snapshot = speakersStorage
         lock.unlock()
-        if let data = try? JSONEncoder().encode(snapshot) {
-            try? data.write(to: url, options: .atomic)
+        // 撤回声纹是合规动作（PIPL 生物特征删除权）：写空文件失败（磁盘满）时必须
+        // 退而删文件——删除不占空间；两者都失败才认栽（此时仅清了内存，留 error 日志）。
+        if !writeSnapshot(snapshot) {
+            try? FileManager.default.removeItem(at: url)
+            RecapLog.session.error("VoiceprintGallery 清空写盘失败，已退回直接删除文件（若仍失败，磁盘残留旧声纹）")
         }
         UserDefaults.standard.removeObject(forKey: Self.meIdKey)
     }

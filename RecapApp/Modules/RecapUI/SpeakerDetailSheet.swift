@@ -221,7 +221,7 @@ struct SpeakerDetailSheet: View {
                     Spacer()
                     Image(systemName: RecapSymbol.chevron)
                         .font(.recapMeta)
-                        .foregroundStyle(Color.recapTea.opacity(0.6))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                 }
                 .padding(.vertical, 10)
                 .padding(.horizontal, Spacing.md)
@@ -253,11 +253,11 @@ struct SpeakerDetailSheet: View {
             if speaker.voiceprintId == nil {
                 Text("本场未启用声纹身份，暂无跨会议记录。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
             } else if appearances.isEmpty {
                 Text("这是声纹画廊首次认出 TA。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
             } else {
                 ForEach(appearances.prefix(trajectoryDisplayLimit)) { item in
                     NavigationLink(value: MeetingRoute.meeting(item.id)) {
@@ -278,7 +278,7 @@ struct SpeakerDetailSheet: View {
                 if appearances.count > trajectoryDisplayLimit {
                     Text("共 \(appearances.count) 场——向 TA 提问可跨全部场次检索")
                         .font(.recapMeta)
-                        .foregroundStyle(Color.recapTea.opacity(0.7))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                 }
             }
             askRecapButton
@@ -312,7 +312,7 @@ struct SpeakerDetailSheet: View {
                     .foregroundStyle(Color.recapTea.opacity(0.4))
                 Text("先为 TA 命名（声纹身份建立后），我才能跨会议找到 TA。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
             }
         }
     }

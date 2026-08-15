@@ -75,7 +75,7 @@ struct SettingsSection<Content: View>: View {
             if let footnote {
                 Text(footnote)
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .lineSpacing(Leading.tight)
                     .padding(.horizontal, 4)
                     .padding(.top, 2)

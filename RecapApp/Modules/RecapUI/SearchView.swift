@@ -164,13 +164,13 @@ struct SearchView: View {
         VStack(spacing: Spacing.sm) {
             Image(systemName: RecapSymbol.search)
                 .font(.system(size: 32, weight: .light))
-                .foregroundStyle(Color.recapTea.opacity(0.5))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
             Text("没有找到「\(trimmedQuery)」相关的内容")
                 .font(.recapBodyS)
                 .foregroundStyle(Color.recapTea)
             Text("试试换个关键词，或用更短的词")
                 .font(.recapMeta)
-                .foregroundStyle(Color.recapTea.opacity(0.7))
+                .foregroundStyle(Color.recapTea.opacity(0.75))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Spacing.xl)

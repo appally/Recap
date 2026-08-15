@@ -28,6 +28,8 @@ public struct MeetingNoteView: View {
     /// 避免拼大串阻塞 spring 首帧（点击卡顿 + 动效被吞的根因）。LIVE 增长时持续推送。
     @State private var agentTranscript: String = ""
     @State private var agentSegments: [TranscriptSegment] = []
+    /// LIVE 边录边问的对话窗快照刷新任务（5s 节流，见 ``scheduleAgentTranscriptRefresh()``）。
+    @State private var agentTranscriptRefreshTask: Task<Void, Never>?
     /// REVIEW 正文单层 Tab：转写 / 总结（默认）/ 笔记（每条模板笔记一个独立 Tab，携带笔记 id）/ 手写。
     @State private var reviewTab: ReviewTab = .summary
     @State private var pendingScrollStart: Double?
@@ -153,6 +155,46 @@ public struct MeetingNoteView: View {
         }
     }
 
+    /// LIVE 边录边问的对话窗快照刷新（节流 + 后台重拼）：
+    /// - 逐句推送无意义——5s 节流，稳态每 5s 至多一次；对话窗已关则不刷新；
+    /// - 长会议全量重拼 transcriptContext（数百 KB 字符串）+ askSegments（O(n) 数组）
+    ///   移出主线程，主线程只做两次引用赋值（blocks 冷启动前数据量小，同步路径无碍）。
+    private func scheduleAgentTranscriptRefresh() {
+        guard agentTranscriptRefreshTask == nil else { return }
+        agentTranscriptRefreshTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(5))
+            agentTranscriptRefreshTask = nil
+            guard showAgent, !Task.isCancelled else { return }
+            let blocks = session.blocks
+            if blocks.isEmpty {
+                agentTranscript = transcriptContext
+                agentSegments = askSegments
+                return
+            }
+            let meetingSegments = meeting.segments
+            let (text, segments): (String, [TranscriptSegment]) = await Task.detached(priority: .utility) {
+                let text = blocks.map { "\($0.speaker.name)：\($0.raw)" }.joined(separator: "\n")
+                let segments: [TranscriptSegment]
+                if !meetingSegments.isEmpty {
+                    segments = meetingSegments
+                } else {
+                    segments = blocks.map { block in
+                        let start = block.startSeconds ?? Self.parseTimestamp(block.timestamp)
+                        return TranscriptSegment(
+                            startSeconds: start,
+                            endSeconds: block.endSeconds ?? start,
+                            speakerId: block.speaker.id,
+                            text: block.raw
+                        )
+                    }
+                }
+                return (text, segments)
+            }.value
+            agentTranscript = text
+            agentSegments = segments
+        }
+    }
+
     /// 为模板生成（`SkillNoteWriter`）构建只读 Agent 上下文（对齐 `AgentInvokeSheet` 的入参）。
     private func makeAgentToolContext() -> AgentToolContext {
         let snapshots = meeting.actionItems.map {
@@ -202,10 +244,11 @@ public struct MeetingNoteView: View {
         .navigationBarBackButtonHidden(true)
         .overlay { agentOverlay }
         .onChange(of: session.blocks.count) { _, _ in
-            // LIVE 边录边问：转写增长时把新快照推给已展开的对话窗（首帧已错开，此处非动画期，同步可接受）。
+            // LIVE 边录边问：转写增长时把新快照推给已展开的对话窗。
+            // 节流 + 后台重拼（见 scheduleAgentTranscriptRefresh）：每句定稿全量重拼
+            // transcriptContext（长会议数百 KB/次）在主线程是抖动源。
             guard showAgent else { return }
-            agentTranscript = transcriptContext
-            agentSegments = askSegments
+            scheduleAgentTranscriptRefresh()
         }
         .sheet(isPresented: $showTemplateSelection) {
             TemplateSelectionSheet(
@@ -1386,7 +1429,7 @@ public struct MeetingNoteView: View {
                 VStack(spacing: Spacing.sm) {
                     Image(systemName: "pencil.tip.crop.circle")
                         .font(.system(size: 40, weight: .light))
-                        .foregroundStyle(Color.recapTea.opacity(0.6))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                     Text("用 Apple Pencil 写下的笔记会出现在这里")
                         .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
@@ -1544,7 +1587,7 @@ public struct MeetingNoteView: View {
             if let location = meeting.locationDisplay {
                 Text("·")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                 Image(systemName: "location")
                     .font(.recapMeta)
                     .foregroundStyle(Color.recapTea)
@@ -3625,7 +3668,7 @@ private struct AILightDisclaimer: View {
     var body: some View {
         Text("内容由 AI 生成，仅供参考")
             .font(.recapMeta)
-            .foregroundStyle(Color.recapTea.opacity(0.6))
+            .foregroundStyle(Color.recapTea.opacity(0.75))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.bottom, Spacing.xs)
     }
@@ -3711,7 +3754,7 @@ private struct DraftingNoteView: View {
                     }
                     Text(cleanToolSummary(raw))
                         .font(.recapMeta.weight(isCurrent ? .medium : .regular))
-                        .foregroundStyle(isCurrent ? Color.recapTea : Color.recapTea.opacity(0.5))
+                        .foregroundStyle(isCurrent ? Color.recapTea : Color.recapTea.opacity(0.75))
                         .lineLimit(1)
                 }
             }

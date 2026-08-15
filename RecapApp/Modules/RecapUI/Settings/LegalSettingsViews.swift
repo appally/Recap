@@ -90,7 +90,7 @@ struct DataPrivacySettingsView: View {
 
                 Text("清除不会删除 Keychain 中的 API Key。如需一并清除，请到偏好设置中手动移除。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .lineSpacing(Leading.tight)
 
                 if !status.isEmpty {
@@ -287,7 +287,7 @@ struct OpenSourceAcknowledgementsView: View {
                                 }
                                 Text(item.role)
                                     .font(.recapMeta)
-                                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                                    .foregroundStyle(Color.recapTea.opacity(0.75))
                             }
                             .padding(.vertical, Spacing.sm)
                         }
@@ -308,10 +308,10 @@ struct OpenSourceAcknowledgementsView: View {
                                     .foregroundStyle(Color.recapInk)
                                 Text(item.source)
                                     .font(.recapMeta)
-                                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                                    .foregroundStyle(Color.recapTea.opacity(0.75))
                                 Text(item.terms)
                                     .font(.recapMeta)
-                                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                                    .foregroundStyle(Color.recapTea.opacity(0.75))
                             }
                             .padding(.vertical, Spacing.sm)
                         }
@@ -320,7 +320,7 @@ struct OpenSourceAcknowledgementsView: View {
 
                 Text("以上各项目的完整许可文本以其官方仓库 LICENSE 文件为准。感谢这些开源项目使「纪要」成为可能。")
                     .font(.recapMeta)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .lineSpacing(Leading.tight)
             }
             .padding(.horizontal, Spacing.xl)

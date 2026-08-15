@@ -129,7 +129,7 @@ public struct PersonalizationSettingsView: View {
                             } label: {
                                 Image(systemName: RecapSymbol.close)
                                     .font(.system(size: 9, weight: .medium))
-                                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                                    .foregroundStyle(Color.recapTea.opacity(0.75))
                             }
                             .buttonStyle(.plain)
                         }
@@ -144,7 +144,7 @@ public struct PersonalizationSettingsView: View {
                 if vocabWords.count >= UserVocabulary.maxWords {
                     Text("已达 \(UserVocabulary.maxWords) 词上限。")
                         .font(.recapMeta)
-                        .foregroundStyle(Color.recapTea.opacity(0.7))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                 }
             }
         }
@@ -177,7 +177,7 @@ private struct MinimalInputBox: View {
             if text.isEmpty {
                 Text(placeholder)
                     .font(.recapBodyS)
-                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
             }

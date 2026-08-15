@@ -1257,14 +1257,65 @@ public final class MeetingSession: ObservableObject {
     }
 
     /// 火山等累积全量 / Fun-ASR 当前句草稿。
+    /// partial 是 LIVE 最高频事件（每秒多次）：按 merger 的显式变更标记走 O(1) 增量投影，
+    /// 跳过 publishMergerRows 的 previous Dictionary 构建 + 全量 map 重赋（长会议 O(n)/次，
+    /// 2h 后期是主线程抖动主源之一）。segment / 检查点等路径仍走全量投影。
     private func applyPartial(_ text: String) {
-        let beforeCount = merger.rows.count
+        guard !text.isEmpty else { return }
         merger.applyPartial(text: text, elapsedSeconds: Double(elapsed))
-        if merger.rows.count > beforeCount {
-            withAnimation(.easeOut(duration: 0.18)) { publishMergerRows() }
-        } else {
+        switch merger.lastMutation {
+        case .tailDraftUpdated:
+            publishTailDraft()
+        case .appendedDraft:
+            withAnimation(.easeOut(duration: 0.18)) { publishAppendedDraft() }
+        case .rebuilt:
             publishMergerRows()
         }
+    }
+
+    /// partial 尾行重写的增量投影。前提不变量：blocks 是 merger.rows 的最新投影
+    /// （applyPartial/applySegment 后必 publish；loadCheckpoint 走 adoptSegmentsAsBlocks 全量）。
+    /// 尾行 id 一致性防御校验，不匹配（不变量被打破）即回退全量。
+    private func publishTailDraft() {
+        guard let row = merger.rows.last, let lastBlock = blocks.last,
+              row.id == lastBlock.id, !row.isFinal else {
+            return publishMergerRows()
+        }
+        let total = Int(row.startSeconds.rounded())
+        let updated = TranscriptBlock(
+            id: row.id,
+            speaker: lastBlock.speaker,   // 保留已解析说话人（对齐 publishMergerRows 的 previous 语义）
+            timestamp: String(format: "%d:%02d", total / 60, total % 60),
+            raw: row.text,
+            polished: row.text,
+            isFinal: row.isFinal,
+            startSeconds: row.startSeconds,
+            endSeconds: row.endSeconds,
+            confidence: row.confidence
+        )
+        if updated != lastBlock {
+            blocks[blocks.count - 1] = updated
+        }
+    }
+
+    /// partial 追加新草稿行的增量投影（新行不在 previous 里，说话人 = liveSpeaker，
+    /// 与 publishMergerRows 全量路径语义一致）。
+    private func publishAppendedDraft() {
+        guard let row = merger.rows.last, row.id != blocks.last?.id else {
+            return publishMergerRows()
+        }
+        let total = Int(row.startSeconds.rounded())
+        blocks.append(TranscriptBlock(
+            id: row.id,
+            speaker: liveSpeaker,
+            timestamp: String(format: "%d:%02d", total / 60, total % 60),
+            raw: row.text,
+            polished: row.text,
+            isFinal: row.isFinal,
+            startSeconds: row.startSeconds,
+            endSeconds: row.endSeconds,
+            confidence: row.confidence
+        ))
     }
 
     /// SpeechAnalyzer / Fun-ASR 按时间戳分段更新（定稿）。

@@ -44,7 +44,7 @@ struct UsageStatsBoard: View {
                     Spacer()
                     Text("电光青点亮活跃日")
                         .font(.recapCaption)
-                        .foregroundStyle(Color.recapTea.opacity(0.7))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                 }
                 .padding(.horizontal, 4)
 

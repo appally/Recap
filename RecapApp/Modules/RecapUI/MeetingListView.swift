@@ -176,7 +176,7 @@ public struct MeetingListView: View {
             }
             .alert("无法读取此前的数据", isPresented: $showMigrationAlert) {
                 Button("联系支持") {
-                    if let url = URL(string: "mailto:support@manymind.chat") {
+                    if let url = URL(string: "mailto:\(RecapLegal.supportEmail)") {
                         openURL(url)
                     }
                 }
@@ -391,7 +391,7 @@ public struct MeetingListView: View {
             )
         }
         guard let first = parts.first else { return Text("") }
-        let separator = Text(" · ").foregroundStyle(Color.recapTea.opacity(0.6))
+        let separator = Text(" · ").foregroundStyle(Color.recapTea.opacity(0.75))
         return parts.dropFirst().reduce(first) { result, part in result + separator + part }
     }
 
@@ -600,7 +600,7 @@ public struct MeetingListView: View {
             if let count {
                 Text("\(count)")
                     .font(.recapMono)
-                    .foregroundStyle(Color.recapTea.opacity(0.65))
+                    .foregroundStyle(Color.recapTea.opacity(0.75))
                     .fixedSize(horizontal: true, vertical: false)
             }
         }
@@ -873,7 +873,7 @@ private struct MeetingListRow: View {
                     Spacer()
                     Text(meeting.durationSeconds > 0 ? meeting.durationText : "未录音")
                         .font(.recapCaption)
-                        .foregroundStyle(Color.recapTea.opacity(0.6))
+                        .foregroundStyle(Color.recapTea.opacity(0.75))
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {

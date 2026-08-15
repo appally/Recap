@@ -83,9 +83,12 @@ public enum MeetingMediaStore {
 
     /// 进程级降采样缓存：key = 路径#尺寸档。NSCache 本身线程安全（Apple 文档允许多线程访问，
     /// 只是未标注 Sendable），内存告警自动逐出。
+    /// totalCostLimit（按位图像素字节计）必须有：只设 countLimit 时 300 张 3x 大图
+    /// （单张可达数十 MB）理论上限数百 MB——图库滚动即可推高 jetsam 风险。
     private nonisolated(unsafe) static let downsampleCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
+        cache.totalCostLimit = 128 * 1024 * 1024
         return cache
     }()
 
@@ -107,7 +110,9 @@ public enum MeetingMediaStore {
             return nil
         }
         let image = UIImage(cgImage: cg)
-        downsampleCache.setObject(image, forKey: key)
+        // cost = 解码位图像素字节（RGBA8）：与 totalCostLimit 同一量纲，NSCache 据此逐出最旧项。
+        let cost = cg.bytesPerRow * cg.height
+        downsampleCache.setObject(image, forKey: key, cost: cost)
         return image
     }
 
