@@ -10,11 +10,16 @@ public protocol MeetingDiarizer: Sendable {
     /// 预下载/加载模型（可选预热；`diarize` 内部也会懒加载）。
     func prepare() async throws
     /// 对 16kHz mono Float PCM 跑完整文件分离，返回说话人时间轴。
-    func diarize(
-        samples: [Float],
+    ///
+    /// `samples` 泛型（RandomAccessCollection）：允许零拷贝 mmap 视图（``MappedFloatSamples``）
+    /// 直接流入 FluidAudio 的泛型管线，避免整场 `[Float]` 物化（2h 会议 ≈460MB 匿名堆 → jetsam）。
+    /// 内部确需整场数组的实现（SpeakerKit 的 `audioArray:`）自行物化。
+    func diarize<S: RandomAccessCollection & Sendable>(
+        samples: S,
         numberOfSpeakers: Int?,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> [SpeakerTimelineSegment]
+    where S.Element == Float, S.Index == Int
     /// 卸载模型。
     func unload() async
 }
@@ -58,12 +63,12 @@ public enum DiarizationService {
         guard !segments.isEmpty else {
             throw DiarizationError.emptyTranscript
         }
-        // mmap 懒加载 + 单次物化：消除 loadFloatSamples 的 Data+[Float] 双缓冲（峰值 460MB->230MB）。
-        // Pyannote kit 需整数组（分块会破坏说话人聚类），故仍物化 [Float]，但避免双份常驻。
+        // mmap 零拷贝视图：不再整场物化 [Float]（2h 会议 ≈460MB、3h ≈691MB 匿名堆 → jetsam）。
+        // FluidAudio 的 performCompleteDiarization 本就逐 chunk 拷进固定 chunkBuffer（泛型
+        // RandomAccessCollection 入参），此前唯一逼出整场数组的是本层 [Float] 协议签名；
+        // SpeakerKit 回退路径在实现内自行物化（audioArray: 要求）。
         let audioData = try MeetingAudioStore.loadMappedData(storedPath: audioPath)
-        let samples: [Float] = audioData.withUnsafeBytes { raw in
-            Array(raw.bindMemory(to: Float.self))
-        }
+        let samples = MappedFloatSamples(data: audioData)
         guard !samples.isEmpty else {
             throw DiarizationError.emptyAudio
         }

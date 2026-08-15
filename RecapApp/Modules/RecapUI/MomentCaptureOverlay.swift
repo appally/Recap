@@ -23,6 +23,11 @@ struct MomentCaptureOverlay: View {
     @State private var accessGranted = false
     /// 快门闪光：capture 成功瞬间全屏白闪（相机标志反馈）。
     @State private var flashOpacity: Double = 0
+    /// 照片文件名序号：进入 ``shoot()`` 的首个同步段就单调分配。
+    /// 不能等写盘完成再按 `photoPaths.count` 分配——连拍时第二次快门的同步段会在第一次
+    /// append 之前执行，读到相同 count → 两张写同一文件，atomic 后写覆盖先写、一张静默丢失。
+    /// 落盘失败跳号无害（文件名仅要求唯一，不要求连续）。
+    @State private var nextPhotoIndex = 0
     private var hasCamera: Bool { MomentCaptureService.isCameraAvailable }
 
     var body: some View {
@@ -68,6 +73,10 @@ struct MomentCaptureOverlay: View {
     @MainActor
     private func shoot() async {
         Haptics.impact(.light)
+        // 序号必须在首个挂起点之前同步分配：MainActor 把两次 shoot 的进入段串行化，
+        // 此处拿到的序号必然互不相同；放在 capture/写盘之后分配则可能与在飞的上一张撞号。
+        let index = nextPhotoIndex
+        nextPhotoIndex += 1
         guard let data = await camera.capture() else { return }
         // 拍到才闪：快门白闪是「已记录」的标志反馈，先瞬时拉满再 ease-out 淡出。
         flashOpacity = 0.85
@@ -77,7 +86,6 @@ struct MomentCaptureOverlay: View {
         // ImageIO 下采样出缩略图。主线程只等相对路径与缩略图数据回来，零编码开销。
         let meetingId = meeting.id
         let momentId = self.momentId
-        let index = photoPaths.count
         let outcome: (String, Data?)? = await Task.detached(priority: .utility) {
             guard let rel = try? MeetingMediaStore.saveData(
                 data, meetingId: meetingId, momentId: momentId, index: index) else { return nil }

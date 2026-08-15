@@ -62,16 +62,20 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
     }
 
     /// 对 16 kHz mono Float PCM 跑完整文件 diarization。
-    public func diarize(
-        samples: [Float],
+    /// SpeakerKit 的 `audioArray:` 参数要求整场数组（回退引擎，flag 关闭时不走此路径），
+    /// 故在实现内物化；主路径 FluidDiarizer 保持零拷贝透传。
+    public func diarize<S: RandomAccessCollection & Sendable>(
+        samples: S,
         numberOfSpeakers: Int? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
-    ) async throws -> [SpeakerTimelineSegment] {
+    ) async throws -> [SpeakerTimelineSegment]
+    where S.Element == Float, S.Index == Int {
         let kit = try await ensureKit(modelFolder: nil)
         // 标记推理段：供 unload 等待（unload 不可与推理并发）。
         isInferring = true
         defer { isInferring = false }
         // CoreML 推理串行化（#661）：pyannote 与 FluidAudio ASR 不可并发跑。
+        let samplesArray = Array(samples)
         let result = try await CoreMLInferenceGate.shared.exclusive { [kit] () async throws in
             let options = PyannoteDiarizationOptions(
                 numberOfSpeakers: numberOfSpeakers,
@@ -79,7 +83,7 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
                 useExclusiveReconciliation: true
             )
             return try await kit.diarize(
-                audioArray: samples,
+                audioArray: samplesArray,
                 options: options,
                 progressCallback: { p in
                     progress?(p.fractionCompleted)

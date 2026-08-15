@@ -92,13 +92,16 @@ public actor FluidDiarizer: MeetingDiarizer {
         preparing = nil
     }
 
-    public func diarize(
-        samples: [Float],
+    public func diarize<S: RandomAccessCollection & Sendable>(
+        samples: S,
         numberOfSpeakers: Int? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
-    ) async throws -> [SpeakerTimelineSegment] {
+    ) async throws -> [SpeakerTimelineSegment]
+    where S.Element == Float, S.Index == Int {
         // numberOfSpeakers 当前恒为 nil（scheduleDiarizationIfNeeded 不传）；DiarizerManager.config
         // 是 internal let，Phase 1 统一走自动聚类（numClusters=-1），忽略该参数。
+        // samples 零拷贝透传：FluidAudio 泛型管线逐 chunk 拷进固定 chunkBuffer，
+        // 整场 [Float] 物化（2h≈460MB 匿名堆）由调用侧的 MappedFloatSamples 消除。
         let box = try await ensureLoaded(progress: nil)
         // 跨录音声纹身份（路径 C）：仅在用户同意声纹处理时读写画廊（PIPL §28 敏感信息须单独同意）。
         // 未同意时画廊空跑——分离仍产出本会议内有效的身份，但不收集 / 持久化声纹 embedding。

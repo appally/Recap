@@ -191,6 +191,46 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         inputContinuation.yield(AnalyzerInput(buffer: buffer))
     }
 
+    /// 批处理 override（磁盘友好）：从 mmap Data 按 ~30s 块物化 `[Float]` 逐块 feed。
+    /// 默认实现会把整场一次物化（Data→[Float] ≈460MB）再整场单次 feed（AVAudioPCMBuffer
+    /// Int16 再 ×2 ≈690MB 峰值），2h+ 会议重转直逼 jetsam；本引擎本是流式设计，
+    /// 分块 feed 语义等价（输入流 bufferingNewest(64) 有界），峰值降为常数级（单块 ~3MB）。
+    public func transcribe(audioData: Data,
+                           sampleRate: Double,
+                           onPartial: (@Sendable (String) -> Void)?) async throws -> TranscribeResult {
+        let floatBytes = MemoryLayout<Float>.size
+        guard audioData.count >= floatBytes else {
+            return TranscribeResult(segments: [], firstTokenLatencyMs: nil, chunkCount: 0)
+        }
+        let events = try await startStreaming(sampleRate: sampleRate)
+        let consumer = Task {
+            for await event in events {
+                if case .partial(let text) = event {
+                    onPartial?(text)
+                }
+            }
+        }
+        do {
+            let chunkSamples = max(1, Int(sampleRate) * 30)
+            let totalFloats = audioData.count / floatBytes
+            var offset = 0
+            while offset < totalFloats {
+                let count = min(chunkSamples, totalFloats - offset)
+                let chunk: [Float] = audioData.withUnsafeBytes { raw in
+                    Array(raw.bindMemory(to: Float.self)[offset..<offset + count])
+                }
+                try await feed(chunk)
+                offset += count
+            }
+            let result = try await stopStreaming()
+            await consumer.value
+            return result
+        } catch {
+            consumer.cancel()
+            throw error
+        }
+    }
+
     public func stopStreaming() async throws -> TranscribeResult {
         guard isStreaming else {
             return TranscribeResult(segments: currentSegments(), firstTokenLatencyMs: firstTokenMs)

@@ -6,7 +6,12 @@ import RecapModels
 private actor FakeDiarizer: MeetingDiarizer {
     func prepare() async throws {}
     func unload() async {}
-    func diarize(samples: [Float], numberOfSpeakers: Int?, progress: (@Sendable (Double) -> Void)?) async throws -> [SpeakerTimelineSegment] {
+    func diarize<S: RandomAccessCollection & Sendable>(
+        samples: S,
+        numberOfSpeakers: Int?,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws -> [SpeakerTimelineSegment]
+    where S.Element == Float, S.Index == Int {
         [
             SpeakerTimelineSegment(speakerIndex: 0, startSeconds: 0, endSeconds: 2),
             SpeakerTimelineSegment(speakerIndex: 1, startSeconds: 2, endSeconds: 4)
