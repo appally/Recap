@@ -3,7 +3,7 @@ import RecapModels
 import RecapASR
 import RecapLLM
 
-/// 设置首页：Plaud 极致聚焦会员与额度看板 + 极简导航列表。
+/// 设置首页：极致聚焦会员与额度看板 + 极简导航列表。
 public struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(MembershipStore.self) private var membership
@@ -22,7 +22,7 @@ public struct SettingsView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Spacing.xxl) {
-                    plaudMembershipCard
+                    heroMembershipCard
 
                     VStack(alignment: .leading, spacing: Spacing.sm) {
                         Text("发现与服务")
@@ -31,7 +31,7 @@ public struct SettingsView: View {
                             .foregroundStyle(Color.recapTea)
                             .padding(.horizontal, 4)
 
-                        plaudNavigationList
+                        settingsNavigationList
                     }
                 }
                 .padding(.horizontal, Spacing.xl)
@@ -61,9 +61,9 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Plaud AI Signature Hero Membership Card (Black High-Contrast Header)
+    // MARK: - Hero 会员卡（黑色高对比头部）
 
-    private var plaudMembershipCard: some View {
+    private var heroMembershipCard: some View {
         NavigationLink {
             MembershipSettingsView()
         } label: {
@@ -86,7 +86,7 @@ public struct SettingsView: View {
                     .foregroundStyle(.white.opacity(0.75))
                 }
 
-                // Progress Bar (Thin line track - Plaud Style)
+                // Progress Bar (Thin line track)
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule()
@@ -149,14 +149,15 @@ public struct SettingsView: View {
         .accessibilityLabel("会员与额度看板")
     }
 
-    /// 会员卡标题（如 免费试用 / Pro 年度 / BYOK 极客版）
+    /// 会员卡标题（如 免费版 / Pro 年度 / BYOK 极客版）
     private var membershipCardTitle: String {
         if membership.isPro {
             return membership.tierLabel
         } else if membership.byokUnlocked {
             return "BYOK 极客版"
         } else {
-            return "免费试用"
+            // 永久免费档（非限时试用）——勿写「免费试用」，审核会追问试用转订阅机制。
+            return "免费版"
         }
     }
 
@@ -175,7 +176,7 @@ public struct SettingsView: View {
         if membership.isPro {
             return "每月 30 小时"
         } else if membership.byokUnlocked {
-            return "自备 API Key 无限使用"
+            return "自备 Key·额度由你的密钥决定"
         } else {
             return "\(FreeTrialQuota.remainingThisMonth) 次剩余 / 每月 \(FreeTrialQuota.monthlyLimit) 次"
         }
@@ -201,9 +202,9 @@ public struct SettingsView: View {
         }
     }
 
-    // MARK: - Plaud AI Style Entry List (Discover & Services)
+    // MARK: - 功能入口列表（发现与服务）
 
-    private var plaudNavigationList: some View {
+    private var settingsNavigationList: some View {
         VStack(spacing: 0) {
             // 1. 个人账户
             NavigationLink {

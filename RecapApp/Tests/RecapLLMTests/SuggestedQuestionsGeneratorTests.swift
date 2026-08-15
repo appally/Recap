@@ -27,12 +27,20 @@ final class SuggestedQuestionsGeneratorTests: XCTestCase {
         XCTAssertEqual(q, ["A", "B", "C", "D", "E"])   // 去重 + 截 5
     }
 
-    func testParseTruncatesEachTo16Chars() {
-        let long = String(repeating: "字", count: 30)
-        let raw = #"{"questions":["\#(long)"]}"#
+    func testParseDropsOverlongQuestions() {
+        // 超长（>18 字）整条丢弃，不截断成残句 chip
+        let overlong = String(repeating: "字", count: 19)
+        let raw = #"{"questions":["\#(overlong)","好的问题"]}"#
         let q = SuggestedQuestionsGenerator.parse(raw)
-        XCTAssertEqual(q.count, 1)
-        XCTAssertEqual(q.first?.count, 16)
+        XCTAssertEqual(q, ["好的问题"])
+    }
+
+    func testParseKeepsWithinTolerance() {
+        // 17 字（16 字约束 + 容忍带内）保留原文
+        let ok = String(repeating: "字", count: 17)
+        let raw = #"{"questions":["\#(ok)"]}"#
+        let q = SuggestedQuestionsGenerator.parse(raw)
+        XCTAssertEqual(q, [ok])
     }
 
     func testParseEmptyArrayReturnsEmpty() {

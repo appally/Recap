@@ -2,7 +2,7 @@ import SwiftUI
 import RecapModels
 import RecapASR
 
-/// 个性化设置（Plaud AI 风格：我的信息、输出偏好）
+/// 个性化设置（极简风格：我的信息、输出偏好）
 public struct PersonalizationSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -49,7 +49,7 @@ public struct PersonalizationSettingsView: View {
                     .foregroundStyle(Color.recapTea)
             }
 
-            PlaudInputBox(
+            MinimalInputBox(
                 text: $identityAbout,
                 placeholder: "介绍你自己：姓名、角色、团队，或任何希望在纪要中参照的身份信息。"
             )
@@ -68,7 +68,7 @@ public struct PersonalizationSettingsView: View {
                     .foregroundStyle(Color.recapTea)
             }
 
-            PlaudInputBox(
+            MinimalInputBox(
                 text: $outputPref,
                 placeholder: "希望如何输出？如：简明直接、务必列出待办与截止日期、标注风险与待确认事项。"
             )
@@ -159,9 +159,9 @@ public struct PersonalizationSettingsView: View {
     }
 }
 
-// MARK: - Plaud Input Box
+// MARK: - Minimal Input Box
 
-private struct PlaudInputBox: View {
+private struct MinimalInputBox: View {
     @Binding var text: String
     let placeholder: String
 

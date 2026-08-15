@@ -80,7 +80,17 @@ private final class MeetingImporterModel: ObservableObject {
             meeting.durationSeconds = result.durationSeconds
             meeting.audioSource = .imported
             BackupExclusion.excludeMeetingAudio(meetingId: meetingId)
-            try? modelContext.save()
+            // save 失败（磁盘满等）不能静默：音频已在盘（可达数百 MB），DB 行不落 = 孤儿音频 +
+            // 导航到未持久化会议。失败即走统一清理路径。
+            do {
+                try modelContext.save()
+            } catch {
+                modelContext.delete(meeting)
+                try? modelContext.save()
+                MeetingAudioStore.deleteMeetingAudio(meetingId: meetingId)
+                phase = .failed("导入保存失败（磁盘空间不足？）：\(error.localizedDescription)")
+                return nil
+            }
             releaseAccess()
             return meetingId
         } catch {

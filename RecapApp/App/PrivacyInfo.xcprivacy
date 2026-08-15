@@ -79,11 +79,12 @@
 		</dict>
 	</array>
 
-	<!-- Required Reason API（全库核实 2026-08-07）：
+	<!-- Required Reason API（2026-08-15 复核更新）：
 	     - UserDefaults：app 自身偏好/状态（ASR/凭证/配额/账户/声纹 ID/模板收藏/搜索历史/feature flag），CA92.1。
 	     - DiskSpace：SettingsComponents.DiskSpace.hasAvailable 用
 	       volumeAvailableCapacityForImportantUsageKey 做模型/资源下载前空间预检，E174.1。
-	     - FileTimestamp：全库 attributesOfItem 仅读 .size（音频时长/缓存校验），未读时间戳，不触发。
+	     - FileTimestamp：导入音频（文档选择器，app 容器外）读 creationDate 作为会议开始时间
+	       展示给用户（MeetingImportSheet.createdAt），DDA9.1。attributesOfItem 的 4 处仍仅读 .size 不触发。
 	     - SystemBootTime（仅 thermalState，非 RR）/ ActiveKeyboards 均无命中。 -->
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
@@ -103,6 +104,15 @@
 			<array>
 				<!-- 下载端侧模型/资源前检查磁盘可用容量（SettingsComponents.swift DiskSpace.hasAvailable），符合 E174.1。 -->
 				<string>E174.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- 读用户导入音频的创建时间作为会议开始时间展示（MeetingImportSheet），符合 DDA9.1。 -->
+				<string>DDA9.1</string>
 			</array>
 		</dict>
 	</array>

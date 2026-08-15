@@ -33,6 +33,8 @@ public actor SpeechAnalyzerEngine: AsrEngine {
     private var firstTokenMs: Double?
     private var streamStartedAt: Date?
     private var isStreaming = false
+    /// `analyzer.start` 异步失败时记录；feed() 据此抛错上报（此前错误只存在 task result 里被吞）。
+    private var startError: SpeechAnalyzerEngineError?
 
     public init() {}
 
@@ -99,8 +101,13 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         // 预热分析器（失败不阻塞开流；真正错误会在 start/feed 暴露）
         try? await analyzer.prepareToAnalyze(in: format)
 
-        let (inputStream, inputCont) = AsyncStream.makeStream(of: AnalyzerInput.self)
+        // 有界缓冲：analyzer.start 若失败/挂死，输入流将无消费者——默认 .unbounded 会让
+        // feed 以 ~115KB/s 无界堆积（1h ≈ 数百 MB → jetsam，连带 PCM 尾段丢失）。
+        // bufferingNewest(64)：正常消费时缓冲永远近空；消费者消失时至多滞留 ~5s 音频。
+        let (inputStream, inputCont) = AsyncStream.makeStream(
+            of: AnalyzerInput.self, bufferingPolicy: .bufferingNewest(64))
         inputContinuation = inputCont
+        startError = nil
 
         let (eventStream, eventCont) = AsyncStream.makeStream(of: AsrStreamEvent.self)
         eventContinuation = eventCont
@@ -136,14 +143,32 @@ public actor SpeechAnalyzerEngine: AsrEngine {
             }
         }
 
-        startTask = Task {
-            try await analyzer.start(inputSequence: inputStream)
+        startTask = Task { [weak self] in
+            do {
+                try await analyzer.start(inputSequence: inputStream)
+            } catch {
+                // start 失败此前只存进 task result、被 stopStreaming 的 try? 吞掉——
+                // 输入流从此无消费者，整场静默无字幕且无任何错误提示。
+                // 现在显式记录并在 feed() 抛出 → RecordingSession.onError 上报。
+                await self?.recordStartFailure(error)
+            }
         }
 
         return eventStream
     }
 
+    private func recordStartFailure(_ error: Error) {
+        guard isStreaming else { return }
+        startError = SpeechAnalyzerEngineError.startFailed(
+            error.localizedDescription.isEmpty ? "分析器启动失败" : error.localizedDescription)
+        RecapLog.session.error("SpeechAnalyzer start 失败：\(error.localizedDescription, privacy: .public)")
+        // 消费侧已死：结束输入流，feed 随即抛错（不再无界堆积）。
+        inputContinuation?.finish()
+        inputContinuation = nil
+    }
+
     public func feed(_ samples: [Float]) async throws {
+        if let startError { throw startError }
         guard isStreaming, let format, let inputContinuation else {
             throw SpeechAnalyzerEngineError.notStreaming
         }
@@ -262,22 +287,19 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         isStreaming = false
         streamStartedAt = nil
         inputContinuation = nil
+        startError = nil
     }
 
     private func withTimeout(seconds: Double, operation: @escaping @Sendable () async -> Void) async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await operation() }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(seconds))
-            }
-            await group.next()
-            group.cancelAll()
-        }
+        // 竞速超时（RaceTimeout）：到点即放弃等待——task group 版超时在子任务等待不响应
+        // 协作取消时会无限挂起（analyzer.start 挂死正是本文件自述场景）。
+        await RaceTimeout.run(seconds: seconds, operation: operation)
     }
 }
 
 public enum SpeechAnalyzerEngineError: Error, LocalizedError, Sendable {
     case unavailable, noChinese, assetUnavailable, formatFailed, bufferFailed, notStreaming
+    case startFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -287,6 +309,7 @@ public enum SpeechAnalyzerEngineError: Error, LocalizedError, Sendable {
         case .formatFailed:     return "AVAudioFormat 构造失败"
         case .bufferFailed:     return "AVAudioPCMBuffer 分配失败"
         case .notStreaming:     return "未处于流式会话中"
+        case .startFailed(let reason): return "端侧转写引擎启动失败：\(reason)"
         }
     }
 }

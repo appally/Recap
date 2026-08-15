@@ -33,6 +33,7 @@ public actor AudioRecorder {
     private var yieldCount = 0
     private var interruptionObserver: NSObjectProtocol?
     private var routeObserver: NSObjectProtocol?
+    private var engineConfigObserver: NSObjectProtocol?
     private var wasInterrupted = false
     private var fileHandle: FileHandle?
 
@@ -172,6 +173,16 @@ public actor AudioRecorder {
             let reasonValue = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
             Task { await self?.handleRouteChange(reasonValue: reasonValue) }
         }
+        // 引擎配置变化（蓝牙接入/拔出改变 inputNode 硬件格式）：engine 可能自停且**不发**
+        // interruption（routeChange 也常不触发），无监听会静默哑录——PCM 落盘与 ASR 喂流
+        // 同时停止、isRunning 仍 true、无任何错误，直到用户手动暂停。
+        engineConfigObserver = nc.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.handleEngineConfigurationChange() }
+        }
     }
 
     private func removeSessionObservers() {
@@ -183,6 +194,10 @@ public actor AudioRecorder {
         if let routeObserver {
             nc.removeObserver(routeObserver)
             self.routeObserver = nil
+        }
+        if let engineConfigObserver {
+            nc.removeObserver(engineConfigObserver)
+            self.engineConfigObserver = nil
         }
     }
 
@@ -213,6 +228,29 @@ public actor AudioRecorder {
         // 旧设备不可用（如蓝牙断开）时尝试重激活，避免假录音
         if reason == .oldDeviceUnavailable {
             resumeAfterInterruption()
+        }
+    }
+
+    /// 引擎配置变化自愈：仅当 engine 自停**或**输入格式真的变了才动作（iOS 多数路由变化
+    /// engine 内部自愈，瞎折腾反而会断流）。tap 必须用新硬件格式重装——旧格式 tap 在
+    /// 硬件格式变化后继续跑会导致重采样基准错（时间轴漂移）。
+    private func handleEngineConfigurationChange() {
+        guard isRunning else { return }
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        guard !engine.isRunning || format.sampleRate != inSampleRate else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            inSampleRate = format.sampleRate
+            installTap(format: format)
+            if !engine.isRunning {
+                try engine.start()
+            }
+            onInterrupted?(false)
+        } catch {
+            // 恢复失败如实上报（对齐 resumeAfterInterruption 的失败路径），绝不静默哑录。
+            wasInterrupted = true
+            onInterrupted?(true)
+            onError?(.sessionRestoreFailed)
         }
     }
 
@@ -405,6 +443,7 @@ public actor AudioRecorder {
         removeSessionObservers()
         setOnInterrupted(nil)
         setOnAudioBands(nil)
+        setOnError(nil)   // 生命周期一致性：三个回调一并清（闭包 weak 捕获无泄漏，仅防晚到误报）
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         continuation?.finish()

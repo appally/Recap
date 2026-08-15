@@ -96,6 +96,8 @@ public final class AskConversationModel {
     public private(set) var briefSources: [BriefSource]
     public private(set) var momentsSummary: String?
     public private(set) var handwritingSummary: String?
+    /// processing 阶段管线进度（阶段+耗时+预期）；让「还要多久」的回答有据可依。
+    public private(set) var pipelineProgressText: String?
 
     @ObservationIgnored private var askTask: Task<Void, Never>?
     @ObservationIgnored private var kernel: AgentKernel?
@@ -123,7 +125,8 @@ public final class AskConversationModel {
         briefSummary: String?,
         briefSources: [BriefSource],
         momentsSummary: String? = nil,
-        handwritingSummary: String? = nil
+        handwritingSummary: String? = nil,
+        pipelineProgressText: String? = nil
     ) {
         self.phase = phase
         self.transcriptContext = transcriptContext
@@ -136,6 +139,7 @@ public final class AskConversationModel {
         self.briefSources = briefSources
         self.momentsSummary = momentsSummary
         self.handwritingSummary = handwritingSummary
+        self.pipelineProgressText = pipelineProgressText
         self.webEnabled = AskPreferences.webSearchEnabled
     }
 
@@ -179,7 +183,8 @@ public final class AskConversationModel {
         briefSummary: String? = nil,
         briefSources: [BriefSource]? = nil,
         momentsSummary: String? = nil,
-        handwritingSummary: String? = nil
+        handwritingSummary: String? = nil,
+        pipelineProgressText: String? = nil
     ) {
         if let phase { self.phase = phase }
         if let transcriptContext { self.transcriptContext = transcriptContext }
@@ -192,6 +197,7 @@ public final class AskConversationModel {
         if let briefSources { self.briefSources = briefSources }
         if let momentsSummary { self.momentsSummary = momentsSummary }
         if let handwritingSummary { self.handwritingSummary = handwritingSummary }
+        if let pipelineProgressText { self.pipelineProgressText = pipelineProgressText }
     }
 
     public func reset() {
@@ -405,7 +411,9 @@ public final class AskConversationModel {
 
     public func send(_ text: String) {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty, !isThinking else { return }
+        // isResearchActive：running 态已被 isThinking 覆盖，此处堵 suspended 窗口——
+        // 挂起期发的 chat 与调研完成回调的 loadSession 竞态会吞掉未落库的 streaming 气泡。
+        guard !query.isEmpty, !isThinking, !isResearchActive else { return }
 
         askTask?.cancel()
         let userId = UUID()
@@ -701,6 +709,7 @@ public final class AskConversationModel {
                 actionItemsBlock: actions,
                 momentsSummary: momentsSummary,
                 handwritingSummary: handwritingSummary,
+                pipelineProgressText: pipelineProgressText,
                 phase: phase,
                 retrievalQuery: retrievalQuery,
                 meSpeakerLabel: meLabel,
@@ -819,6 +828,8 @@ public final class AskConversationModel {
         var citations = prepared.citations
         var answer = ""
         var sawFailure = false
+        var lastDSMLStripAt = Date.distantPast
+        var lastDisplayText = ""
 
         isThinking = false
         statusLabel = nil
@@ -842,11 +853,17 @@ public final class AskConversationModel {
                 turnReasoningChars += t.count
             case .textDelta(let t):
                 answer += t
-                // 流式中若夹带 DSML 协议残片，气泡只显示剥离后的正文
-                let display = DeepSeekDSML.strip(answer)
+                // 流式中若夹带 DSML 协议残片，气泡只显示剥离后的正文。
+                // 全文 strip 是 4 个正则 O(n)，逐 delta 执行随流式长度 O(n²)——节流到 120ms
+                //（对齐 MeetingSession 的 summaryDelta 节流；.finished 终态会重设完整正文）。
+                let now = Date()
+                if now.timeIntervalSince(lastDSMLStripAt) >= 0.12 {
+                    lastDisplayText = DeepSeekDSML.strip(answer)
+                    lastDSMLStripAt = now
+                }
                 updateAssistant(
                     id: assistantId,
-                    text: display,
+                    text: lastDisplayText,
                     streaming: true,
                     steps: chips(from: pendingSteps),
                     citations: citations
@@ -855,6 +872,7 @@ public final class AskConversationModel {
                 statusLabel = summary
                 // 只剥 DSML 泄漏，保留工具调用前已流出的合法正文
                 answer = DeepSeekDSML.strip(answer)
+                lastDisplayText = answer
                 if name != "prewarm" {
                     let draft = PendingStepDraft(
                         toolName: name,
@@ -1062,7 +1080,9 @@ public final class AskConversationModel {
             let stream = provider.streamText(
                 system: AskQueryRewriter.system,
                 user: query,
-                model: LLMPresets.deepSeekFlash,
+                // model 不硬编码：云档 provider defaultModel 是网关下发的 qwen 模型，
+                // 显式传 deepSeek 名会打到 dashscope 端点直接 400（2026-08-02 三模型名打架的漏网点）。
+                model: nil,
                 temperature: 0
             )
             var raw = ""
@@ -1152,7 +1172,51 @@ public final class AskConversationModel {
                 break
             }
         }
-        return AgentContextBudget.compact(result, maxTotalToolChars: 4_000)
+        return AgentContextBudget.compact(
+            Self.trimTextTurnBudget(result), maxTotalToolChars: 4_000)
+    }
+
+    /// Agent 主路径的文本轮预算（对齐 fallback 路径的 `AskHistoryBudget`：6 轮 / 4000 字）。
+    ///
+    /// `AgentContextBudget.compact` 只裁 `.tool` 内容，user/assistant 正文完全不裁——
+    /// 每轮把整个 session 的全部文本重放进 request.history，长对话持续膨胀最终超模型
+    /// 上下文 → 上游 400 → 降级 fallback。裁旧轮保新轮；只在**轮边界**（.user 消息处）
+    /// 下刀，`.tool` 与其 `.assistant(toolCalls)` 的 callId 配对永不拆散（拆散 codec 400）。
+    static func trimTextTurnBudget(
+        _ messages: [AgentMessage],
+        maxTurns: Int = 6,
+        maxTotalChars: Int = 6_000
+    ) -> [AgentMessage] {
+        let turnStarts = messages.indices.filter {
+            if case .user = messages[$0] { return true } else { return false }
+        }
+        guard !turnStarts.isEmpty else { return messages }
+
+        var keptStart = turnStarts[0]
+        var turnsKept = 0
+        var chars = 0
+        for (i, start) in turnStarts.enumerated().reversed() {
+            let end = (i + 1 < turnStarts.count) ? turnStarts[i + 1] : messages.count
+            let turnChars = messages[start..<end].reduce(0) { $0 + Self.approxCharCount($1) }
+            if turnsKept >= maxTurns || (turnsKept > 0 && chars + turnChars > maxTotalChars) {
+                break
+            }
+            keptStart = start
+            turnsKept += 1
+            chars += turnChars
+        }
+        return Array(messages[keptStart...])
+    }
+
+    private static func approxCharCount(_ message: AgentMessage) -> Int {
+        switch message {
+        case .system: return 0
+        case .user(let text): return text.count
+        case .assistant(let turn):
+            return (turn.content ?? "").count
+                + turn.toolCalls.reduce(0) { $0 + $1.argumentsJSON.count }
+        case .tool(_, _, let content): return content.count
+        }
     }
 
     private func chips(from drafts: [PendingStepDraft]) -> [AskStepChip] {

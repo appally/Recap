@@ -75,7 +75,8 @@ public extension TranscriptBlock {
     var feedText: String { polished.isEmpty ? raw : polished }
 }
 
-/// 降级演示内容：仅当 ASR / LLM 不可用时使用，不作为真实会议数据。
+#if DEBUG
+/// 降级演示内容：仅 DEBUG UI 验收入口使用，不进 Release 二进制（避免演示字符串泄漏）。
 public enum DemoContent {
     public static let zhangming = Speaker(id: "s1", name: "张明", colorIndex: 0)
     public static let lihua = Speaker(id: "s2", name: "李华", colorIndex: 1)
@@ -131,3 +132,4 @@ public enum DemoContent {
         ]
     )
 }
+#endif

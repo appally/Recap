@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import RecapModels
+import RecapASR
 
 /// 隐私政策 / 用户协议摘要（审核可离线阅读；同时提供外链）。
 struct LegalDocumentView: View {
@@ -59,7 +60,8 @@ struct LegalDocumentView: View {
     }
 }
 
-/// 数据导出 / 清除（过审：用户对本地数据的控制）。
+/// 本地数据清除（过审：用户对本地数据的控制）。
+/// 单场导出走会议详情的分享（PDF / Markdown / 长图）；批量导出待后续版本再上，不设占位入口。
 struct DataPrivacySettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var meetings: [Meeting]
@@ -73,20 +75,6 @@ struct DataPrivacySettingsView: View {
                 summaryCard
 
                 VStack(spacing: 0) {
-                    Button {
-                        status = "导出将在后续版本提供（JSON / Markdown）"
-                    } label: {
-                        SettingsNavRow(
-                            icon: "square.and.arrow.up",
-                            iconTint: .recapInk,
-                            title: "导出会议数据",
-                            value: "即将推出"
-                        )
-                    }
-                    .buttonStyle(SettingsPressStyle())
-
-                    SettingsDivider()
-
                     Button {
                         showClearConfirm = true
                     } label: {
@@ -127,7 +115,7 @@ struct DataPrivacySettingsView: View {
             Button("清除 \(meetings.count) 条会议", role: .destructive, action: clearAllMeetings)
             Button("取消", role: .cancel) {}
         } message: {
-            Text("录音、转写、纪要与待办将从本机删除，且无法恢复。")
+            Text("录音、转写、纪要与待办将从本机删除，且无法恢复。已保存的声纹特征与「我」标记也将一并移除。")
         }
     }
 
@@ -151,6 +139,9 @@ struct DataPrivacySettingsView: View {
 
     private func clearAllMeetings() {
         MeetingDeletion.deleteAll(meetings, in: modelContext)
+        // 隐私政策承诺：清除会议数据一并移除声纹（生物识别信息）并撤回同意。
+        VoiceprintGallery.shared.clearAll()
+        VoiceprintConsent.reset()
         status = "已清除全部会议数据"
     }
 }
@@ -210,7 +201,7 @@ struct AboutRecapView: View {
                             icon: "lock.shield",
                             iconTint: .recapInk,
                             title: "数据与隐私",
-                            value: "导出 / 清除"
+                            value: "清除"
                         )
                     }
                     SettingsDivider()
@@ -221,6 +212,16 @@ struct AboutRecapView: View {
                             icon: "doc.text",
                             iconTint: .recapInk,
                             title: "用户协议"
+                        )
+                    }
+                    SettingsDivider()
+                    NavigationLink {
+                        OpenSourceAcknowledgementsView()
+                    } label: {
+                        SettingsNavRow(
+                            icon: "checkmark.seal",
+                            iconTint: .recapInk,
+                            title: "开源许可致谢"
                         )
                     }
                 }
@@ -239,5 +240,96 @@ struct AboutRecapView: View {
         let short = info?["CFBundleShortVersionString"] as? String ?? "1.0"
         let build = info?["CFBundleVersion"] as? String ?? "1"
         return "版本 \(short)（\(build)）"
+    }
+}
+
+/// 开源许可致谢（随包分发的第三方组件与模型权重来源）。
+/// License 类型均按本地 SPM checkout 的 LICENSE 文件核实（2026-08-15）。
+struct OpenSourceAcknowledgementsView: View {
+    /// (名称, 许可, 用途)
+    private static let libraries: [(name: String, license: String, role: String)] = [
+        ("mermaid.js", "MIT", "Markdown 图表渲染（流程图 / 时序图）"),
+        ("FluidAudio", "Apache-2.0", "端侧语音转写与说话人分离"),
+        ("argmax SpeakerKit (argmax-oss-swift)", "MIT", "端侧说话人声纹嵌入"),
+        ("OpenAI Swift SDK (MacPaw)", "MIT", "大模型 API 客户端"),
+        ("swift-argument-parser", "Apache-2.0", "命令行参数解析（依赖传递）"),
+        ("swift-http-types", "Apache-2.0", "HTTP 类型（依赖传递）"),
+        ("swift-openapi-runtime", "Apache-2.0", "OpenAPI 运行时（依赖传递）"),
+    ]
+
+    /// 模型权重：代码许可与权重发布条款分开，如实注明来源与条款位置。
+    private static let modelWeights: [(name: String, source: String, terms: String)] = [
+        ("SenseVoice 语音识别模型", "FunAudioLLM（Hugging Face / hf-mirror 分发）", "权重遵循其发布页条款"),
+        ("pyannote 说话人分离模型", "pyannote-audio（Hugging Face / hf-mirror 分发）", "代码 MIT；权重遵循 HF 发布页条款"),
+        ("WeSpeaker 声纹模型", "WeSpeaker（Hugging Face / hf-mirror 分发）", "代码 Apache-2.0；权重遵循 HF 发布页条款"),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.xxl) {
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("开源组件")
+                        .font(.recapEyebrow)
+                        .tracking(Tracking.eyebrow)
+                        .foregroundStyle(Color.recapTea)
+                    VStack(spacing: 0) {
+                        ForEach(Array(Self.libraries.enumerated()), id: \.offset) { index, item in
+                            if index > 0 { SettingsDivider() }
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack {
+                                    Text(item.name)
+                                        .font(.recapBodyS.weight(.medium))
+                                        .foregroundStyle(Color.recapInk)
+                                    Spacer()
+                                    Text(item.license)
+                                        .font(.recapMono)
+                                        .foregroundStyle(Color.recapTea.opacity(0.85))
+                                }
+                                Text(item.role)
+                                    .font(.recapMeta)
+                                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                            }
+                            .padding(.vertical, Spacing.sm)
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("内置模型权重")
+                        .font(.recapEyebrow)
+                        .tracking(Tracking.eyebrow)
+                        .foregroundStyle(Color.recapTea)
+                    VStack(spacing: 0) {
+                        ForEach(Array(Self.modelWeights.enumerated()), id: \.offset) { index, item in
+                            if index > 0 { SettingsDivider() }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.name)
+                                    .font(.recapBodyS.weight(.medium))
+                                    .foregroundStyle(Color.recapInk)
+                                Text(item.source)
+                                    .font(.recapMeta)
+                                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                                Text(item.terms)
+                                    .font(.recapMeta)
+                                    .foregroundStyle(Color.recapTea.opacity(0.7))
+                            }
+                            .padding(.vertical, Spacing.sm)
+                        }
+                    }
+                }
+
+                Text("以上各项目的完整许可文本以其官方仓库 LICENSE 文件为准。感谢这些开源项目使「纪要」成为可能。")
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea.opacity(0.6))
+                    .lineSpacing(Leading.tight)
+            }
+            .padding(.horizontal, Spacing.xl)
+            .padding(.top, Spacing.md)
+            .padding(.bottom, Spacing.xxxl)
+        }
+        .scrollIndicators(.hidden)
+        .background(SettingsAmbientBackground())
+        .navigationTitle("开源许可致谢")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

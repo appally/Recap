@@ -45,8 +45,13 @@ public actor SpeakerKitDiarizer: MeetingDiarizer {
     public func unload() async {
         // 等待在飞推理完成：diarize 的 exclusive 跑在 CoreMLInferenceGate actor，此期间本 actor
         // 挂起、unload 可插入；kit.unloadModels()/kit=nil 若此时执行会与 kit.diarize 竞争致崩。
+        // 取消即放弃等待（否则 sleep 抛错被吞后退化成无延迟热自旋）。
         while isInferring {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return
+            }
         }
         if let kit {
             await kit.unloadModels()

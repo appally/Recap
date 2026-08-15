@@ -16,6 +16,8 @@ struct MomentCaptureOverlay: View {
     @Environment(\.openURL) private var openURL
     @StateObject private var camera = MomentCaptureService()
     @State private var momentId = UUID()
+    /// 首张照片成功后即插入的 Moment 行（每拍一张增量 save，中途被杀照片也不丢）。
+    @State private var moment: Moment?
     @State private var photoPaths: [String] = []
     @State private var thumbnails: [UIImage] = []
     @State private var accessGranted = false
@@ -91,21 +93,32 @@ struct MomentCaptureOverlay: View {
             photoPaths.append(rel)
             if let thumb { thumbnails.append(thumb) }
         }
+        persistMomentSnapshot()
     }
 
-    /// 关闭：拍了至少一张就落库为 Moment 并钉到锚点；一张没拍则什么都不产生。
-    private func finish() {
-        camera.stop()
-        if !photoPaths.isEmpty {
-            let moment = Moment(
+    /// 每拍一张立即落库：先落盘后落库的窗口里被杀，会产生 UI 永不显示的孤儿照片。
+    /// 首张创建 Moment，后续增量更新 photoRelativePaths 并 save。
+    private func persistMomentSnapshot() {
+        if let moment {
+            moment.photoRelativePaths = photoPaths
+        } else {
+            let created = Moment(
                 startSeconds: Double(anchorElapsed),
                 kind: .photo,
                 noteText: nil,
                 photoRelativePaths: photoPaths,
                 meeting: meeting
             )
-            modelContext.insert(moment)
-            try? modelContext.save()
+            modelContext.insert(created)
+            moment = created
+        }
+        try? modelContext.save()
+    }
+
+    /// 关闭：Moment 已在拍摄过程增量落库；这里只做收尾（OCR 回填 + 成功反馈）。
+    private func finish() {
+        camera.stop()
+        if let moment {
             // V2：异步回填照片文字（白板 / PPT），供图库展示与纪要 prompt 注入。
             MomentOCRService.shared.extractIfAbsent(for: moment)
             Haptics.notify(.success)

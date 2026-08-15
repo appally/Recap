@@ -206,9 +206,6 @@ public struct RecapAIAvatarImage: View {
         if let img = UIImage(named: "avater") {
             return img
         }
-        if let img = UIImage(contentsOfFile: "/Users/liuyong/Projects/Recap/avater.png") {
-            return img
-        }
         return nil
     }
 }

@@ -56,12 +56,43 @@ export default {
       return handleIssue(req, env);
     }
 
+    // POST /v1/account/delete —— 账号删除(App Store 5.1.1(v)):
+    // identityToken 验签 → 清 apple:<sub> 共享桶;若带 X-Recap-Device 一并清当前设备桶。
+    if (url.pathname === '/v1/account/delete' && req.method === 'POST') {
+      return handleAccountDelete(req, env);
+    }
+
     return Response.json({ error: 'not_found' }, { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
 
 function html(body: string): Response {
   return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+}
+
+/** POST /v1/account/delete:Apple identityToken 验签后清服务端账号数据。
+ *  覆盖:apple:<sub> 共享桶(身份+月度用量)与 X-Recap-Device 指定的当前设备桶。
+ *  曾绑定该 sub 的其它历史设备桶无法枚举,但其 boundAppleSub 指向的共享桶已清空,
+ *  后续 /probe 即回到未登录匿名态,不再持有可用账号数据。 */
+async function handleAccountDelete(req: Request, env: Env): Promise<Response> {
+  const user = await verifyFreeApple(req, env);
+  if (!user) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  const wiped: string[] = [];
+  await env.QUOTA.get(env.QUOTA.idFromName(`apple:${user.userId}`)).fetch('https://quota/wipe', { method: 'POST' });
+  wiped.push(`apple:${user.userId}`);
+  const device = req.headers.get('X-Recap-Device');
+  if (device) {
+    // 设备桶带 sub 做归属校验(DO 内原子完成):仅当该桶绑定的正是本 Apple 账号才清,
+    // 防止登录用户定向清他人/匿名设备桶(= 替那台设备重置免费额度)。非本账号桶跳过即可,
+    // 账号删除的完整性由上面的 apple 共享桶清除保证。
+    const r = await env.QUOTA
+      .get(env.QUOTA.idFromName(`device:${device}`))
+      .fetch(`https://quota/wipe?sub=${encodeURIComponent(user.userId)}`, { method: 'POST' });
+    if (r.ok) wiped.push(`device:${device}`);
+  }
+  return Response.json({ ok: true, wiped });
 }
 
 /** POST /v1/issue:验身份 → 查配额 → 签发阿里临时 token(主 key 在 env secret,永不下发)。

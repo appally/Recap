@@ -35,6 +35,29 @@ final class AskSuggestionTipsTests: XCTestCase {
         XCTAssertLessThanOrEqual(tips.count, 5)
     }
 
+    func testLiveRecordingAgendaChipUsesRealTitle() {
+        // 有议程：用真实标题，不硬编码「第三项议程讲了啥」（无第三项时那是编造）
+        let withAgenda = AskSuggestionTips.make(
+            stage: .liveRecording,
+            summary: nil,
+            actionItems: [],
+            agendaTitles: ["Q3 预算评审", "供应商比价"],
+            hasBrief: true
+        )
+        XCTAssertTrue(withAgenda.contains { $0.contains("Q3 预算评审") && $0.contains("讲了啥") })
+        XCTAssertFalse(withAgenda.contains("第三项议程讲了啥"))
+
+        // 无议程：回退通用进度向，不出现假特异性
+        let noAgenda = AskSuggestionTips.make(
+            stage: .liveRecording,
+            summary: nil,
+            actionItems: [],
+            hasBrief: true
+        )
+        XCTAssertTrue(noAgenda.contains("议程讲到哪了"))
+        XCTAssertFalse(noAgenda.contains("第三项议程讲了啥"))
+    }
+
     func testLivePausedFocusesDecisionRecap() {
         let tips = AskSuggestionTips.make(
             stage: .livePaused,

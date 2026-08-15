@@ -53,6 +53,7 @@ public final class ReviseMinutesBridge: ReviseMinutesCommitReading {
             meeting: meeting
         ))
         try? modelContext.save()
+        pruneSummaryVersions(keep: 5)
         lastCommitMessage = "已更新纪要（v\(version)）"
         return (version, next)
     }
@@ -75,7 +76,21 @@ public final class ReviseMinutesBridge: ReviseMinutesCommitReading {
             meeting: meeting
         ))
         try? modelContext.save()
+        pruneSummaryVersions(keep: 5)
         lastCommitMessage = "已回滚并生成 v\(version)"
         return (version, summary)
+    }
+
+    /// 摘要版本只增不删：改写/回滚同样追加 AIOutput，高频用户线性累积。保留最近 `keep` 版。
+    private func pruneSummaryVersions(keep: Int) {
+        guard let meeting, let modelContext else { return }
+        let outputs = meeting.outputs
+            .filter { $0.kind == .summary }
+            .sorted { $0.version > $1.version }
+        guard outputs.count > keep else { return }
+        for stale in outputs.dropFirst(keep) {
+            modelContext.delete(stale)
+        }
+        try? modelContext.save()
     }
 }

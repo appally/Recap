@@ -184,7 +184,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         # 仅用标准 HTTPS(WSS/HTTPS),属豁免加密,免每次 ASC 弹出口合规问卷。
         ITSAppUsesNonExemptEncryption: false
-        NSMicrophoneUsageDescription: 用于会议录音转写
+        NSMicrophoneUsageDescription: 用于会议录音与实时转写（含锁屏后台持续录制）
         NSCameraUsageDescription: 用于会议中拍照记录此刻（白板、想法），以及扫描纸质议程与上场纪要
         NSRemindersFullAccessUsageDescription: 用于把会议待办创建为提醒事项
         NSCalendarsFullAccessUsageDescription: 用于把会议关键节点创建为日历日程
@@ -264,6 +264,11 @@ targets:
       path: Controls/Info.plist
       properties:
         CFBundleDisplayName: 纪要控件
+        # 版本键必须显式写变量：xcodegen 生成的 plist 若留字面量(1.0/1)，
+        # target 级 $(inherited) 构建设置不会回填，appex 与主 App 版本漂移
+        # 会触发 ASC ITMS-90474（CFBundleVersion Mismatch）。
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

@@ -32,15 +32,23 @@ public final class HandwritingRecognitionService {
 
         let noteId = note.id
         Task { @MainActor [weak self] in
-            // 渲染 drawing → 黑墨白底高 DPI 位图（预处理见 `ocrImage(for:)`），再走手写专用 OCR。
-            guard let image = Self.ocrImage(for: drawing) else {
+            // 渲染 drawing → 黑墨白底高 DPI 位图（预处理见 `ocrImage(for:)`）——长手写渲染
+            // 是像素级重活，放后台；Vision 识别本身也在系统队列。主线程只做回填。
+            let drawingCopy = drawing
+            let image: UIImage? = await Task.detached(priority: .utility) {
+                Self.ocrImage(for: drawingCopy)
+            }.value
+            guard let image else {
                 self?.inFlight.remove(noteId)
+                // 会议/笔记可能在 OCR 在飞期间被删除：写已销毁模型会崩溃（BackingData 失效），静默放弃。
+                guard !note.isDeleted, note.modelContext != nil else { return }
                 note.recognizedText = ""
                 try? note.modelContext?.save()
                 return
             }
             let text = await BriefScanOCR.extractHandwriting(from: image)
             self?.inFlight.remove(noteId)
+            guard !note.isDeleted, note.modelContext != nil else { return }
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
@@ -60,7 +68,11 @@ public final class HandwritingRecognitionService {
     /// 纯识别 drawing 返回文字（不落库、不幂等），用于「边写边预览」的 debounce 触发。
     public func previewText(for drawing: PKDrawing) async -> String {
         guard !drawing.strokes.isEmpty else { return "" }
-        guard let image = Self.ocrImage(for: drawing) else { return "" }
+        let drawingCopy = drawing
+        let image: UIImage? = await Task.detached(priority: .utility) {
+            Self.ocrImage(for: drawingCopy)
+        }.value
+        guard let image else { return "" }
         return await BriefScanOCR.extractHandwriting(from: image)
     }
 
@@ -72,7 +84,10 @@ public final class HandwritingRecognitionService {
     /// 2. **纯白底**：`drawing.image` 出透明底，合成到纯白底给 Vision 高对比输入。
     /// 3. **高 DPI**：固定 3x（连笔/小字更稳），不随 `UIScreen.main.scale`（2–3x）漂移。
     /// 4. **留白**：bounds 外加 32pt padding，Vision 行切分更准。
-    static func ocrImage(for drawing: PKDrawing) -> UIImage? {
+    ///
+    /// nonisolated：纯函数（仅入参 + 线程安全的 UIGraphicsImageRenderer），
+    /// 供 Task.detached 后台渲染调用（类本身 @MainActor，不标会隔离冲突）。
+    nonisolated static func ocrImage(for drawing: PKDrawing) -> UIImage? {
         guard !drawing.strokes.isEmpty else { return nil }
         let contentBounds = drawing.bounds.isEmpty
             ? CGRect(x: 0, y: 0, width: 1, height: 1)

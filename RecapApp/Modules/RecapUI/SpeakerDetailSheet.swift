@@ -294,7 +294,7 @@ struct SpeakerDetailSheet: View {
                 dismiss()
                 onAskRecap(name)
             } label: {
-                Label("问 Recap：上次和 TA 聊了什么", systemImage: RecapSymbol.ask)
+                Label("问纪要：上次和 TA 聊了什么", systemImage: RecapSymbol.ask)
                     .font(.recapBody.weight(.medium))
                     .foregroundStyle(Color.recapInk)
                     .frame(maxWidth: .infinity)
@@ -307,7 +307,7 @@ struct SpeakerDetailSheet: View {
             .buttonStyle(RecapPressStyle())
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                Label("问 Recap：上次和 TA 聊了什么", systemImage: RecapSymbol.ask)
+                Label("问纪要：上次和 TA 聊了什么", systemImage: RecapSymbol.ask)
                     .font(.recapBody)
                     .foregroundStyle(Color.recapTea.opacity(0.4))
                 Text("先为 TA 命名（声纹身份建立后），我才能跨会议找到 TA。")

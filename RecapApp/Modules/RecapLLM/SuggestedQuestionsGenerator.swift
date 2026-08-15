@@ -22,8 +22,8 @@ public enum SuggestedQuestionsGenerator {
     - 信息稀薄（如卷宗几乎为空）时，只输出该阶段的通用向问题，绝不臆测细节。
 
     阶段聚焦：
-    - preMeeting（未开麦）：准备向——目标、议程、参会人、资料要点。
-    - liveRecording（录音中） / livePaused（暂停）：聚焦「刚刚发生的」与「待拍板的」，帮补课或拍板。
+    - preMeeting（未开麦）：准备向——目标、议程、参会人、资料要点；若卷宗含【关联上场】可提 1 条衔接向问题（如：上次遗留的议题这次怎么接）。
+    - liveRecording（录音中） / livePaused（暂停）：聚焦「刚刚发生的」与「待拍板的」，帮补课或拍板；若卷宗含【未决项】或【关联上场】，可提 1 条衔接向问题（如：上次遗留的 X 这次定了吗）。
     - processing（整理中）：安抚向——还要多久、能否先给要点。
     - review（会后）：行动/分析向——待办分工、决议依据、未决问题、议程缺口。
 
@@ -48,7 +48,7 @@ public enum SuggestedQuestionsGenerator {
         return parts.joined(separator: "\n\n")
     }
 
-    /// 容错解析：剥 ```json 包裹 → JSONDecoder → 每条 ≤ 16 字 → 去重 → 截 5 条。
+    /// 容错解析：剥 ```json 包裹 → JSONDecoder → 丢弃超长（>18 字，不截断成残句）→ 去重 → 截 5 条。
     /// 任意失败返回空数组（调用方据此判定是否降级）。
     public static func parse(_ raw: String) -> [String] {
         struct Payload: Decodable { let questions: [String] }
@@ -58,8 +58,10 @@ public enum SuggestedQuestionsGenerator {
         var seen = Set<String>()
         var out: [String] = []
         for q in payload.questions {
-            let s = String(q.trimmingCharacters(in: .whitespacesAndNewlines).prefix(16))
-            guard !s.isEmpty, seen.insert(s).inserted else { continue }
+            let s = q.trimmingCharacters(in: .whitespacesAndNewlines)
+            // prompt 约束 ≤16 字但模型不保证遵守：超长者整条丢弃，
+            // 截断（prefix(16)）会产出「……的风险因」式残句 chip，比丢弃更伤品质。
+            guard !s.isEmpty, s.count <= 18, seen.insert(s).inserted else { continue }
             out.append(s)
             if out.count >= 5 { break }
         }
@@ -78,7 +80,8 @@ public enum SuggestedQuestionsGenerator {
             let stream = provider.streamText(
                 system: system,
                 user: composeUser(stage: stage, dossier: dossier),
-                model: LLMPresets.deepSeekFlash,
+                // model 不硬编码：云档用网关下发的默认模型（deepSeek 名在 dashscope 上 400）。
+                model: nil,
                 temperature: 0
             )
             var raw = ""

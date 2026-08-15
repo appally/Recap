@@ -78,14 +78,17 @@ public struct MeetingNoteView: View {
     /// LIVE：贴底才自动跟随；上滑回看后停跟，需点「回到最新」。
     @State private var isFollowingLive = true
     @State private var missedLiveBlocks = 0
-    @State private var liveDistanceFromBottom: CGFloat = 0
+    /// 滚动几何中转存储（仅事件回调读写，不参与 body 渲染）：
+    /// 写 @State 会让滚动逐帧打穿整个详情页 body（ProMotion 120Hz）。
+    @State private var scrollBox = ScrollStateBox()
     /// 程序化 scrollTo 期间忽略几何回调，避免误判「离开底部」。
     @State private var suppressLiveFollowUpdate = false
-    /// REVIEW 顶栏隐藏态：上滑阅读时隐藏标题+Tab 区，只留返回钮（Plaud 式）。
+    /// REVIEW 顶栏隐藏态：上滑阅读时隐藏标题+Tab 区，只留返回钮（极简式）。
     /// 方向驱动：下滑->隐藏、上滑/回顶->显示。仅 REVIEW 阅读态驱动。
     @State private var reviewHeaderHidden = false
-    @State private var lastReviewScrollY: CGFloat = 0
     @StateObject private var audioPlayer = MeetingAudioPlayer()
+    /// 回听高亮：跨块才发布（收敛 player 4Hz 进度流），播放中不再逐帧重算整页 body。
+    @StateObject private var listeningHighlight = ListeningBlockHighlight()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Tab 滑动指示器：跨标签共享命名空间，选中态切换时下划线整体滑过，而非两端各自淡入淡出。
     @Namespace private var reviewTabNS
@@ -370,8 +373,14 @@ public struct MeetingNoteView: View {
         }
         .task {
             // 用 task 而非 onAppear：等视图进入层级后再启动，减少转场卡顿
-            session.checkpointSaver = { [modelContext] in
-                try? modelContext.save()
+            refreshListeningBoundaries()
+            session.checkpointSaver = { [modelContext, weak session] in
+                do {
+                    try modelContext.save()
+                } catch {
+                    // 磁盘满等保存失败：字幕安全网已失效（进程被杀会丢本段），必须让用户知情。
+                    session?.reportCheckpointSaveFailure()
+                }
             }
             researchRunner.bind(modelContext: modelContext)
             session.onAppear()
@@ -393,6 +402,8 @@ public struct MeetingNoteView: View {
                 // onChange 仅在值变化时触发，重进已 review 的会议不会重复震。
                 Haptics.notify(.success)
                 withAnimation(.recapSheet) { showReviewBottom = true }
+                // 进 REVIEW：转写已定稿（重转/润色收尾），刷新回听高亮的块起点表。
+                refreshListeningBoundaries()
             case .live:
                 showReviewBottom = false
                 isSettling = false
@@ -457,12 +468,12 @@ public struct MeetingNoteView: View {
 
     /// 自绘顶栏。LIVE = Transport Bar（暂停·状态簇·停止，声波居中连接）；REVIEW = 返回·标题·分享+更多。
     /// REVIEW 顶栏滚动收起判定（Safari 式方向驱动）：
-    /// REVIEW 顶栏隐藏判定（Plaud 式，方向驱动）：
+    /// REVIEW 顶栏隐藏判定（方向驱动）：
     /// 回顶->显示；下滑（上滑阅读）->隐藏；上滑（回看顶部方向）->显示。
     /// 仅翻转布尔，动画交给视图层 `.animation(value:)`，滚动热路径不做 withAnimation。
     private func applyReviewHeaderHidden(offsetY: CGFloat) {
-        let last = lastReviewScrollY
-        lastReviewScrollY = offsetY
+        let last = scrollBox.lastReviewScrollY
+        scrollBox.lastReviewScrollY = offsetY
         // 内容尺寸突变（切 Tab 等）会让 offset 跳变，忽略这种非用户滚动的大 delta
         if abs(offsetY - last) > 150 { return }
 
@@ -510,6 +521,20 @@ public struct MeetingNoteView: View {
 
     /// LIVE「Transport Bar」：左·状态胶囊(呼吸点+时长，点按收起) · 右·控制胶囊(暂停+停止)，两颗玻璃胶囊成对；
     /// 下方一条全宽声波带把两者视觉连成一体。无最小化钮/更多入口——退出靠点状态或下拉（抓手暗示）。
+    /// 声波带行壳：单独观察频段总线，播放器频段更新只失效本视图。
+    private struct LiveWaveformBandHost: View {
+        @ObservedObject var bus: AudioBandBus
+        let isPaused: Bool
+
+        var body: some View {
+            LiveWaveformVisualizer(
+                isPaused: isPaused,
+                bands: bus.bands,
+                isCompact: true
+            )
+        }
+    }
+
     private var liveTransportBar: some View {
         VStack(spacing: Spacing.xs) {
             HStack(spacing: Spacing.sm) {
@@ -519,12 +544,9 @@ public struct MeetingNoteView: View {
                 liveTransportControls
             }
 
-            // 全宽声波带：屏内唯一声波，视觉上连接左状态与右控制组
-            PlaudLiveWaveformVisualizer(
-                isPaused: session.isLivePaused,
-                bands: session.liveAudioBands,
-                isCompact: true
-            )
+            // 全宽声波带：屏内唯一声波，视觉上连接左状态与右控制组。
+            // 只让本视图观察频段总线（12Hz 失效面收敛到声波自身，不打穿整页 body）。
+            LiveWaveformBandHost(bus: session.liveAudioBandBus, isPaused: session.isLivePaused)
 
             // 极轻抓手：暗示「下拉 / 点按收起」，替代原左上最小化钮
             Image(systemName: RecapSymbol.dismissDown)
@@ -820,16 +842,16 @@ public struct MeetingNoteView: View {
             Color.recapBg
                 .ignoresSafeArea()
 
-            GeminiFluidGlowView(reduceMotion: reduceMotion, intensity: 0.7)
-                .frame(height: availableWindowHeight * 0.5)
+            GeminiFluidGlowView(reduceMotion: reduceMotion, intensity: 0.85)
+                .frame(height: availableWindowHeight * 0.65)
                 .ignoresSafeArea(.all, edges: .bottom)
 
             ProcessStageCanvas(
                 title: processHeroTitle,
                 subtitle: processHeroSubtitle,
-                ghostBlocks: Array(session.blocks.suffix(6)),
+                ghostBlocks: [],
                 reduceMotion: reduceMotion,
-                showGhost: true,
+                showGhost: false,
                 stage: session.pipelineStage
             )
         }
@@ -902,15 +924,23 @@ public struct MeetingNoteView: View {
             meeting.handwritingNote = note
             modelContext.insert(note)
         }
-        // 落盘（覆盖写；失败则路径留空，识别仍可走内存 drawing）。
-        note.drawingRelativePath = (try? HandwritingStore.save(
-            liveDrawing, meetingId: meeting.id)) ?? ""
-        // drawing 已变，置空后强制重识别（与会后 commitReviewHandwriting 一致；识别异步回填）。
+        // 落盘（覆盖写；失败则路径留空，识别仍可走内存 drawing）。编码+写盘移出主线程。
+        // 画布推迟到落盘成功后才清空——旧序「先清空后异步写」在写失败（磁盘满/IO 错）时
+        // 整版笔迹永久丢失且无提示；失败时保留笔迹在画布待重试。
+        let drawingSnapshot = liveDrawing
         note.recognizedText = nil
         note.title = nil
-        try? modelContext.save()
-        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: liveDrawing)
-        liveDrawing = PKDrawing()   // 清空；下次打开从磁盘 load 续写
+        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: drawingSnapshot)
+        Task { @MainActor in
+            do {
+                note.drawingRelativePath = try await HandwritingStore.saveOffMain(
+                    drawingSnapshot, meetingId: meeting.id)
+                liveDrawing = PKDrawing()   // 成功后才清空；下次打开从磁盘 load 续写
+            } catch {
+                session.statusMessage = "手写保存失败：存储空间不足或写入失败，笔迹已保留在画布，请重试"
+            }
+            try? modelContext.save()
+        }
     }
 
     private var liveRecordingOrPausedContent: some View {
@@ -968,13 +998,13 @@ public struct MeetingNoteView: View {
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     max(0, geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height)
                 } action: { _, distance in
-                    liveDistanceFromBottom = distance
+                    scrollBox.liveDistanceFromBottom = distance
                     guard !suppressLiveFollowUpdate else { return }
                     updateLiveFollowFromDistance(distance)
                 }
                 .onScrollPhaseChange { _, phase in
                     guard phase == .idle, !suppressLiveFollowUpdate else { return }
-                    updateLiveFollowFromDistance(liveDistanceFromBottom)
+                    updateLiveFollowFromDistance(scrollBox.liveDistanceFromBottom)
                 }
                 .onChange(of: session.blocks.count) { oldCount, newCount in
                     if isFollowingLive {
@@ -1037,7 +1067,7 @@ public struct MeetingNoteView: View {
 
     /// REVIEW 顶栏 SafeArea + Floating Bar 避让（Color.clear 占位高度），与 customTopBar 实际高度对齐。
     private var reviewTopClear: CGFloat { 60 }
-    /// REVIEW 正文底部留白 = PlaudAskBar(44) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 140。
+    /// REVIEW 正文底部留白 = AgentAskBar(44) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 140。
     /// 确保滚动到最底部时所有文字与待办完全露出，不被悬浮输入栏遮挡。
     private var reviewBottomPadding: CGFloat { 140 }
 
@@ -1055,7 +1085,7 @@ public struct MeetingNoteView: View {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
             suppressLiveFollowUpdate = false
-            liveDistanceFromBottom = 0
+            scrollBox.liveDistanceFromBottom = 0
             isFollowingLive = true
             missedLiveBlocks = 0
         }
@@ -1207,7 +1237,7 @@ public struct MeetingNoteView: View {
                     // 顶栏 Safe Area 与 Floating Bar 避让高度，确保标题与 TAB 栏有安全间距，防止误触
                     Color.clear.frame(height: reviewTopClear)
 
-                    // 上滑阅读时整条 Tab 区退场（Plaud 式），只留顶栏返回钮
+                    // 上滑阅读时整条 Tab 区退场（极简式），只留顶栏返回钮
                     reviewTabBar
                         .frame(maxHeight: reviewHeaderHidden ? 0 : nil, alignment: .top)
                         .opacity(reviewHeaderHidden ? 0 : 1)
@@ -1259,7 +1289,7 @@ public struct MeetingNoteView: View {
                 }
                 .onScrollPhaseChange { _, phase in
                     // 静止回顶兜底：确保停在顶部时顶栏一定显示（方向判定可能漏掉回弹到顶）
-                    if phase == .idle, reviewHeaderHidden, lastReviewScrollY <= 0 {
+                    if phase == .idle, reviewHeaderHidden, scrollBox.lastReviewScrollY <= 0 {
                         reviewHeaderHidden = false
                     }
                 }
@@ -1268,8 +1298,17 @@ public struct MeetingNoteView: View {
                     scrollTranscript(proxy: proxy, startSeconds: start)
                 }
                 .onChange(of: reviewTab) { _, tab in
-                    guard tab == .transcript, let start = pendingScrollStart else { return }
+                    guard tab == .transcript else { return }
+                    // 进转写 Tab 即回听场景：确保高亮起点表与当前转写一致（重转/润色后可能已变）。
+                    refreshListeningBoundaries()
+                    guard let start = pendingScrollStart else { return }
                     scrollTranscript(proxy: proxy, startSeconds: start)
+                }
+                .onChange(of: session.blocks) { _, _ in
+                    // 用户停留在转写 Tab 期间原地完成重转/润色/分离（不切 Tab）：blocks 换代后
+                    // 起点表必须跟上，否则播放高亮按旧 start 映射到已不存在的 block id（错位/消失）。
+                    guard reviewTab == .transcript, session.phase == .review else { return }
+                    refreshListeningBoundaries()
                 }
                 .onAppear {
                     // 首帧补滚：onChange 不在首次进入触发，外部注入 initialScrollStart 时需主动滚一次
@@ -1367,11 +1406,14 @@ public struct MeetingNoteView: View {
         let hasNote = meeting.handwritingNote != nil
         return Button {
             Haptics.impact(.light)
-            if let note = meeting.handwritingNote,
-               let stored = HandwritingStore.load(storedPath: note.drawingRelativePath) {
-                reviewDrawing = stored
-            } else {
-                reviewDrawing = PKDrawing()
+            // 仅画布为空时才从磁盘载入：上一次提交若因写盘失败保留了笔迹，这里不能被旧盘覆写。
+            if reviewDrawing.strokes.isEmpty {
+                if let note = meeting.handwritingNote,
+                   let stored = HandwritingStore.load(storedPath: note.drawingRelativePath) {
+                    reviewDrawing = stored
+                } else {
+                    reviewDrawing = PKDrawing()
+                }
             }
             showHandwritingEditor = true
         } label: {
@@ -1427,14 +1469,21 @@ public struct MeetingNoteView: View {
             meeting.handwritingNote = note
             modelContext.insert(note)
         }
-        note.drawingRelativePath = (try? HandwritingStore.save(
-            reviewDrawing, meetingId: meeting.id)) ?? ""
-        // drawing 已变，强制重识别。
+        // 编码+写盘移出主线程（对齐 commitLiveHandwriting）。成功后才清画布；失败保留笔迹待重试。
+        let drawingSnapshot = reviewDrawing
         note.recognizedText = nil
         note.title = nil
-        try? modelContext.save()
-        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: reviewDrawing)
-        reviewDrawing = PKDrawing()
+        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: drawingSnapshot)
+        Task { @MainActor in
+            do {
+                note.drawingRelativePath = try await HandwritingStore.saveOffMain(
+                    drawingSnapshot, meetingId: meeting.id)
+                reviewDrawing = PKDrawing()
+            } catch {
+                session.statusMessage = "手写保存失败：存储空间不足或写入失败，笔迹已保留，请重试"
+            }
+            try? modelContext.save()
+        }
         showHandwritingEditor = false
     }
 
@@ -1979,7 +2028,7 @@ public struct MeetingNoteView: View {
                             .font(.recapHeading)
                             .tracking(Tracking.heading)
                             .foregroundStyle(Color.recapInk)
-                        ForEach(topic.bullets, id: \.self) { bullet in
+                        ForEach(Array(topic.bullets.enumerated()), id: \.offset) { _, bullet in
                             bulletRow(bullet, color: Color.recapInk, ink: Color.recapInk)
                         }
                     }
@@ -2102,7 +2151,7 @@ public struct MeetingNoteView: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             sectionTitle(systemImage: "sparkles", "关键决议", color: Color.recapInk)
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                ForEach(session.summary.decisions, id: \.self) { d in
+                ForEach(Array(session.summary.decisions.enumerated()), id: \.offset) { _, d in
                     bulletRow(d, color: Color.recapInk, ink: Color.recapInk)
                 }
             }
@@ -2313,9 +2362,15 @@ public struct MeetingNoteView: View {
     }
 
     private var listeningBlockId: String? {
-        guard audioPlayer.isReady else { return nil }
-        let t = audioPlayer.currentTime
-        return reviewTranscriptBlocks.last(where: { blockStartSeconds($0) <= t })?.id
+        listeningHighlight.listeningBlockId
+    }
+
+    /// 刷新回听高亮的块起点表 + 绑定播放器（转写内容变化后调用）。
+    private func refreshListeningBoundaries() {
+        listeningHighlight.bind(player: audioPlayer)
+        listeningHighlight.updateBlocks(
+            reviewTranscriptBlocks.map { ($0.id, blockStartSeconds($0)) }
+        )
     }
 
     private func blockStartSeconds(_ block: TranscriptBlock) -> Double {
@@ -2326,7 +2381,7 @@ public struct MeetingNoteView: View {
         VStack(alignment: .leading, spacing: Spacing.md) {
             sectionTitle(systemImage: "questionmark.circle.fill", "未决问题", color: Color.recapOchre)
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                ForEach(session.summary.openQuestions, id: \.self) { q in
+                ForEach(Array(session.summary.openQuestions.enumerated()), id: \.offset) { _, q in
                     bulletRow(q, color: Color.recapOchre, ink: Color.recapTea)
                 }
             }
@@ -2416,7 +2471,7 @@ public struct MeetingNoteView: View {
             // 音频播放控制卡片：仅有本地录音时显示；进入即预载，避免 play 静默失效
             // （「转写」标题已由 sticky reviewTabBar 承担，正文不再重复 H1）
             if hasLocalAudio {
-                PlaudAudioPlayerCard(
+                AudioPlayerCard(
                     player: audioPlayer,
                     onSeek15Back: {
                         audioPlayer.seek(to: max(0, audioPlayer.currentTime - 15))
@@ -2653,8 +2708,10 @@ public struct MeetingNoteView: View {
     private var handwritingLiveBottomButton: some View {
         Button {
             Haptics.impact(.soft)
-            // 1:1：打开即续写——若有已存手写，载入 liveDrawing 接着画。
-            if let note = meeting.handwritingNote,
+            // 1:1：打开即续写——若有已存手写且画布为空，载入 liveDrawing 接着画
+            //（画布非空 = 上次写盘失败保留的笔迹，不能被旧盘覆写）。
+            if liveDrawing.strokes.isEmpty,
+               let note = meeting.handwritingNote,
                let stored = HandwritingStore.load(storedPath: note.drawingRelativePath) {
                 liveDrawing = stored
             }
@@ -2732,6 +2789,7 @@ public struct MeetingNoteView: View {
                         handwritingSummary: meeting.handwritingPromptSummary,
                         hasStartedRecording: session.hasStartedRecording,
                         isLivePaused: session.isLivePaused,
+                        pipelineProgressText: session.pipelineProgressText,
                         linkedMeetingTitle: meeting.brief?.sources.first(where: { $0.kind == .linkedMeeting })?.title,
                         onJumpToTranscript: { start in
                             jumpToTranscript(startSeconds: start)
@@ -2770,7 +2828,7 @@ public struct MeetingNoteView: View {
     /// 会后底栏：全局虹彩悬浮 Ask Bar——对话=横切工具，对「当前正在看的内容」提问。
     /// placeholder 随 Tab 语义切换（转写/总结/此笔记），不割裂「边看边问」。
     private var reviewBottom: some View {
-        PlaudAskBar(placeholder: askPlaceholder, onTap: openAgent)
+        AgentAskBar(placeholder: askPlaceholder, onTap: openAgent)
             .padding(.horizontal, Spacing.lg)
             .padding(.top, Spacing.xs)
             .padding(.bottom, Spacing.sm)
@@ -2992,7 +3050,9 @@ public struct MeetingNoteView: View {
         for item in items {
             let key = "\(item.task)|\(item.owner ?? "")"
             if existing.contains(key) { continue }
-            let due = item.due_text.flatMap { DueTextParser.parse($0) }
+            // 锚定会议开始时刻而非 .now：「今天/明天/周五」以开会那天为准——跨午夜会议
+            // 与数天后重跑管线（幂等补跑）都不会整体漂移一天。
+            let due = item.due_text.flatMap { DueTextParser.parse($0, reference: meeting.startedAt) }
             let anchored = item.start_seconds
                 ?? TranscriptAnchor.startSeconds(
                     evidenceQuote: item.evidence_quote,
@@ -3025,7 +3085,21 @@ public struct MeetingNoteView: View {
                 meeting: meeting
             ))
             try? modelContext.save()
+            pruneSummaryVersions(keep: 5)
         }
+    }
+
+    /// 摘要版本只增不删：每次重生成/修改/回滚都追加一条 AIOutput，高频用户线性累积
+    /// （`latestSummaryOutput` 还是全量 filter+max）。保留最近 `keep` 版，更旧的删除。
+    private func pruneSummaryVersions(keep: Int) {
+        let outputs = meeting.outputs
+            .filter { $0.kind == .summary }
+            .sorted { $0.version > $1.version }
+        guard outputs.count > keep else { return }
+        for stale in outputs.dropFirst(keep) {
+            modelContext.delete(stale)
+        }
+        try? modelContext.save()
     }
 
     /// 重新生成纪要：按当前转写（+底稿）重跑管线；旧 draft 待办清空，生成新版本。
@@ -3068,7 +3142,7 @@ private struct NoteTabSlot: Identifiable {
 // MARK: - Process stage (整理态舞台)
 
 /// 整理舞台：海獭 Mascot 悬浮 + 多重弥散极光 + Gemini 底部流光动效 + 逐字稿飞升 + 动态处理步骤。
-/// 风格简洁、干净、高级（参考 Plaud AI 与 Google Gemini APP）。Reduce Motion 时静帧优雅呈现。
+/// 风格简洁、干净、高级（参考主流 AI 助手应用）。Reduce Motion 时静帧优雅呈现。
 /// 会后任务 inline 进度：贴在转写 Tab 顶部，不随滚动、不污染总结/笔记 Tab。
 /// 与 P0「成功静默」配合：进行中给一丝反馈；完成后此条消失，结果由说话人标签 / 优化稿呈现。
 private struct PostMeetingProgressRow: View {
@@ -3139,15 +3213,9 @@ private struct ProcessStageCanvas: View {
     @State private var appeared = false
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                stageStack()
-            } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { _ in
-                    stageStack()
-                }
-            }
-        }
+        // 注意外层不再包 TimelineView：闭包不消费 context.date，只是把静态舞台以 30fps 空转
+        // 重求值（ghost 字符流自带 TimelineView，才是动画源）。
+        stageStack()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             let anim: Animation = reduceMotion
@@ -3226,7 +3294,7 @@ private struct ProcessStageCanvas: View {
 ///
 /// 与 AgentInvokeSheet 的 compose 栏同构（同一 `aiComposeBarStyle`），让「底栏发问 → 对话窗回答」
 /// 读作一条连续的 AI 表面。色系电光青·蓝·翠，与 LIVE 推理绿光晕(GeminiFluidGlowView)的青色端同谱。
-private struct PlaudAskBar: View {
+private struct AgentAskBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let placeholder: String
@@ -3267,8 +3335,8 @@ private struct PlaudAskBar: View {
     }
 }
 
-/// Plaud AI 风格音频播放卡片
-private struct PlaudAudioPlayerCard: View {
+/// 极简风格音频播放卡片
+private struct AudioPlayerCard: View {
     @ObservedObject var player: MeetingAudioPlayer
     var onSeek15Back: () -> Void
     var onSeek15Forward: () -> Void
@@ -3302,7 +3370,7 @@ private struct PlaudAudioPlayerCard: View {
             }
 
             // Line 2: Waveform bar
-            PlaudAudioWaveformView(
+            AudioWaveformView(
                 progress: player.duration > 0 ? player.currentTime / player.duration : 0
             )
             .frame(height: 36)
@@ -3366,8 +3434,8 @@ private struct PlaudAudioPlayerCard: View {
     }
 }
 
-/// Plaud AI 极简音频波形视图
-private struct PlaudAudioWaveformView: View {
+/// 极简音频波形视图
+private struct AudioWaveformView: View {
     var progress: Double = 0.0
 
     var body: some View {
@@ -3397,7 +3465,7 @@ private struct PlaudAudioWaveformView: View {
     }
 }
 
-/// Plaud AI 真实麦克风收音动态声波场
+/// 真实麦克风收音动态声波场
 /// isCompact=true：有字幕时收缩为顶部常驻细带（~18pt），收音反馈不断；false：空场丰满大波形当主角。
 /// 同一组件靠 isCompact 插值 frame/柱宽/文案显隐，避免 if/else 硬切。
 /// 柱高 = 钟形包络 × (时间相位波动 · 音量增益) + 基底：时间相位保活（拾音弱/模拟器下也有呼吸），
@@ -3428,7 +3496,7 @@ private struct TransportStatusDot: View {
     }
 }
 
-private struct PlaudLiveWaveformVisualizer: View {
+private struct LiveWaveformVisualizer: View {
     let isPaused: Bool
     let bands: AudioBands
     var isCompact: Bool = false

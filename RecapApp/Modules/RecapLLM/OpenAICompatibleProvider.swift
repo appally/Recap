@@ -121,7 +121,13 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         attempt: Int,
         continuation: AsyncThrowingStream<String, Error>.Continuation
     ) async {
-        let outcome = await performStreamOnce(query: query, continuation: continuation)
+        // 首 token 预算随重试递增（20→40→60s）：thinking 模型正文首 token 可能 >20s（前段
+        // 全是 reasoning），固定预算会在同一位置连续误杀 3 次、整体判死但网络其实正常。
+        let outcome = await performStreamOnce(
+            query: query,
+            continuation: continuation,
+            firstTokenBudget: firstTokenTimeoutSeconds * Double(attempt + 1)
+        )
 
         guard let error = outcome.error else {
             continuation.finish()
@@ -154,10 +160,11 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     ///（首 chunk 与超时几乎同时到达时，produced 压制 timedOut，避免误判导致重试）。
     private func performStreamOnce(
         query: ChatQuery,
-        continuation: AsyncThrowingStream<String, Error>.Continuation
+        continuation: AsyncThrowingStream<String, Error>.Continuation,
+        firstTokenBudget: Double
     ) async -> (produced: Bool, error: Error?) {
         let attempt = StreamAttempt(continuation: continuation)
-        let budget = firstTokenTimeoutSeconds
+        let budget = firstTokenBudget
 
         return await withTaskGroup(of: Void.self) { group in
             // 消费任务：持续 yield delta；随父 Task 取消而取消（结构化并发）。
@@ -280,18 +287,23 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
                 ] as [String: Any],
             ]],
         ]
+        // `thinking` 是 DeepSeek 专有参数：仅 DeepSeek 端点发送。云档（qwen 端点）与其余
+        // BYOK 模板（qwen/glm/kimi/openai/claude/gemini/doubao/custom）一律不发——
+        // 未知参数若被服务端严格校验会 400 且不可重试（按模板白名单而非排除清单判定，
+        // 排除清单法会漏掉走 dashscope 兼容端点的 BYOK qwen 模板）。
+        let isDeepSeekStyleAPI = id == "deepseek"
         if thinkingEnabled {
             // thinking-ON + tool_choice:auto（与 Agent 传输层同构，已验证可用）。
             // 靠 prompt+工具定义引导调用；模型若改走 content 输出 JSON，下方兜底解析。
             body["tool_choice"] = "auto"
-            body["thinking"] = ["type": "enabled"]
+            if isDeepSeekStyleAPI { body["thinking"] = ["type": "enabled"] }
         } else {
             // 最稳：强制 tool_choice + 关 thinking（DeepSeek thinking 拒绝强制 tool_choice）
             body["tool_choice"] = [
                 "type": "function",
                 "function": ["name": toolName],
             ]
-            body["thinking"] = ["type": "disabled"]
+            if isDeepSeekStyleAPI { body["thinking"] = ["type": "disabled"] }
         }
 
         let data = try JSONSerialization.data(withJSONObject: body)
@@ -329,11 +341,20 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
             }
         }
 
-        // 兜底：模型把 JSON 写在 content 里
-        if let content = message["content"] as? String,
-           let contentData = content.data(using: .utf8),
-           let decoded = try? JSONDecoder().decode(T.self, from: contentData) {
-            return decoded
+        // 兜底：模型把 JSON 写在 content 里（可能裹 ```json fence，先剥再解）
+        if let content = message["content"] as? String {
+            var s = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if s.hasPrefix("```") {
+                if let nl = s.firstIndex(of: "\n") { s = String(s[s.index(after: nl)...]) }
+                if let fence = s.range(of: "```", options: .backwards) {
+                    s = String(s[..<fence.lowerBound])
+                }
+                s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let contentData = s.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode(T.self, from: contentData) {
+                return decoded
+            }
         }
         return nil
     }

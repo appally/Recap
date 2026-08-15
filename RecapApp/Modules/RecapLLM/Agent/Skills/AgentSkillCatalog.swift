@@ -51,8 +51,10 @@ public struct AgentSkillCatalog: Sendable {
         do {
             return try bundled()
         } catch {
+            #if DEBUG
             print("AgentSkillCatalog: bundled skills failed to parse: \(error)")
             assertionFailure("AgentSkillCatalog.bundled() failed: \(error)")
+            #endif
             return AgentSkillCatalog(skills: [])
         }
     }

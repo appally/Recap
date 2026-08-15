@@ -53,12 +53,42 @@ final class AskMeetingDossierTests: XCTestCase {
         XCTAssertLessThanOrEqual(lines.count, AskMeetingDossier.maxActionLines)
     }
 
+    /// AskModelRouter 与 Agent 传输层同源：模型名取决于服务模式，测试需钉住环境。
+    private func withPinnedServiceMode<T>(_ mode: AIServiceMode,
+                                         _ body: () throws -> T) rethrows -> T {
+        let prevMode = AIServiceMode.current
+        let prevAccount = LLMSelection.selectedKeychainAccount
+        AIServiceMode.current = mode
+        LLMSelection.select(.deepseek, model: nil)
+        defer {
+            AIServiceMode.current = prevMode
+            LLMSelection.selectedKeychainAccount = prevAccount
+        }
+        return try body()
+    }
+
     func testAskModelRouterReviewUsesPro() {
-        XCTAssertEqual(AskModelRouter.model(for: .review), LLMPresets.deepSeekPro)
+        try? withPinnedServiceMode(.byok) {
+            XCTAssertEqual(AskModelRouter.model(for: .review), LLMPresets.deepSeekPro)
+        }
     }
 
     func testLiveUsesFlash() {
-        XCTAssertEqual(AskModelRouter.model(for: .live), LLMPresets.deepSeekFlash)
-        XCTAssertEqual(AskModelRouter.model(for: .processing), LLMPresets.deepSeekFlash)
+        try? withPinnedServiceMode(.byok) {
+            XCTAssertEqual(AskModelRouter.model(for: .live), LLMPresets.deepSeekFlash)
+            XCTAssertEqual(AskModelRouter.model(for: .processing), LLMPresets.deepSeekFlash)
+        }
+    }
+
+    /// 云档（Pro/免费）不得解析出 DeepSeek 模型名——打到 dashscope 端点会 400
+    /// （2026-08-02「三模型名打架」的漏网点，2026-08-15 审计修复）。
+    func testCloudTiersNeverResolveDeepSeekModel() {
+        for mode in [AIServiceMode.recapCloud, .freeTrial] {
+            try? withPinnedServiceMode(mode) {
+                let resolved = AskModelRouter.model(for: .review)
+                XCTAssertNotEqual(resolved, LLMPresets.deepSeekPro)
+                XCTAssertNotEqual(resolved, LLMPresets.deepSeekFlash)
+            }
+        }
     }
 }

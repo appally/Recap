@@ -31,7 +31,7 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于在会议开始时自动记录会议地点（仅保存在本机）</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>用于会议录音转写</string>
+	<string>用于会议录音与实时转写（含锁屏后台持续录制）</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>用于把会议待办创建为提醒事项</string>
 	<key>NSSiriUsageDescription</key>

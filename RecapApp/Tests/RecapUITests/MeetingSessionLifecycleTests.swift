@@ -84,6 +84,14 @@ final class MeetingSessionLifecycleTests: XCTestCase {
     }
 
     func testResumeWithoutRegistryPipelineStartsRecovery() {
+        // 隔离全局服务模式：同 bundle 其他测试可能留下免费档缓存 token，使
+        // canRunMinutesPipeline 通过 → 恢复路径起真管线并同步登记 registry，
+        // 下方 isRunning==false 断言被时序击穿（全量跑偶发红、单跑绿）。
+        // 固定 byok（测试机 Keychain 无 key → 闸门必失败）走「无纪要直接进 review」分支。
+        let previousMode = AIServiceMode.current
+        AIServiceMode.current = .byok
+        defer { AIServiceMode.current = previousMode }
+
         let meeting = Meeting(
             title: "t", durationSeconds: 60, phase: .processing,
             segments: [TranscriptSegment(startSeconds: 0, endSeconds: 1, text: "hello")],

@@ -33,11 +33,16 @@ public struct SearchTranscriptAgentTool: AgentTool {
         var limit = args["limit"] as? Int ?? 6
         limit = min(max(limit, 1), 8)
 
+        // 会中：近窗加成让「刚说的」胜出（与 prepareLocal 同口径）。
+        let liveNow: Double? = (context.phase == .live)
+            ? context.segments.map(\.endSeconds).max()
+            : nil
         let hits = SearchTranscriptTool.search(
             query: query,
             segments: context.segments,
             speakers: context.speakers,
-            limit: limit
+            limit: limit,
+            nowSeconds: liveNow
         )
         if hits.isEmpty {
             return AgentToolResult(

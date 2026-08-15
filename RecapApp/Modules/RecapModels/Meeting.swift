@@ -156,6 +156,13 @@ public final class Meeting {
         }
     }
 
+    /// 采纳已在后台线程编码好的 segments（LIVE 周期检查点路径：主线程零 JSON 编码，
+    /// 避免长会议每 10s 一次的全量 encode 卡 UI）。失败路径不会走到这里（编码失败即放弃本轮）。
+    public func adoptPreencodedSegments(_ data: Data, decoded: [TranscriptSegment]) {
+        segmentsData = data
+        segmentsCache = decoded
+    }
+
     /// LLM 润色后的转写分段（与 `segments` 一一对应，同 id/时间戳，text 已润色）；未润色返回空。
     public var polishedSegments: [TranscriptSegment] {
         guard let data = polishedSegmentsData else { return [] }
@@ -170,8 +177,11 @@ public final class Meeting {
             return decoded
         }
         set {
-            speakersData = (try? JSONEncoder().encode(newValue)) ?? Data()
-            speakersCache = newValue
+            // 编码失败保留旧 blob，禁止静默写成空 Data 抹掉说话人列表（对齐 segments 护栏）
+            if let encoded = try? JSONEncoder().encode(newValue) {
+                speakersData = encoded
+                speakersCache = newValue
+            }
         }
     }
 

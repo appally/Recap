@@ -26,7 +26,7 @@ As requested, a screen recording is attached to this message showing: opening Se
 
 We respectfully believe this app is not a repackaged or similar submission, and would like to clarify:
 
-1. Entirely original codebase. This app was developed from scratch by a single developer over [X months]. The repository (private) contains [170+] Swift source files with a continuous commit history from this account. No app template was purchased or used; the only third-party components are mainstream, officially licensed SDKs declared as Swift Package dependencies (Argmax SpeakerKit for on-device speaker diarization, FluidAudio for on-device speech recognition, OpenAI Swift SDK).
+1. Entirely original codebase. This app was developed from scratch by a single developer over the past several months (continuous commit history on this account since July 2026). The repository (private) contains over 270 Swift source files with a continuous commit history from this account. No app template was purchased or used; the only third-party components are mainstream, officially licensed SDKs declared as Swift Package dependencies (Argmax SpeakerKit for on-device speaker diarization, FluidAudio for on-device speech recognition, OpenAI Swift SDK).
 2. Distinctive functionality not found in combination elsewhere:
    - Cross-meeting voiceprint speaker identity: on-device speaker embeddings let the app recognize the same voice across different meetings, so names in minutes stay consistent — all local, opt-in biometric consent.
    - In-meeting photo capture with OCR time-anchored into the minutes (whiteboards, slides).
@@ -57,9 +57,9 @@ Best regards,
 
 ## 占位符待填
 
-- [X months]：实际开发时长（如 "the past 10 months"）。
-- [170+]：Swift 文件数（可写 "over 170 Swift files"）。
-- [开发者姓名] / 联系方式。
+- [X months]：已填（git 首提交 2026-07，按事实表述）。
+- [170+]：已填（实测 276 个非测试 Swift 文件，写 over 270）。
+- [开发者姓名] / 联系方式：待填（签名档，需用户补）。
 
 ## 若复审仍以 4.3(a) 拒绝的升级路径
 

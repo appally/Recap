@@ -665,7 +665,7 @@ export function landingHTML(): string {
     <div class="feature-item">
       <div class="feature-code">01 / HIGH PRECISION TRANSCRIPTION</div>
       <h3>高精录音转写，声音清晰留存</h3>
-      <p>支持普通话与方言识别，离线或断网环境下顺畅记录。自动修正错别字并去除冗余口头禅；遭遇崩溃或断网绝不丢失录音内容。</p>
+      <p>支持普通话与方言识别，离线或断网环境下顺畅记录。自动修正错别字并去除冗余口头禅；已录音频采用断点落盘保护，异常退出后尽可能保留已录内容。</p>
     </div>
 
     <div class="feature-item">
@@ -745,7 +745,7 @@ export function landingHTML(): string {
 
       <div class="price-items">
         <div class="price-item"><span class="price-dot"></span> 免配置 API Key，云端能力开箱即用</div>
-        <div class="price-item"><span class="price-dot"></span> 无限量高保真转写与多发言人精细区分</div>
+        <div class="price-item"><span class="price-dot"></span> 大容量云端转写（合理使用配额）与多发言人精细区分</div>
         <div class="price-item"><span class="price-dot"></span> 20+ 场景模板与问纪要 AI 深度调研</div>
         <div class="price-item"><span class="price-dot"></span> 订阅费代付云端成本，数据仍存本地</div>
       </div>
@@ -777,19 +777,27 @@ export function landingHTML(): string {
 export function privacyHTML(): string {
   return page('隐私政策 · 纪要', `
 <h1>隐私政策</h1>
-<p class="meta">生效日期: 2026-07-30 · 纪要</p>
+<p class="meta">生效日期: 2026-08-15 · 纪要</p>
 <h2>概述</h2>
 <p><strong>纪要</strong> 是一款专为 iOS/iPadOS 打造的效率工具，采用<strong>本地优先 (Local-First)</strong> 设计理念：你的录音音频、转写文本、结构化纪要与手写笔记<strong>默认仅保存在你的设备上</strong>。我们不运营存储你会议内容的中央服务器。</p>
 <h2>处理的数据</h2>
 <ul>
   <li><strong>录音与会议内容</strong>：音频在本地磁盘落盘，转写、纪要均存储于本机数据库。除非你主动导出或启用云端能力，内容绝不会离开设备。</li>
-  <li><strong>账户与身份（可选）</strong>：你可以选择「通过 Apple 登录」或完全本地匿名使用。选择登录时，我们仅保留 Apple 返回的无标识 User ID 与昵称。</li>
+  <li><strong>账户与身份（可选）</strong>：你可以选择「通过 Apple 登录」或完全本地匿名使用。选择登录时，我们仅保留 Apple 返回的无标识 User ID 与昵称，用于签发云端服务凭证与统计月度用量。你可以在应用内「账户」页面随时删除账户，删除后服务端账户标识与用量记录将被清除，本机已保存的声纹特征也会一并移除；本机会议内容可在应用内「数据与隐私」中另行清除。</li>
   <li><strong>订阅状态</strong>：纪要 Pro 通过 Apple App Store 完成购买，支付过程完全由 Apple 托管。</li>
+</ul>
+<h2>声纹说话人识别（生物识别信息）</h2>
+<p>「区分不同发言人」功能会在<strong>本机</strong>从录音中提取说话人声纹特征（不可还原为原始语音的数值向量），用于给同一说话人在本场及跨场会议中匹配身份。<strong>声纹特征属于生物识别信息，属于敏感个人信息</strong>：</p>
+<ul>
+  <li>声纹特征的提取、比对与存储<strong>全部在你的设备上完成</strong>，不会上传到任何服务器。</li>
+  <li>首次启用时，应用会向你展示单独同意页面；你可以选择拒绝，拒绝后不会在本机保存声纹特征，单场会议内的说话人分离仍可使用，跨会议的说话人身份识别不可用，录音、转写与纪要功能不受影响。</li>
+  <li>你可以随时在应用的说话人设置中删除已保存的声纹特征；删除账户或清除会议数据也会一并移除。</li>
 </ul>
 <h2>云端转写与 AI 纪要</h2>
 <ul>
-  <li><strong>自备 API 密钥模式</strong>：配置厂商 API Key（如 DeepSeek、通义千问、Kimi、OpenAI）时，请求由设备直接发送给供应商，不经过“纪要”服务器。</li>
-  <li><strong>纪要 Pro 模式</strong>：请求由设备直接发送给合作伙伴，“纪要”服务器仅签发临时访问凭证，不接收、不中转、不存储你的音频或任何文本。</li>
+  <li><strong>自备 API 密钥模式</strong>：配置厂商 API Key（如 DeepSeek、通义千问、Kimi、OpenAI）时，请求由设备直接发送给你选择的服务商，不经过“纪要”服务器。</li>
+  <li><strong>纪要 Pro 模式</strong>：云端转写与 AI 纪要由<strong>阿里巴巴 DashScope（百炼）</strong>提供——音频与文本由设备直接加密发送至该服务商处理（实时转写服务地址：dashscope.aliyuncs.com）。“纪要”服务器仅签发短时效临时访问凭证，不接收、不中转、不存储你的音频或任何文本。</li>
+  <li><strong>数据位置</strong>：使用云端能力时，相关音频/文本片段将传输至上述服务商位于中国大陆的服务器处理；如你在境外使用，请知悉该跨境传输事实。</li>
 </ul>
 <h2>联系我们</h2>
 <p>如有疑问，请联系：<a href="mailto:support@manymind.chat">support@manymind.chat</a></p>`, true);

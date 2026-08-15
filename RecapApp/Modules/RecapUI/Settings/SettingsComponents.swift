@@ -51,7 +51,7 @@ extension View {
 
 // MARK: - 分组
 
-// MARK: - 分组（Plaud 平面纸质风格，无浮雕卡片框）
+// MARK: - 分组（平面纸质风格，无浮雕卡片框）
 
 struct SettingsSection<Content: View>: View {
     let title: String
@@ -134,7 +134,7 @@ struct SettingsChevron: View {
     }
 }
 
-/// Plaud 极简 1.5px 单色 Outline 图标（非彩色背景小方块）
+/// 极简 1.5px 单色 Outline 图标（非彩色背景小方块）
 struct SettingsIconBadge: View {
     let systemName: String
     let tint: Color

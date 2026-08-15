@@ -76,7 +76,14 @@ public final class MembershipStore {
         do {
             try await AppStore.sync()
             await refreshEntitlements()
-            lastMessage = isPro ? "已恢复 Pro 订阅" : "未找到可恢复的订阅"
+            // 恢复结果按实际权益区分（Pro 订阅 / BYOK 买断 / 未找到），
+            // 避免 BYOK 恢复成功却提示「已恢复 Pro 订阅」造成误解。
+            switch (isPro, byokUnlocked) {
+            case (true, true): lastMessage = "已恢复 Pro 订阅与 BYOK 买断"
+            case (true, false): lastMessage = "已恢复 Pro 订阅"
+            case (false, true): lastMessage = "已恢复 BYOK 买断"
+            case (false, false): lastMessage = "未找到可恢复的购买"
+            }
         } catch {
             lastMessage = "恢复失败：\(error.localizedDescription)"
         }

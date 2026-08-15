@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 import RecapModels
 
-/// 使用数据看板：核心指标三栏 + 近一年活动热力图（Plaud 极简平面排版）。
+/// 使用数据看板：核心指标三栏 + 近一年活动热力图（极简平面排版）。
 /// 嵌入会员详情页，作为「计划与用量」的一部分。
 struct UsageStatsBoard: View {
     let meetings: [Meeting]
@@ -12,7 +12,7 @@ struct UsageStatsBoard: View {
         let duration = usageDurationPair(stats.totalSeconds)
 
         return VStack(alignment: .leading, spacing: Spacing.xxl) {
-            // Core 3 Metrics (Plaud 极简无边框平面三栏)
+            // Core 3 Metrics (极简无边框平面三栏)
             HStack(spacing: 0) {
                 metricColumn(label: "使用天数", value: "\(stats.activeDays)", unit: "天")
 
@@ -34,7 +34,7 @@ struct UsageStatsBoard: View {
                     .fill(Color(light: 0xF7F8F9, dark: 0x16181C))
             )
 
-            // Heatmap Section (Plaud 平面热力网格)
+            // Heatmap Section (平面热力网格)
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack {
                     Text("近一年活动热力")

@@ -116,23 +116,37 @@ final class MomentCaptureService: NSObject, ObservableObject {
 }
 
 /// 一次性拍照 delegate holder：持有 continuation，回调里 resume。
-/// `Data` 为 `Sendable`，可跨 actor 传递；`@unchecked Sendable` 因状态不可变且仅持 Sendable 续体。
+/// `Data` 为 `Sendable`，可跨 actor 传递；`@unchecked Sendable` 因可变状态有锁保护。
 private final class CaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate, @unchecked Sendable {
-    let continuation: CheckedContinuation<Data?, Never>
+    private let lock = NSLock()
+    private var resumed = false
+    private let continuation: CheckedContinuation<Data?, Never>
 
     init(continuation: CheckedContinuation<Data?, Never>) {
         self.continuation = continuation
         super.init()
     }
 
+    /// CheckedContinuation 双重 resume 是运行时陷阱（直接崩溃）。AVFoundation 契约里
+    /// `didFinishCaptureFor` 总是采集周期的最后一步；处理失败时它会与
+    /// `didFinishProcessingPhoto` 的错误回调**叠加到达**，故必须 resume-once 守卫。
+    private func resumeOnce(_ value: Data?) {
+        lock.lock()
+        let first = !resumed
+        resumed = true
+        lock.unlock()
+        guard first else { return }
+        continuation.resume(returning: value)
+    }
+
     nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
                                  didFinishProcessingPhoto photo: AVCapturePhoto,
                                  error: Error?) {
         if error != nil {
-            continuation.resume(returning: nil)
+            resumeOnce(nil)
             return
         }
-        continuation.resume(returning: photo.fileDataRepresentation())
+        resumeOnce(photo.fileDataRepresentation())
     }
 
     /// 采集在「照片处理前」失败（会话运行时错误/热中断/硬件故障）时，系统只回调本方法、
@@ -142,7 +156,7 @@ private final class CaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate, @u
                                  didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
                                  error: Error?) {
         if error != nil {
-            continuation.resume(returning: nil)
+            resumeOnce(nil)
         }
     }
 }

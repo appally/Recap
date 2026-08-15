@@ -288,7 +288,7 @@ struct MembershipSettingsView: View {
             Text("暂时拉不到订阅商品")
                 .font(.recapHeading)
                 .foregroundStyle(Color.recapInk)
-            Text("请检查网络或 StoreKit 配置后重试。")
+            Text("请检查网络后重试。")
                 .font(.recapMeta)
                 .foregroundStyle(Color.recapTea)
 
@@ -434,7 +434,11 @@ struct MembershipSettingsView: View {
             .frame(maxWidth: .infinity)
 
             VStack(spacing: Spacing.sm) {
-                Text("订阅通过 Apple 账户扣款并自动续期（当前周期结束前 24 小时内扣费，除非提前至少 24 小时取消），可在系统「设置 → Apple ID → 订阅」中随时管理或取消。")
+                // 条款文案随购买形态切换：订阅档讲自动续订，买断档讲一次付费永久解锁，
+                // 避免在 BYOK 页出现「自动续期」这类订阅语义造成误解。
+                Text(purchaseTab == .byok
+                     ? "买断为一次性付款，永久解锁，不限时长。可随时在同一 Apple ID 下通过「恢复购买」找回。"
+                     : "订阅通过 Apple 账户扣款并自动续期（当前周期结束前 24 小时内扣费，除非提前至少 24 小时取消），可在系统「设置 → Apple ID → 订阅」中随时管理或取消。")
                     .font(.recapMeta)
                     .foregroundStyle(Color.recapTea.opacity(0.55))
                     .multilineTextAlignment(.center)

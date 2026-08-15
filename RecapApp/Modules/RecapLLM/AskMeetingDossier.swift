@@ -99,14 +99,13 @@ public enum AskMeetingDossier {
     }
 }
 
-/// Ask 按会议阶段选模型（会中 flash / 会后 pro）。
+/// Ask 按会议阶段选模型（会中 quick / 会后 deep）。
+/// 与 Agent 传输层同源：云档（Pro/免费）走网关下发的 `cred.llmModel`，
+/// 仅 BYOK DeepSeek 区分 flash/pro——此前无条件返回 DeepSeek 名，云档会打到
+/// dashscope 端点直接 400（Ask 降级兜底整体不可用）。
 public enum AskModelRouter {
     public static func model(for phase: MeetingPhase) -> String {
-        switch phase {
-        case .live, .processing:
-            return LLMPresets.deepSeekFlash
-        case .review:
-            return LLMPresets.deepSeekPro
-        }
+        let role: AgentModelRole = (phase == .review) ? .deep : .quick
+        return AgentTransportFactory.modelName(for: LLMSelection.selectedTemplate, role: role)
     }
 }

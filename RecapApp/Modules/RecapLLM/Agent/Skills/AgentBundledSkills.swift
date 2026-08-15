@@ -416,7 +416,7 @@ public enum AgentBundledSkills {
     语气温和、对事不对人；涉及个人敏感内容保持中性客观。
     """
 
-    /// 改编自 plaud「面试分析」：剔除 MBTI / 心理推测等不可验证内容，
+    /// 面试评估模板：剔除 MBTI / 心理推测等不可验证内容，
     /// 只保留以转写为据的亮点 / 顾虑 / 岗位匹配度 / 下一步。
     private static let interviewEval = """
     ---
@@ -515,7 +515,7 @@ public enum AgentBundledSkills {
     忠实于转写内容。
     """
 
-    /// Cornell 笔记法（cue 列必须是「问题」而非「类别」——Plaud 官方强调的常见误用纠正）。
+    /// Cornell 笔记法（cue 列必须是「问题」而非「类别」——常见误用纠正）。
     private static let cornellNotes = """
     ---
     id: cornell-notes

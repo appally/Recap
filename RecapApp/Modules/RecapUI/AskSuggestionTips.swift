@@ -28,6 +28,7 @@ public enum AskSuggestionTips {
             ))
         case .liveRecording:
             tips.append(contentsOf: liveRecordingTips(
+                agendaTitles: agendaTitles,
                 briefOpenItems: briefOpenItems,
                 transcript: recentTranscript,
                 hasBrief: hasBrief
@@ -69,13 +70,20 @@ public enum AskSuggestionTips {
     // MARK: - Live recording（补课向，会议中·录音中）
 
     private static func liveRecordingTips(
+        agendaTitles: [String],
         briefOpenItems: [String],
         transcript: String,
         hasBrief: Bool
     ) -> [String] {
         var tips: [String] = ["总结到此刻"]
         if hasBrief {
-            tips.append("第三项议程讲了啥")
+            // 用真实议程标题，不硬编码「第三项」（无第三项时该问题是编造）；
+            // 无可引标题时回退到通用的进度向问题。
+            if let first = agendaTitles.first(where: { !$0.isEmpty }) {
+                tips.append("「\(clip(first, max: 12))」讲了啥")
+            } else {
+                tips.append("议程讲到哪了")
+            }
         }
         for item in briefOpenItems.prefix(2) {
             let short = clip(item, max: 14)

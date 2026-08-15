@@ -85,9 +85,16 @@ public enum RecapDataContainer {
                 migrationPlan: RecapMigrationPlan.self,
                 configurations: [configuration]
             )
-            let seedContext = ModelContext(container)
-            try seedIfNeeded(in: seedContext)
             Self.shared = container
+            // 播种失败（磁盘满 / IO 错等）≠ 迁移失败：库本身完好，绝不触发备份降级——
+            // 否则一次播种失败就会把整库改名挪走，用户看到空 App。仅记日志；
+            // seed 幂等，下次启动自动补齐。
+            do {
+                let seedContext = ModelContext(container)
+                try seedIfNeeded(in: seedContext)
+            } catch {
+                logger.error("seed 播种失败（跳过，不影响既有数据）：\(error.localizedDescription, privacy: .public)")
+            }
             return container
         } catch {
             // schema 不兼容且无法轻量迁移时：绝不静默删库。
@@ -97,11 +104,18 @@ public enum RecapDataContainer {
         }
     }
 
-    /// 备份旧库 + 降级 inMemory 容器。绝不抹除用户数据。
+    /// 备份旧库 + 降级容器。绝不抹除用户数据。
+    /// 降级优先在原地址新建**全新磁盘库**（旧库已改名挪走，不冲突）——否则降级会话里
+    /// 用户新录的会议/待办只进内存库，杀 App 即丢。磁盘库也建不起来（如磁盘满）才退内存。
     private static func fallbackAfterFailure(storeURL: URL?) throws -> ModelContainer {
         dataMigrationFailed = true
         if let storeURL {
             backupStore(at: storeURL)
+            pruneFailedBackups(around: storeURL)
+            if let container = try? makeFreshOnDiskContainer(at: storeURL) {
+                return container
+            }
+            logger.error("降级磁盘库创建失败，退到内存容器（本次会话数据不持久）")
         }
         let inMemoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try ModelContainer(
@@ -115,10 +129,60 @@ public enum RecapDataContainer {
         return container
     }
 
+    /// 在已备份挪空的地址新建全新磁盘容器（含播种）。
+    private static func makeFreshOnDiskContainer(at storeURL: URL) throws -> ModelContainer {
+        let configuration = ModelConfiguration(schema: schema, url: storeURL)
+        let container = try ModelContainer(
+            for: schema,
+            migrationPlan: RecapMigrationPlan.self,
+            configurations: [configuration]
+        )
+        let seedContext = ModelContext(container)
+        try seedIfNeeded(in: seedContext)
+        Self.shared = container
+        return container
+    }
+
+    /// `.failed-<时间戳>` 备份只保留最近 3 份，防反复损坏时无限堆积占磁盘。
+    private static func pruneFailedBackups(around storeURL: URL, keep: Int = 3) {
+        let fm = FileManager.default
+        let parent = storeURL.deletingLastPathComponent()
+        let prefix = storeURL.lastPathComponent + ".failed-"
+        guard let names = try? fm.contentsOfDirectory(atPath: parent.path) else { return }
+        // 先剥 "-wal"/"-shm" 附属后缀，余下整段时间戳为 stamp（同格式内字典序即时间序）。
+        // 注意时间戳本身可含 "-"（2026-08 前的旧备份用 ISO8601 格式），不能按 "-" 截断——
+        // 否则每段都被截成年份、永远只剩 1 个 stamp，清理从不生效。
+        var stamps = Set<String>()
+        for name in names where name.hasPrefix(prefix) {
+            var body = String(name.dropFirst(prefix.count))
+            for suffix in ["-wal", "-shm"] where body.hasSuffix(suffix) {
+                body.removeLast(suffix.count)
+            }
+            stamps.insert(body)
+        }
+        let sorted = stamps.sorted()
+        guard sorted.count > keep else { return }
+        for stamp in sorted.dropLast(keep) {
+            for suffix in ["", "-wal", "-shm"] {
+                let url = parent.appendingPathComponent(prefix + stamp + suffix)
+                try? fm.removeItem(at: url)
+            }
+        }
+    }
+
+    /// 备份时间戳格式：无 "-" 的 UTC 定宽（字典序=时间序，且不与 `-wal`/`-shm` 后缀歧义）。
+    private static let backupStampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return f
+    }()
+
     /// 把 store 文件及 SQLite 附属（-wal/-shm）改名备份，保留用户数据供恢复/排查。
     private static func backupStore(at storeURL: URL) {
         let fm = FileManager.default
-        let stamp = ISO8601DateFormatter().string(from: Date())
+        let stamp = backupStampFormatter.string(from: Date())
         let parent = storeURL.deletingLastPathComponent()
         let base = storeURL.lastPathComponent
         for suffix in ["", "-wal", "-shm"] {

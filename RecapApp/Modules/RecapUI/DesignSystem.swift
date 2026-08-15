@@ -201,6 +201,14 @@ public extension View {
         shadow(color: .recapShadow, radius: 10, x: 0, y: 4)
     }
 
+    /// 纸面落影：极轻双层——贴桌接触影（极小半径，仅勾出纸边）+ 环境柔影（低透明度大柔化）。
+    /// 纸的物性靠颗粒与纸边（recapPaperGrain + hairline），不靠影的厚度；
+    /// 影一旦读出「厚」，纸就变成了「板」。只用于纸面组等大面积纸。
+    func recapPaperShadow() -> some View {
+        shadow(color: .black.opacity(0.028), radius: 0.8, x: 0, y: 0.4)
+            .shadow(color: .recapShadow.opacity(0.6), radius: 6, x: 0, y: 2)
+    }
+
     @ViewBuilder
     func recapGlass(cornerRadius: CGFloat = Radius.card) -> some View {
         if #available(iOS 26.0, *) {
@@ -257,7 +265,50 @@ public extension View {
     }
 }
 
-// MARK: - AI 输入栏统一皮肤（PlaudAskBar ↔ AgentInvokeSheet 共用，保证一致）
+// MARK: - 纸纹（Paper Grain）
+
+/// 设备灰白噪声纹理：静态生成一次，平铺铺出纸面颗粒。
+/// 纸感 = 暖骨底色（recapBg 的温度）+ 颗粒（此处）+ 落影（recapPaperShadow），三者缺一不可。
+public enum RecapPaperTexture {
+    /// 128×128 灰度白噪声。
+    public static let noise: UIImage = {
+        let side = 128
+        var pixels = [UInt8](repeating: 0, count: side * side)
+        for i in pixels.indices { pixels[i] = UInt8.random(in: 0...255) }
+        let image = pixels.withUnsafeMutableBytes { buffer -> UIImage? in
+            guard
+                let ctx = CGContext(
+                    data: buffer.baseAddress,
+                    width: side,
+                    height: side,
+                    bitsPerComponent: 8,
+                    bytesPerRow: side,
+                    space: CGColorSpaceCreateDeviceGray(),
+                    bitmapInfo: CGImageAlphaInfo.none.rawValue
+                ),
+                let cgImage = ctx.makeImage()
+            else { return nil }
+            return UIImage(cgImage: cgImage)
+        }
+        return image ?? UIImage()
+    }()
+}
+
+public extension View {
+    /// 纸面颗粒：白噪声平铺的极淡 grain。画布 0.02–0.03、纸面 ≤0.015；
+    /// 勿多层叠加（会脏），勿给小元素用（噪声密度在高频小面积上读成脏点）。
+    /// grain 属于「纸」不属于「内容」——行在纸上滑动时颗粒静止，物理上是对的。
+    func recapPaperGrain(_ opacity: Double) -> some View {
+        overlay(
+            Rectangle()
+                .fill(Color(uiColor: UIColor(patternImage: RecapPaperTexture.noise)))
+                .opacity(opacity)
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+// MARK: - AI 输入栏统一皮肤（AgentAskBar ↔ AgentInvokeSheet 共用，保证一致）
 
 /// 极简灵动输入栏边框与环境微光（Apple-grade 质感）
 /// 摒弃粗重高饱和荧光蓝，采用通透纸底、细微环境阴影与极细润色边框。
@@ -284,7 +335,7 @@ public struct AIAuroraRing: View {
 
 public extension View {
     /// AI compose 栏统一皮肤：温润纸底 + 浮动微阴影 + 精致单像素微边框。
-    /// PlaudAskBar(底栏) 与 AgentInvokeSheet(对话窗) 输入栏共用——保证「底栏发问 → 对话窗回答」视觉连续、温润自洽。
+    /// AgentAskBar(底栏) 与 AgentInvokeSheet(对话窗) 输入栏共用——保证「底栏发问 → 对话窗回答」视觉连续、温润自洽。
     func aiComposeBarStyle(focused: Bool, reduceMotion: Bool) -> some View {
         background {
             Capsule(style: .continuous)
@@ -337,6 +388,19 @@ public struct RecapPressStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .opacity(configuration.isPressed ? 0.94 : 1)
+            .animation(.recapPress, value: configuration.isPressed)
+    }
+}
+
+/// 列表行按压：指尖落纸的极淡墨染（无位移、无缩放、不变文字）——
+/// 纸面组平面语言里最接近物理按压的反馈，平面化的行因此不「死」。
+/// 用于首页会议行（SwipeableMeetingRow 内 Button）。
+public struct RecapRowPressStyle: ButtonStyle {
+    public init() {}
+
+    public func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.recapInk.opacity(configuration.isPressed ? 0.045 : 0))
             .animation(.recapPress, value: configuration.isPressed)
     }
 }

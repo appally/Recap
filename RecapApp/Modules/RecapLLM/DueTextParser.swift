@@ -172,26 +172,37 @@ public enum DueTextParser {
     }
 
     /// X月X日：用参考年；今年该日已过则取下年。
+    /// 溢出校验：Calendar.date(from:) 对「2月30日」等非法日期会静默滚到下月（3月2日），
+    /// 与「解析失败一律 nil」契约冲突——构造后回读月日核对，不符即拒绝。
     private static func resolveAbsoluteMonthDay(month: Int, day: Int, calendar: Calendar, reference: Date) -> Date? {
         var c = calendar.dateComponents([.year], from: reference)
         c.month = month
         c.day = day
-        guard let date = calendar.date(from: c) else { return nil }
+        guard let date = calendar.date(from: c),
+              calendar.component(.month, from: date) == month,
+              calendar.component(.day, from: date) == day else { return nil }
         if date < calendar.startOfDay(for: reference) {
             c.year! += 1
-            return calendar.date(from: c)
+            guard let next = calendar.date(from: c),
+                  calendar.component(.month, from: next) == month,
+                  calendar.component(.day, from: next) == day else { return nil }
+            return next
         }
         return date
     }
 
     /// 当月X号：取即将到来的该日（当月未过取当月，过了取下月）。
+    /// 溢出校验同上：短月说「31号」会静默滚到下月 1 日，拒绝为 nil。
     private static func resolveRelativeDayNumber(day: Int, calendar: Calendar, reference: Date) -> Date? {
         var c = calendar.dateComponents([.year, .month], from: reference)
         c.day = day
-        guard var date = calendar.date(from: c) else { return nil }
+        guard let date = calendar.date(from: c),
+              calendar.component(.day, from: date) == day else { return nil }
         if date < calendar.startOfDay(for: reference) {
             c.month! += 1
-            date = calendar.date(from: c) ?? date
+            guard let next = calendar.date(from: c),
+                  calendar.component(.day, from: next) == day else { return nil }
+            return next
         }
         return date
     }

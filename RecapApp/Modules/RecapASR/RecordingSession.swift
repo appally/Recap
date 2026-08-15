@@ -133,6 +133,7 @@ public final class RecordingSession: ObservableObject {
                 var lagWarned = false
                 var windowStart = Date()
                 var audioAccum: Double = 0
+                var lastFeedErrorMsg: String?
                 let rate = sampleRate
                 for await chunk in audioStream {
                     guard let self, !Task.isCancelled else { break }
@@ -145,10 +146,14 @@ public final class RecordingSession: ObservableObject {
                     do {
                         try await self.engine?.feed(chunk)
                     } catch {
-                        // 单帧失败不中断整场录音；上报 UI，仍可点「结束」
+                        // 单帧失败不中断整场录音；上报 UI，仍可点「结束」。
+                        // 断连后引擎对每帧 feed 都抛同一条错误（~12Hz）——去重，只报一次。
                         let msg = error.localizedDescription
-                        self.lastError = msg
-                        self.onError?(msg)
+                        if msg != lastFeedErrorMsg {
+                            lastFeedErrorMsg = msg
+                            self.lastError = msg
+                            self.onError?(msg)
+                        }
                     }
                     audioAccum += Double(chunk.count) / rate
                     if audioAccum >= 5.0 {

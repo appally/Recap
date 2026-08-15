@@ -8,7 +8,7 @@ import RecapModels
 /// 可选「记住我」（仅 FluidAudio 声纹路径）= 持久 enroll，复用既有 `VoiceprintConsent` 同意门，
 /// 且**非阻断**（不挡本场反思：transient 立即跑，enroll 是只影响未来会议的副作用）。
 ///
-/// 设计取向参考 Plaud「我的声音/自动标注」（durable 中心）；transient 兜底是 Recap 独有
+/// 设计取向：durable 中心（我的声音/自动标注）；transient 兜底是 Recap 独有
 /// （SpeakerKit + 免同意）。PIPL 边界：当场标签不碰声纹、无需同意；只有 markAsMe（画廊落盘）才触发同意。
 struct SpeakerPickerSheet: View {
     let speakers: [Speaker]

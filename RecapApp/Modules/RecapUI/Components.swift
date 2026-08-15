@@ -636,6 +636,8 @@ public struct OfflineBanner: View {
                     Image(systemName: "wifi.slash")
                     Text("未联网·云端转写与纪要暂不可用，录音仍可保存")
                         .lineLimit(1)
+                        // 窄屏（SE 类）放不下时先微缩再截断，截尾会把「录音仍可保存」截没
+                        .minimumScaleFactor(0.8)
                 }
                 .font(.recapCaption)
                 .foregroundStyle(Color.recapPaper)
@@ -872,7 +874,7 @@ public struct RecordingButton: View {
         }
         .buttonStyle(RecapPressStyle())
         .accessibilityLabel("新会议")
-        .accessibilityHint("进入会议，可先添加资料再开始录音")
+        .accessibilityHint("创建新会议并开始录音")
         .onAppear { syncPulse() }
         .onChange(of: allowsPulse) { _, _ in syncPulse() }
         .onChange(of: reduceMotion) { _, _ in syncPulse() }

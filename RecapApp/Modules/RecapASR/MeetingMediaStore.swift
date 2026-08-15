@@ -79,6 +79,38 @@ public enum MeetingMediaStore {
         return UIImage(contentsOfFile: url.path)
     }
 
+    // MARK: - 降采样加载（列表/卡片路径）
+
+    /// 进程级降采样缓存：key = 路径#尺寸档。NSCache 本身线程安全（Apple 文档允许多线程访问，
+    /// 只是未标注 Sendable），内存告警自动逐出。
+    private nonisolated(unsafe) static let downsampleCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 300
+        return cache
+    }()
+
+    /// ImageIO 降采样加载：显示高度远小于原图（相机 12-48MP 全图位图 40MB+/张），
+    /// `UIImage(contentsOfFile:)` 在 body 里同步全图解码会反复读盘 + 内存尖峰。
+    /// 列表/卡片一律走这里（maxPixelSize 取显示尺寸的 ~3x）；全屏缩放场景才用 `loadUIImage`。
+    public static func loadDownsampled(storedPath: String, maxPixelSize: Int) -> UIImage? {
+        let key = "\(storedPath)#\(maxPixelSize)" as NSString
+        if let hit = downsampleCache.object(forKey: key) { return hit }
+        guard let url = try? resolveImageURL(storedPath: storedPath),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        let image = UIImage(cgImage: cg)
+        downsampleCache.setObject(image, forKey: key)
+        return image
+    }
+
     /// 用 ImageIO 下采样生成缩略图 JPEG 数据：不生成全分辨率位图，省内存、CPU 远低于全图编码。
     /// 供取景 overlay 的连拍缩略图用（避免常驻千万像素原图）。失败返回 nil。
     public static func makeThumbnailData(from data: Data, maxDimension: Int = 200) -> Data? {

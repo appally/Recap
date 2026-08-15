@@ -10,6 +10,7 @@ import RecapASR
 struct RecapAppApp: App {
     let modelContainer: ModelContainer
     @State private var membership = MembershipStore.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         do {
@@ -51,6 +52,13 @@ struct RecapAppApp: App {
                     // Pro 会员(recapCloud):tier 同步后启动后台滚动续签阿里临时凭证
                     // (内部自判 recapCloud+Pro,否则 no-op);LLM/ASR 的 makeCurrent/prepare 读其缓存。
                     RecapCredentialProvider.shared.startBackgroundRefresh()
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // 回前台即对账权益：App 常驻多日不杀时，订阅过期/退款不会即时回收
+                    // （云端有网关验签兜底，但本地 UI 会一直显示过期的 Pro）。启动/购买/恢复/
+                    // Transaction.updates 之外的这块盲区由 active 对账补上。
+                    guard phase == .active else { return }
+                    Task { await membership.refreshEntitlements() }
                 }
                 .onReceive(NotificationCenter.default.publisher(
                     for: UIApplication.didReceiveMemoryWarningNotification

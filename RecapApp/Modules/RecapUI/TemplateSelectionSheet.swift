@@ -3,7 +3,7 @@ import SwiftData
 import RecapModels
 import RecapLLM
 
-/// Plaud AI 风格「选择模板」Sheet：纯 picker——挑模板后回调 `onPickSkill`，
+/// 极简风格「选择模板」Sheet：纯 picker——挑模板后回调 `onPickSkill`，
 /// 由父视图（`MeetingNoteView`）负责在笔记 Tab 内联流式生成与落库。
 ///
 /// 三档 Tab 职责：
@@ -118,33 +118,40 @@ public struct TemplateSelectionSheet: View {
     }
 
     private var segmentBar: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 8) {
             ForEach(TemplateTab.allCases) { tab in
+                let isActive = selectedTab == tab
                 Button {
                     Haptics.selection()
                     withAnimation(.recapSoft) { selectedTab = tab }
                 } label: {
-                    VStack(spacing: 4) {
-                        Text(tab.rawValue)
-                            .font(selectedTab == tab ? .recapHeading : .recapBodyS)
-                            .foregroundStyle(selectedTab == tab ? Color.recapInk : Color.recapTea)
-                        // 滑动下划线：固定占位保高，选中项带 matchedGeometry 的墨色胶囊
-                        // 随 selectedTab 平滑滑动，给眼睛一个移动锚点（空间一致性）。
-                        ZStack {
-                            Capsule().fill(.clear).frame(width: 18, height: 2.5)
-                            if selectedTab == tab {
-                                Capsule().fill(Color.recapInk).frame(width: 18, height: 2.5)
+                    Text(tab.rawValue)
+                        .font(.recapBodyS.weight(isActive ? .semibold : .medium))
+                        .foregroundStyle(isActive ? Color.recapInk : Color.recapTea.opacity(0.85))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background {
+                            if isActive {
+                                Capsule(style: .continuous)
+                                    .fill(Color.recapPaper)
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.6)
+                                    )
+                                    .shadow(color: Color.recapShadow.opacity(0.8), radius: 4, x: 0, y: 1.5)
                                     .matchedGeometryEffect(id: "segmentIndicator", in: segmentNS)
+                            } else {
+                                Capsule(style: .continuous)
+                                    .fill(Color.clear)
                             }
                         }
-                    }
                 }
                 .buttonStyle(.plain)
             }
             Spacer()
         }
         .padding(.horizontal, Spacing.xl)
-        .padding(.vertical, Spacing.sm)
+        .padding(.vertical, Spacing.xs)
     }
 
     // MARK: - Pick content
@@ -358,9 +365,20 @@ public struct TemplateSelectionSheet: View {
         }
     }
 
+    private func skillColor(_ skill: AgentSkill) -> Color {
+        switch skill.groupTitle {
+        case "提取": return Color(light: 0x2563EB, dark: 0x60A5FA) // 皇家蓝
+        case "写作": return Color(light: 0x7C3AED, dark: 0xA78BFA) // 优雅紫
+        case "可视化": return Color(light: 0xDB2777, dark: 0xF472B6) // 活力粉
+        case "纪要": return Color(light: 0x059669, dark: 0x34D399) // 翡翠绿
+        default: return Color(light: 0xD97706, dark: 0xFBBF24) // 琥珀金
+        }
+    }
+
     private func templateCard(_ skill: AgentSkill) -> some View {
         let isSelected = selectedSkill?.id == skill.id
         let isFavorite = favorites.contains(skill.id)
+        let color = skillColor(skill)
         return Button {
             Haptics.selection()
             withAnimation(.recapSoft) {
@@ -369,24 +387,29 @@ public struct TemplateSelectionSheet: View {
         } label: {
             VStack(alignment: .leading, spacing: Spacing.sm) {
                 HStack(spacing: Spacing.xs) {
-                    Image(systemName: skill.icon.isEmpty ? "doc.text" : skill.icon)
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(Color.recapInk)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(color.opacity(0.12))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: skill.icon.isEmpty ? "doc.text" : skill.icon)
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(color)
+                    }
                     Spacer()
                     // 选中对勾：固定宽度槽位，淡入淡出，避免收藏星左右跳动。
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(Color.recapInk)
                         .opacity(isSelected ? 1 : 0)
-                        .frame(width: 18)
+                        .frame(width: 20)
                     Button {
                         Haptics.selection()
                         withAnimation(.recapSoft) { favorites.toggle(skill.id) }
                     } label: {
                         Image(systemName: isFavorite ? "star.fill" : "star")
                             .font(.system(size: 14))
-                            .foregroundStyle(isFavorite ? Color.recapCinnabar : Color.recapTea.opacity(0.5))
-                            .frame(width: 30, height: 30)
+                            .foregroundStyle(isFavorite ? Color.recapCinnabar : Color.recapTea.opacity(0.4))
+                            .frame(width: 28, height: 28)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(RecapPressStyle())
@@ -407,16 +430,16 @@ public struct TemplateSelectionSheet: View {
                 Spacer(minLength: 0)
 
                 Text(skill.groupTitle)
-                    .font(.recapCaption)
-                    .foregroundStyle(Color.recapTea)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
+                    .font(.recapCaption.weight(.medium))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .background(
-                        Capsule().fill(Color.recapTea.opacity(0.12))
+                        Capsule().fill(color.opacity(0.10))
                     )
             }
             .padding(Spacing.md)
-            .frame(height: 150)
+            .frame(height: 156)
             .background(cardBackground(cornerRadius: 16, isSelected: isSelected, selectedLineWidth: 2))
         }
         .buttonStyle(RecapPressStyle())

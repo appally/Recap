@@ -247,32 +247,15 @@ enum OpenAICompatibleAgentStreaming {
             throw AgentTransportError.classify(status: http.statusCode, body: bodyText)
         }
 
-        var lineBuffer = Data()
         var reasoning = ""
         var accumulator = ChatCompletionsCodec.ToolCallAccumulator()
         var sawFinish = false
         var dsmlFilter = DeepSeekDSML.StreamFilter()
 
-        for try await byte in bytes {
+        // 按行消费（此前逐字节迭代 + 手工拼缓冲：每字节一次挂起/恢复，长回答放大开销；
+        // SSE 是行协议，CRLF/LF 由 lines 归一，余下交给 SSELineParser）。
+        for try await line in bytes.lines {
             if Task.isCancelled { throw CancellationError() }
-            if byte == UInt8(ascii: "\n") {
-                let line = String(data: lineBuffer, encoding: .utf8) ?? ""
-                lineBuffer.removeAll(keepingCapacity: true)
-                if try handleSSELine(
-                    line,
-                    reasoning: &reasoning,
-                    accumulator: &accumulator,
-                    sawFinish: &sawFinish,
-                    dsmlFilter: &dsmlFilter,
-                    continuation: continuation
-                ) { produced = true }
-            } else {
-                lineBuffer.append(byte)
-            }
-        }
-
-        if !lineBuffer.isEmpty {
-            let line = String(data: lineBuffer, encoding: .utf8) ?? ""
             if try handleSSELine(
                 line,
                 reasoning: &reasoning,

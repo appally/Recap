@@ -102,7 +102,7 @@ public final class RecapCredentialProvider: @unchecked Sendable {
 
     // MARK: - 端点
 
-    /// 后端 /v1/issue 基址。用户在设置覆盖;默认占位上线前替换为备案子域。
+    /// 后端 /v1/issue 基址。Debug 可经 UserDefaults 覆盖联调；Release 固定生产域。
     public static var endpoint: URL {
         #if DEBUG
         // Debug 允许通过 UserDefaults 覆盖(便于本机 mock/staging 联调);Release 强制走生产域。
@@ -237,6 +237,37 @@ public final class RecapCredentialProvider: @unchecked Sendable {
             llmModel: decoded.llm_model ?? LLMPresets.cloudDefaultModel,
             expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in))
         )
+    }
+
+    /// 账号删除（App Store 5.1.1(v)）：identityToken 验签后由网关清空
+    /// `apple:<sub>` 共享桶与本设备桶（身份标识+月度用量）。
+    /// 需调用方现取新 identityToken（JWT ~10min 时效，不做持久化）。
+    public enum RemoteDeleteOutcome {
+        /// 服务端已清空。
+        case deleted
+        /// 网关明确拒绝（401/403）：验签失败或服务端配置错（如 APPLE_BUNDLE_ID 未注入）——
+        /// 重试无意义，提示联系支持；本地登录态保留。
+        case rejected
+        /// 网络/超时/5xx：可重试，本地登录态保留。
+        case networkFailure
+    }
+
+    @discardableResult
+    public static func deleteAccountRemotely(identityToken: String) async -> RemoteDeleteOutcome {
+        var req = URLRequest(url: endpoint.appendingPathComponent("v1/account/delete"))
+        req.httpMethod = "POST"
+        req.timeoutInterval = 15
+        req.setValue(identityToken, forHTTPHeaderField: "X-Apple-Identity-Token")
+        req.setValue(RecapAccountStore.deviceID, forHTTPHeaderField: "X-Recap-Device")
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else {
+            return .networkFailure
+        }
+        switch http.statusCode {
+        case 200: return .deleted
+        case 401, 403: return .rejected
+        default: return .networkFailure
+        }
     }
 
     private struct IssueResponse: Decodable {

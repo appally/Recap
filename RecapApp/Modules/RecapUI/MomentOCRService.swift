@@ -26,10 +26,15 @@ public final class MomentOCRService {
         let momentId = moment.id
         let paths = moment.photoRelativePaths          // [String] Sendable，避免捕获 [UIImage]
         Task { @MainActor [weak self] in
-            let images = paths.compactMap { MeetingMediaStore.loadUIImage(storedPath: $0) }
+            // 相机原图 12-48MP：磁盘读 + 解码放后台，主线程只做最后的回填。
+            let images: [UIImage] = await Task.detached(priority: .utility) {
+                paths.compactMap { MeetingMediaStore.loadUIImage(storedPath: $0) }
+            }.value
             guard !images.isEmpty else { self?.inFlight.remove(momentId); return }
             let text = (try? await BriefScanOCR.extractText(from: images)) ?? ""
             self?.inFlight.remove(momentId)
+            // 会议可能在 OCR 在飞期间被删除（cascade 删 Moments）：写已销毁模型会崩溃，静默放弃。
+            guard !moment.isDeleted, moment.modelContext != nil else { return }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
             moment.ocrText = String(trimmed.prefix(2_000))

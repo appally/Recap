@@ -56,13 +56,36 @@ public final class MeetingSession: ObservableObject {
     @Published public var revealStep: Int = 0
     /// LLM 纪要管线真实阶段（过渡舞台信号）；进 REVIEW 后不再消费。
     @Published public var pipelineStage: PipelineStage = .idle
+    /// 管线首个活跃阶段的起点（问 Recap 的「还要多久」有据可答）；管线内重入不重置取最早，
+    /// 落地 .review 时清零——否则二次管线（如一小时后重生成）的进度文案会虚报累计耗时。
+    public private(set) var pipelineStartedAt: Date?
+
+    /// processing 阶段问 Recap 的进度上下文：真实阶段 + 已耗时 + 时长预期。
+    /// 让「还要多久」这类被建议的问题有据可答（不注入则模型只能编安抚话）。
+    /// 仅在整理阶段非 nil；stage 变化触发 body 重渲染时刷新，不做秒级 tick。
+    public var pipelineProgressText: String? {
+        guard phase == .processing,
+              pipelineStage == .organizing || pipelineStage == .generating || pipelineStage == .retranscribing,
+              let started = pipelineStartedAt
+        else { return nil }
+        let elapsed = Int(Date().timeIntervalSince(started))
+        let expectation: String
+        switch pipelineStage {
+        case .organizing: expectation = "纪要通常需要 1–3 分钟"
+        case .generating: expectation = "纪要正在生成，即将完成"
+        case .retranscribing: expectation = "精转耗时取决于会议时长"
+        default: expectation = ""
+        }
+        return "\(pipelineStage.title)已进行约 \(elapsed / 60) 分 \(elapsed % 60) 秒。\(expectation)。"
+    }
     @Published public var todoCount: Int = 0
     @Published public var summary: MeetingSummary
     @Published public var statusMessage: String = ""
     @Published public var isUsingMockAudio = false
-    /// LIVE 真实麦克风收音音量振幅 (0.0 ~ 1.0)。
     /// LIVE 收音频段（低/中/高 + 整体电平，0.0~1.0），驱动顶栏声波频谱分层。
-    @Published public var liveAudioBands: AudioBands = .zero
+    /// 独立总线而非本类 @Published：mic tap ~12Hz 的频段数据若挂在 MeetingSession 上，
+    /// 会让整个详情页 body 在录音全程每秒重算 ~12 次；现在只有声波视图观察总线。
+    public let liveAudioBandBus = AudioBandBus()
     /// LIVE 引擎启动失败；供 UI 显示重试 / DEBUG 演示入口。
     @Published public var liveStartFailed = false
     /// LIVE 已暂停（停麦、停表，仍为 phase=.live；可继续 / 完成 / 删除）。
@@ -109,6 +132,10 @@ public final class MeetingSession: ObservableObject {
     /// LIVE 字幕合并（index / 续录偏移 / partial·segment）；UI `blocks` 由其投影。
     private var merger = LiveTranscriptMerger()
     private var lastCheckpointAt: Date?
+    /// 周期检查点代际：force 落盘或新快照在途时递增，异步编码回填据此丢弃过期结果。
+    private var checkpointGeneration = 0
+    /// 检查点 save 失败上次上报时间（限频用，见 ``reportCheckpointSaveFailure()``）。
+    private var lastCheckpointFailureReportAt = Date.distantPast
     /// 由 View 注入：checkpoint 写完后 `modelContext.save()`。
     public var checkpointSaver: (() -> Void)?
 
@@ -223,6 +250,9 @@ public final class MeetingSession: ObservableObject {
         statusMessage = "重转中…"
         meeting.phase = .processing
         withAnimation(.recapSheet) { phase = .processing }
+        // 同步置位（performRetranscribe 的契约：flag 由调用方置，此处只兜底清零；
+        // 漏置会让 isPostMeetingComputeBusy 守卫在整段重转期间失真——processImportedAudio 是对的样板）
+        isRetranscribing = true
 
         retranscribeTask = Task { [weak self] in
             guard let self else { return }
@@ -312,6 +342,7 @@ public final class MeetingSession: ObservableObject {
                 summary = clean
                 revealStep = 5
                 statusMessage = ""
+                pipelineStartedAt = nil
                 meeting.phase = .review
                 withAnimation(.recapSheet) { phase = .review }
                 return
@@ -372,6 +403,7 @@ public final class MeetingSession: ObservableObject {
                 revealStep = 5
                 statusMessage = ""
                 todoCount = meeting.actionItems.count
+                pipelineStartedAt = nil
                 meeting.phase = .review
                 withAnimation(.recapSheet) { phase = .review }
                 checkpointSaver?()
@@ -538,6 +570,9 @@ public final class MeetingSession: ObservableObject {
     }
 
     private func startLive() {
+        // 开麦让路：取消挂起的 FluidDiarizer ANE 预编译（与端侧 ASR 推理争 ANE；
+        // 编译已开跑则不可中断，只能让其自然跑完）。
+        FluidDiarizer.cancelPrefetch()
         restoreElapsedIfNeeded()
         // 已有字幕再开麦：引擎时间轴从 0 起，必须抬高 absolute offset
         if !merger.rows.isEmpty {
@@ -646,7 +681,9 @@ public final class MeetingSession: ObservableObject {
             powerCancellable = session.$currentAudioBands
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] bands in
-                    self?.liveAudioBands = bands
+                    MainActor.assumeIsolated {
+                        self?.liveAudioBandBus.bands = bands
+                    }
                 }
             isUsingMockAudio = false
             liveStartFailed = false
@@ -757,7 +794,7 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
-    private static func segments(from blocks: [TranscriptBlock]) -> [TranscriptSegment] {
+    nonisolated private static func segments(from blocks: [TranscriptBlock]) -> [TranscriptSegment] {
         blocks.map { block in
             let start = block.startSeconds ?? parseTimestamp(block.timestamp)
             // 未标注说话人（fallback "?" / LIVE 转写 "asr-live"）输出 speakerId: nil——
@@ -873,6 +910,18 @@ public final class MeetingSession: ObservableObject {
     /// - Parameter chainPostProcess: true（默认）= 完成后自动联动润色 + 分离；false = 编排方自行接管
     ///   （如 `regenerateWithRetranscribe` 需在润色后串接纪要管线）。
     /// - Returns: true = 成功产出新转写并已 adopt 为 blocks；false = 取消/失败/无录音等。
+    /// 重转结果覆盖判定：旧稿已有实质内容（≥200 字）而新结果不足其 60% 字数时拒收——
+    /// 网络故障/中途 403 会让云端分块重转静默跳段，返回部分结果；覆盖即丢字幕。
+    /// 与 endLive 的「保留更完整一侧」同范式。
+    nonisolated private static func shouldRejectRetranscribe(
+        new: [TranscriptSegment], old: [TranscriptSegment]
+    ) -> Bool {
+        let oldChars = old.reduce(0) { $0 + $1.text.count }
+        guard oldChars >= 200 else { return false }
+        let newChars = new.reduce(0) { $0 + $1.text.count }
+        return newChars * 10 < oldChars * 6
+    }
+
     private func performRetranscribe(intent: RetranscribeIntent,
                                      chainPostProcess: Bool = true) async -> Bool {
         // flag 由调用方同步置位；此处兜底清零（含 thermal/无录音/取消/超时/失败所有路径）。
@@ -938,6 +987,12 @@ public final class MeetingSession: ObservableObject {
             }
             await engine.release()
             preparedEngine = nil
+            // 拒收「部分成功」：云端分块重试耗尽后的段被静默跳过，返回的残缺结果若直接
+            // 整表覆盖，会把原本更完整的转写抹掉且不可恢复。显著更短（<60% 字数）即保留旧稿。
+            if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
+                statusMessage = "重转结果不完整（网络波动），已保留原转写，可稍后重试"
+                return false
+            }
             let speakers = meeting.speakers.isEmpty ? [liveSpeaker] : meeting.speakers
             meeting.segments = result.segments
             // 重转产生新 raw，旧 polished 不再对应：清空，稍后联动重新润色
@@ -994,6 +1049,7 @@ public final class MeetingSession: ObservableObject {
         }
 
         pipelineStage = .retranscribing
+        markPipelineStarted()
         var preparedEngine: (any AsrEngine)?
         defer { if let e = preparedEngine { Task { await e.release() } } }
         do {
@@ -1018,6 +1074,11 @@ public final class MeetingSession: ObservableObject {
             preparedEngine = nil
             guard !result.segments.isEmpty else {
                 RecapLog.session.info("dialect-retranscribe: 重转无字幕，保留原转写")
+                return false
+            }
+            // 同 performRetranscribe：拒收部分成功的残缺结果，保住原本完整的 LIVE 转写。
+            if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
+                RecapLog.session.info("dialect-retranscribe: 重转结果显著少于原转写，保留原稿")
                 return false
             }
             meeting.segments = result.segments
@@ -1064,6 +1125,7 @@ public final class MeetingSession: ObservableObject {
         }
 
         pipelineStage = .retranscribing
+        markPipelineStarted()
         statusMessage = "端侧高保真重转中…"
         var preparedEngine: (any AsrEngine)?
         defer { if let e = preparedEngine { Task { await e.release() } } }
@@ -1112,6 +1174,8 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
+#if DEBUG
+    /// 演示字幕（DEBUG 验收入口专用；Release 不编译，见 DemoContent 同款门）。
     public func startExplicitDemoLive() {
         guard phase == .live else { return }
         streamTask?.cancel()
@@ -1125,6 +1189,7 @@ public final class MeetingSession: ObservableObject {
         startClock()
         startMockStream()
     }
+#endif
 
     /// LIVE 失败后重试真麦 + ASR。
     public func retryLiveRecording() {
@@ -1176,6 +1241,7 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
+#if DEBUG
     private func startMockStream() {
         streamTask?.cancel()
         streamTask = Task { [weak self] in
@@ -1194,6 +1260,7 @@ public final class MeetingSession: ObservableObject {
             }
         }
     }
+#endif
 
     private func finalizeAll() {
         merger.finalizeAll()
@@ -1358,7 +1425,8 @@ public final class MeetingSession: ObservableObject {
                     try await RecapCredentialProvider.shared.ensureFresh(force: true)
                     self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
                 } catch {
-                    self.statusMessage = "免费额度已用完，升级 Pro 或解锁自备密钥以继续生成纪要"
+                    // 区分 403 额度耗尽与网络/签发失败：离线用户不能被误报成「额度耗尽」误导升级。
+                    self.statusMessage = Self.quotaFailureMessage(error)
                     self.finishReviewWithoutMock()
                 }
             }
@@ -1390,9 +1458,15 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
+    /// 管线首个活跃阶段打点（重转→梳理串联时取最早，耗时口径对用户更诚实）。
+    private func markPipelineStarted() {
+        if pipelineStartedAt == nil { pipelineStartedAt = Date() }
+    }
+
     private func startLLMProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
                                     persistSummary: @escaping (MeetingSummary, String) -> Void) {
         statusMessage = "云端整理中…"
+        markPipelineStarted()
         pipelineStage = .organizing
         // 注意：不要覆盖仍在跑的 endLive 收尾 task；用独立 task 承接管线
         // registryToken 在 Task 创建前生成，同一传入 defer 与 register：旧 Task 的 defer 因
@@ -1515,6 +1589,7 @@ public final class MeetingSession: ObservableObject {
         if phase != .review {
             withAnimation(.recapSheet) { phase = .review }
         }
+        pipelineStartedAt = nil
         // phase 改 .review 立即落盘：管线可能在用户离屏后跑完（bg task），
         // 若后续无润色/分离触发 save，DB 会停留 .processing，首页一直显示「处理中」。
         checkpointSaver?()
@@ -1526,6 +1601,7 @@ public final class MeetingSession: ObservableObject {
     private func finishReviewWithoutMock() {
         if revealStep < 1 { setStep(1) }
         setStep(5)
+        pipelineStartedAt = nil
         meeting.phase = .review
         withAnimation(.recapSheet) { phase = .review }
         checkpointSaver?()
@@ -1653,13 +1729,17 @@ public final class MeetingSession: ObservableObject {
             let provider = try await Task.detached(priority: .userInitiated) {
                 try LLMProviderFactory.makeDefaultDeepSeek()
             }.value
+            // 模型名与 Agent 传输层同源：云档用网关下发的 qwen 模型（显式传 deepSeek 名
+            // 会打到 dashscope 端点 400，云端档润色整体不可用）；BYOK DeepSeek 才是 flash。
+            let polishModel = AgentTransportFactory.modelName(
+                for: LLMSelection.selectedTemplate, role: .quick)
             let polisher = TranscriptPolisher { system, user in
                 provider.streamText(system: system, user: user,
-                                     model: LLMPresets.deepSeekFlash, temperature: 0.1)
+                                     model: polishModel, temperature: 0.1)
             }
             let polished = try await polisher.polish(source, hints: liveContextualHints)
             meeting.polishedSegmentsData = try? JSONEncoder().encode(polished)
-            meeting.polishedModelId = LLMPresets.deepSeekFlash
+            meeting.polishedModelId = polishModel
             // 用「当前」meeting.segments 重建，而非开跑时的 source 快照：polish 与 diarization 并发，
             // source 可能在 LLM 期间被 diarization 写入 speakerId 前抓取；用 source 会用过期无 speaker
             // 的快照覆盖已分离的说话人。diarization 只给同 id 段加 speakerId、不改结构，故取当前安全。
@@ -1676,6 +1756,7 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
+#if DEBUG
     /// 仅 DEBUG / 显式验收入口可调用；生产自动路径禁止注入演示纪要。
     public func startExplicitDemoReveal(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
                                         persistSummary: @escaping (MeetingSummary, String) -> Void) {
@@ -1713,6 +1794,7 @@ public final class MeetingSession: ObservableObject {
             self.statusMessage = "演示纪要（非模型生成）"
         }
     }
+#endif
 
     private func setStep(_ s: Int) {
         withAnimation(.easeOut(duration: 0.24)) { revealStep = s }
@@ -1727,6 +1809,10 @@ public final class MeetingSession: ObservableObject {
     /// 无 phase 守卫：LIVE 中途、endLive 收尾、diarize 后均可落盘字幕。
     public func persistTranscriptCheckpoint() {
         guard !isUsingMockAudio || !blocks.isEmpty else { return }
+        // 递增代际：作废所有在飞的异步周期检查点。所有直写方（pause/endLive/diarize/重转回填）
+        // 都经本函数，若不递增，在飞检查点的旧快照完成回调可通过代际校验，用 T0 快照
+        // 覆盖刚写入的方言重转/分离结果（UI 显示新稿、DB 是旧稿，重进会议即回退）。
+        checkpointGeneration += 1
         meeting.durationSeconds = Double(max(elapsed, Int(meeting.durationSeconds), 1))
         meeting.segments = Self.segments(from: blocks)
         // 说话人列表：已有 spk* 时保留；否则从 blocks 汇总（过滤 fallback "?" / "asr-live"，
@@ -1790,14 +1876,48 @@ public final class MeetingSession: ObservableObject {
 
     private func checkpointIfNeeded(force: Bool) {
         guard phase == .live, !blocks.isEmpty else { return }
-        if !force {
-            // segment 高频路径：最多约 10s 落一次（60min 会约 360 次全量 encode + 主线程
-            // save；5s 与 10s 对崩溃恢复的丢字差异可忽略，save 频率减半缓解长会议卡顿）。
-            // pause / endLive 仍走 force 落盘，末段不丢。
-            if let last = lastCheckpointAt, Date().timeIntervalSince(last) < 10 { return }
+        if force {
+            // 作废在飞的异步周期检查点，force 永远落最新数据。
+            checkpointGeneration += 1
+            persistLiveCheckpoint()
+            checkpointSaver?()
+            return
         }
-        persistLiveCheckpoint()
-        checkpointSaver?()
+        // segment 高频路径：最多约 10s 落一次（5s 与 10s 对崩溃恢复的丢字差异可忽略）。
+        // 全量 JSON encode 移出主线程——长会议数千段时，10s 一次的主线程 encode 是卡顿源；
+        // pause / endLive 仍走上面的 force 同步落盘，末段不丢、顺序有保证。
+        if let last = lastCheckpointAt, Date().timeIntervalSince(last) < 10 { return }
+        lastCheckpointAt = Date()
+        checkpointGeneration += 1
+        let generation = checkpointGeneration
+        let blocksSnapshot = blocks
+        Task { [weak self] in
+            let payload = await Task.detached(priority: .utility) { () -> (Data, [TranscriptSegment])? in
+                let segments = Self.segments(from: blocksSnapshot)
+                guard let data = try? JSONEncoder().encode(segments) else { return nil }
+                return (data, segments)
+            }.value
+            guard !Task.isCancelled, let self, generation == self.checkpointGeneration,
+                  self.phase == .live,
+                  let (data, segments) = payload else { return }
+            self.meeting.durationSeconds = Double(max(self.elapsed, Int(self.meeting.durationSeconds), 1))
+            self.meeting.adoptPreencodedSegments(data, decoded: segments)
+            if self.meeting.speakers.isEmpty
+                || !self.meeting.speakers.contains(where: { $0.id.hasPrefix("spk") }) {
+                let unique = blocksSnapshot.map(\.speaker).filter { $0.id != "?" && $0.id != "asr-live" }
+                var seen = Set<String>()
+                self.meeting.speakers = unique.filter { seen.insert($0.id).inserted }
+            }
+            self.checkpointSaver?()
+        }
+    }
+
+    /// 字幕检查点落库失败上报（60s 限频）：磁盘满时安全网已失效——进程被杀会丢本段字幕，
+    /// 必须让用户知情（对齐 AudioRecorder `.diskWriteFailed` 的上报取向），而非静默吞掉。
+    public func reportCheckpointSaveFailure() {
+        guard Date().timeIntervalSince(lastCheckpointFailureReportAt) > 60 else { return }
+        lastCheckpointFailureReportAt = Date()
+        statusMessage = "字幕自动保存失败：存储空间不足或写入失败，请尽快结束录音并手动保存"
     }
 
     private func setIdleTimerDisabled(_ disabled: Bool) {
@@ -1808,7 +1928,9 @@ public final class MeetingSession: ObservableObject {
         String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private static func parseTimestamp(_ text: String) -> Double {
+    /// nonisolated：纯函数，被 nonisolated `segments(from:)` 调用（方言检测后台路径）。
+    nonisolated private static func parseTimestamp(_ text: String) -> Double {
+        // 纯函数（DateFormatter 局部创建）：供 nonisolated segments(from:) 后台编码路径调用。
         let parts = text.split(separator: ":").compactMap { Int($0) }
         guard parts.count == 2 else { return 0 }
         return Double(parts[0] * 60 + parts[1])
@@ -1829,4 +1951,11 @@ public final class MeetingSession: ObservableObject {
         return existing + incoming
     }
 
+}
+
+/// LIVE 声波频段总线：mic tap 约 12Hz 推送，只让声波视图观察（属性级失效面收敛到单视图），
+/// 不再作为 MeetingSession 的 @Published 打穿整个详情页 body。
+@MainActor
+public final class AudioBandBus: ObservableObject {
+    @Published public var bands: AudioBands = .zero
 }

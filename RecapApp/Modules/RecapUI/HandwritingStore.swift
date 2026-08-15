@@ -46,6 +46,19 @@ public enum HandwritingStore {
         return relative
     }
 
+    /// 异步落盘：编码 + 磁盘写移出主线程（长笔迹 dataRepresentation 是 CPU 重活）。路径解析失败仍同步抛。
+    @discardableResult
+    public static func saveOffMain(_ drawing: PKDrawing, meetingId: UUID) async throws -> String {
+        let relative = relativeDrawingPath(meetingId: meetingId)
+        let url = try resolveURL(storedPath: relative)
+        try await Task.detached(priority: .utility) { () -> Void in
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try drawing.dataRepresentation().write(to: url, options: .atomic)
+        }.value
+        return relative
+    }
+
     /// 从相对路径读回 PKDrawing；失败返回 nil（不抛，保 App 不崩，与照片 load 同策略）。
     public static func load(storedPath: String) -> PKDrawing? {
         guard let url = try? resolveURL(storedPath: storedPath),

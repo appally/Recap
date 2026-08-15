@@ -44,14 +44,15 @@ private struct FluidGlowCanvas: View {
     let t: Double
     let intensity: Double
 
-    // MARK: - 调色板（青瓷晨雾色系，对齐 recapBg 青瓷暖白与纸墨语言；温润通透不刺眼）
-    private static let celadon   = Color(light: 0x98B9A6, dark: 0x2A463B) // 柔和青瓷绿
-    private static let porcelain = Color(light: 0xB0C8BE, dark: 0x243E38) // 瓷青
-    private static let teaMist   = Color(light: 0xC2D1C8, dark: 0x2E423E) // 雾灰绿
-    private static let warmLight = Color(light: 0xD6DDD7, dark: 0x334440) // 晨光微白
+    // MARK: - 调色板（Apple Intelligence 级虹彩天体星云：星空靛紫·极光天青·晨曦珊瑚·翡翠青翠）
+    private static let indigo   = Color(hex: 0x6366F1) // 星空靛蓝
+    private static let violet   = Color(hex: 0x8B5CF6) // 灵动紫罗兰
+    private static let skyCyan  = Color(hex: 0x06B6D4) // 极光天青
+    private static let emerald  = Color(hex: 0x10B981) // 翡翠青翠
+    private static let coral    = Color(hex: 0xF43F5E) // 晨曦珊瑚粉
 
-    /// 推进速度：完整周期 ≈ 14s，极其舒缓。
-    private static let speed: Double = 0.45
+    /// 推进速度：完整周期 ≈ 12s，富有呼吸感。
+    private static let speed: Double = 0.55
 
     var body: some View {
         GeometryReader { geo in
@@ -59,19 +60,19 @@ private struct FluidGlowCanvas: View {
             let h = geo.size.height + geo.safeAreaInsets.bottom
 
             ZStack {
-                // 1. 通透基底光池（固定垂直渐变，铺满整帧）——保证底部/两侧不漏背景。
+                // 1. 通透基底光池（垂直渐变，铺满整帧）
                 basePool(w: w, h: h)
-                // 2. 连续色场：多团实色光晕重叠 → 全局轻微 hueRotation 变色 → 重 blur 融成一片。
+                // 2. 连续高亮色场：5 团实色光晕重叠 → 全局 hueRotation 变色 → 重 blur 融成连续极光。
                 ZStack {
-                    glowOrb(Self.celadon,   cx: 0.25, cy: 0.92, r: 0.42, peak: 0.40, phase: 0.0, w: w, h: h)
-                    glowOrb(Self.porcelain, cx: 0.62, cy: 0.96, r: 0.40, peak: 0.38, phase: 1.6, w: w, h: h)
-                    glowOrb(Self.teaMist,   cx: 0.85, cy: 0.88, r: 0.36, peak: 0.35, phase: 3.1, w: w, h: h)
-                    glowOrb(Self.warmLight, cx: 0.45, cy: 0.80, r: 0.34, peak: 0.35, phase: 0.8, w: w, h: h)
-                    glowOrb(Self.celadon,   cx: 0.12, cy: 0.86, r: 0.32, peak: 0.35, phase: 2.4, w: w, h: h)
+                    glowOrb(Self.skyCyan, cx: 0.22, cy: 0.90, r: 0.48, peak: 0.65, phase: 0.0, w: w, h: h)
+                    glowOrb(Self.indigo,  cx: 0.65, cy: 0.94, r: 0.46, peak: 0.60, phase: 1.5, w: w, h: h)
+                    glowOrb(Self.violet,  cx: 0.82, cy: 0.86, r: 0.42, peak: 0.58, phase: 3.1, w: w, h: h)
+                    glowOrb(Self.emerald, cx: 0.45, cy: 0.82, r: 0.40, peak: 0.55, phase: 0.8, w: w, h: h)
+                    glowOrb(Self.coral,   cx: 0.15, cy: 0.84, r: 0.38, peak: 0.52, phase: 2.3, w: w, h: h)
                 }
-                // 全局色相微旋转：±18°，整片色场在温润青瓷微调游走，消除突兀变色。
-                .hueRotation(.degrees(sin(t * Self.speed) * 18))
-                // 重 blur：团块边界消融、融成连续色场。
+                // 全局色相旋转：±48°，整片色场在天青↔紫罗兰↔珊瑚粉之间漫游，展现魔法般生命力。
+                .hueRotation(.degrees(sin(t * Self.speed) * 48))
+                // 重 blur：团块彻底融成连续流光。
                 .blur(radius: max(32, w * 0.12))
             }
             .frame(width: w, height: h)
@@ -83,13 +84,13 @@ private struct FluidGlowCanvas: View {
     }
 
     // MARK: - 1. Base Pool
-    /// 全帧垂直渐变基底：保证光池铺满，给色场一个柔和依托。
+    /// 全帧垂直渐变基底：给色场一个通透发光的依托。
     private func basePool(w: CGFloat, h: CGFloat) -> some View {
         LinearGradient(
             stops: [
                 .init(color: .clear, location: 0.0),
-                .init(color: Self.celadon.opacity(0.06), location: 0.55),
-                .init(color: Self.celadon.opacity(0.16), location: 1.0)
+                .init(color: Self.skyCyan.opacity(0.10), location: 0.50),
+                .init(color: Self.indigo.opacity(0.24), location: 1.0)
             ],
             startPoint: .top,
             endPoint: .bottom
@@ -98,13 +99,11 @@ private struct FluidGlowCanvas: View {
     }
 
     // MARK: - 2. Glow Orb（实色圆斑 · Lissajous 漂移 + scale 形变）
-    /// 实色 Circle（非径向渐变）：靠整层 blur 提供 Gaussian 软衰减，更易融成连续色场。
     private func glowOrb(_ color: Color, cx: CGFloat, cy: CGFloat, r: CGFloat, peak: Double, phase: Double, w: CGFloat, h: CGFloat) -> some View {
-        // 有机轨迹：x/y 不同频率 sin 合成 Lissajous；scale 脉动 = 液态形变；透明度呼吸。
-        let posX = cx * w + CGFloat(sin(t * Self.speed + phase)) * w * 0.10
-        let posY = cy * h + CGFloat(sin(t * Self.speed * 1.3 + phase * 1.7)) * h * 0.06
-        let scale = CGFloat(1.0 + 0.14 * sin(t * Self.speed * 0.8 + phase * 2.1))
-        let breathe = 0.85 + 0.15 * sin(t * Self.speed * 0.9 + phase)
+        let posX = cx * w + CGFloat(sin(t * Self.speed + phase)) * w * 0.12
+        let posY = cy * h + CGFloat(sin(t * Self.speed * 1.3 + phase * 1.7)) * h * 0.08
+        let scale = CGFloat(1.0 + 0.16 * sin(t * Self.speed * 0.8 + phase * 2.1))
+        let breathe = 0.82 + 0.18 * sin(t * Self.speed * 0.9 + phase)
         let radius = r * w
 
         return Circle()
@@ -121,14 +120,14 @@ private struct FluidGlowCanvas: View {
             LinearGradient(
                 colors: [
                     Color.recapBg,
-                    Color.recapBg.opacity(0.60),
-                    Color.recapBg.opacity(0.15),
+                    Color.recapBg.opacity(0.65),
+                    Color.recapBg.opacity(0.20),
                     Color.clear
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: 75)
+            .frame(height: 85)
             Spacer(minLength: 0)
         }
         .allowsHitTesting(false)

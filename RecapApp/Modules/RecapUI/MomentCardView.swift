@@ -107,8 +107,10 @@ struct MomentCardView: View {
     }
 
     @ViewBuilder private var photoPreview: some View {
+        // 降采样 + NSCache：卡片显示高度仅 ~190pt，此前 body 每次重算都全分辨率读盘解码
+        // （12MP ≈ 40MB 位图/张，播放高亮期间每秒多次）。
         if let first = moment.photoRelativePaths.first,
-           let img = MeetingMediaStore.loadUIImage(storedPath: first) {
+           let img = MeetingMediaStore.loadDownsampled(storedPath: first, maxPixelSize: 1200) {
             ZStack(alignment: .bottomTrailing) {
                 Image(uiImage: img)
                     .resizable()
@@ -165,9 +167,9 @@ struct MomentGalleryView: View {
 
     @State private var index = 0
     @State private var copiedFeedback = false
-    /// 一次性解码缓存：避免 body 重算时反复读盘，并让 ZoomableImageView 的 image 引用稳定，
-    /// 不致在 chromeHidden 变化触发重渲染时把缩放态误复位（见其 updateUIView 的 image 比较）。
-    @State private var images: [UIImage]
+    /// 逐张异步解码：init 同步解码全部原图（多照片 Moment 一次性内存翻 k 倍 + 阻塞 sheet 滑入动画）。
+    /// 全屏缩放需要原图，故这里不做降采样；加载完成前 TabView 显示占位。
+    @State private var images: [UIImage] = []
     /// 放大态淡出顶/底栏，沉浸看图；回到 1× 淡回。
     @State private var chromeHidden = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -178,9 +180,6 @@ struct MomentGalleryView: View {
         self.moment = moment
         self.onSeek = onSeek
         self.onDismiss = onDismiss
-        _images = State(initialValue: moment.photoRelativePaths.compactMap {
-            MeetingMediaStore.loadUIImage(storedPath: $0)
-        })
     }
 
     var body: some View {
@@ -209,6 +208,19 @@ struct MomentGalleryView: View {
             }
             .padding(.horizontal, Spacing.xl)
             .padding(.bottom, Spacing.xxl)
+        }
+        .task { await loadImages() }
+    }
+
+    /// 后台逐张解码原图（保持 ZoomableImageView 的 image 引用稳定，缩放态不因重渲染复位）。
+    private func loadImages() async {
+        guard images.isEmpty else { return }
+        for path in moment.photoRelativePaths {
+            if Task.isCancelled { break }
+            let img: UIImage? = await Task.detached(priority: .userInitiated) {
+                MeetingMediaStore.loadUIImage(storedPath: path)
+            }.value
+            if let img { images.append(img) }
         }
     }
 

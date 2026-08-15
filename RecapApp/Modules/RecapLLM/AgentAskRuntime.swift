@@ -48,6 +48,7 @@ public enum AgentAskRuntime {
         actionItemsBlock: String? = nil,
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
+        pipelineProgressText: String? = nil,
         phase: MeetingPhase = .review,
         retrievalQuery: String? = nil,
         meSpeakerLabel: String? = nil,
@@ -60,6 +61,9 @@ public enum AgentAskRuntime {
         }()
         let hasDossier = !(minutesBlock ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !(actionItemsBlock ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        // 会中：词法检索带近窗加成（「刚说的」胜过同词频旧片段）；会后不注入（叙事完整性优先）。
+        let liveNow: Double? = (phase == .live) ? segments.map(\.endSeconds).max() : nil
 
         let transcriptHits: [TranscriptHit]
         switch intent {
@@ -75,7 +79,8 @@ public enum AgentAskRuntime {
                     query: searchQuery,
                     segments: segments,
                     speakers: speakers,
-                    limit: 4
+                    limit: 4,
+                    nowSeconds: liveNow
                 )
             } else {
                 transcriptHits = SearchTranscriptTool.recent(
@@ -90,7 +95,8 @@ public enum AgentAskRuntime {
                 query: searchQuery,
                 segments: segments,
                 speakers: speakers,
-                limit: 6
+                limit: 6,
+                nowSeconds: liveNow
             )
         }
 
@@ -166,6 +172,10 @@ public enum AgentAskRuntime {
         if let handwriting = handwritingSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !handwriting.isEmpty {
             userParts.append("【会中手写笔记】\n\(handwriting)")
         }
+        // 纪要管线真实进度（processing 期）：回答「还要多久」有据可依，不编安抚话。
+        if let progress = pipelineProgressText?.trimmingCharacters(in: .whitespacesAndNewlines), !progress.isEmpty {
+            userParts.append("【纪要进度】\(progress)")
+        }
         // 「你的发言」身份标记（与技能路径同构；标记我/单发言人可解析时产出，让"我的待办/我的承诺"可答）。
         if let meLabel = meSpeakerLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !meLabel.isEmpty {
             userParts.append("【你的发言】本场转写中「\(meLabel)」是你（用户本人）的发言。")
@@ -227,6 +237,7 @@ public enum AgentAskRuntime {
         actionItemsBlock: String? = nil,
         momentsSummary: String? = nil,
         handwritingSummary: String? = nil,
+        pipelineProgressText: String? = nil,
         phase: MeetingPhase = .review,
         retrievalQuery: String? = nil,
         meSpeakerLabel: String? = nil,
@@ -243,6 +254,7 @@ public enum AgentAskRuntime {
             actionItemsBlock: actionItemsBlock,
             momentsSummary: momentsSummary,
             handwritingSummary: handwritingSummary,
+            pipelineProgressText: pipelineProgressText,
             phase: phase,
             retrievalQuery: retrievalQuery,
             meSpeakerLabel: meSpeakerLabel,

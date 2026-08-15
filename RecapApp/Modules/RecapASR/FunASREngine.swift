@@ -233,9 +233,22 @@ public actor FunASREngine: AsrEngine {
     public func stopStreaming() async throws -> TranscribeResult {
         guard isStreaming, let box = wsBox else { throw FunASRError.notStreaming }
 
-        // 1) 停后台 sender，等它排空已就绪的整包（feed 此时不再被调用——recorder 已先 stop）
+        // 1) 停后台 sender，等它排空已就绪的整包（feed 此时不再被调用——recorder 已先 stop）。
+        //    排空加 3s 硬预算：弱网下逐包 WS send 可挂到 URLSession 超时（60s 级）、积压至 ~2min，
+        //    无界等待会把「结束会议」卡成分钟级。超时即取消 WS 解除挂起的 send；
+        //    少传的尾包不丢（音频独立落盘，会后重转可恢复）。
         wakeCont?.finish()
-        if let t = sendTask { self.sendTask = nil; await t.value }
+        if let t = sendTask {
+            self.sendTask = nil
+            let drained = DrainFlag()
+            await RaceTimeout.run(seconds: 3) { [weak self] in
+                await t.value
+                drained.set(true)
+            }
+            if !drained.isDone {
+                box.task.cancel(with: .goingAway, reason: nil)
+            }
+        }
 
         if taskStarted, sendError == nil {
             // 尾部 + finish-task：WS 已断则 try? 容错，仍保证 teardown，绝不挂死结束流程

@@ -167,6 +167,26 @@ export class QuotaDO {
       });
     }
 
+    // POST /wipe[?sub=<appleSub>] —— 账号删除(5.1.1(v)):清空本桶全部存储(身份标识+用量)。
+    //   由 index.ts 的 /v1/account/delete 在 identityToken 验签后调用,不可被客户端直接触达
+    //   (DO 仅经 Worker 内部 https://quota/* 寻址)。
+    //   带 sub 时原子校验归属:仅当本桶绑定的正是该 Apple 账号才清——否则已登录用户可
+    //   猜设备 ID 定向清他人设备桶,等于替那台设备重置免费额度。
+    if (url.pathname === '/wipe') {
+      if (req.method !== 'POST') {
+        return Response.json({ error: 'method_not_allowed' }, { status: 405 });
+      }
+      const expected = url.searchParams.get('sub');
+      if (expected) {
+        const bound = await boundAppleSubOf(this.state.storage);
+        if (bound !== expected) {
+          return Response.json({ error: 'not_bound' }, { status: 403 });
+        }
+      }
+      await this.state.storage.deleteAll();
+      return Response.json({ ok: true });
+    }
+
     // GET /status —— 查询当前用量(供客户端展示「本月剩余」)
     if (url.pathname === '/status') {
       const stored = await this.state.storage.get<StoredQuota>('quota');

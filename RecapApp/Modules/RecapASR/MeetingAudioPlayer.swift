@@ -12,6 +12,17 @@ public final class MeetingAudioPlayer: ObservableObject {
         case failed(String)
     }
 
+    /// RunLoop 强持有 block-based Timer：若 player 在播放态释放且无人调 stop()，
+    /// timer 会以 20Hz 永久空射。主路径虽有 onDisappear → stop() 兜底，这里再加一层。
+    /// Swift 6 严格并发下 deinit 为 nonisolated，访问 Timer 需 MainActor.assumeIsolated
+    /// （player 全生命周期都在主线程创建/释放，断言不会触发）。
+    deinit {
+        MainActor.assumeIsolated {
+            progressTimer?.invalidate()
+        }
+    }
+
+
     @Published public private(set) var loadState: LoadState = .idle
     @Published public private(set) var isPlaying = false
     @Published public private(set) var currentTime: TimeInterval = 0
@@ -306,7 +317,12 @@ public final class MeetingAudioPlayer: ObservableObject {
            let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
            playerTime.isSampleTimeValid {
             let t = Double(anchorFrame + playerTime.sampleTime) / MeetingAudioStore.sampleRate
-            currentTime = min(max(0, t), duration)
+            // 发布量化到 0.25s 步长（4Hz）：@Published 每次赋值会触发所有观察方 body 失效，
+            // 此前 50ms 一发把整个详情页打成 20Hz 重算。精确值仍随时钟内部计算，仅发布收敛。
+            let quantized = (min(max(0, t), duration) * 4).rounded() / 4
+            if quantized != currentTime {
+                currentTime = quantized
+            }
         }
     }
 

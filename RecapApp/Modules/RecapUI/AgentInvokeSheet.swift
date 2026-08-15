@@ -21,6 +21,8 @@ public struct AgentInvokeSheet: View {
     public let handwritingSummary: String?
     public let hasStartedRecording: Bool
     public let isLivePaused: Bool
+    /// processing 阶段管线进度文案（阶段+耗时+预期）；nil = 非整理期。
+    public let pipelineProgressText: String?
     public let linkedMeetingTitle: String?
     /// 五态上下文（init 时派生一次，sheet 寿命短不再漂移）。
     public let stage: AskStage
@@ -43,7 +45,9 @@ public struct AgentInvokeSheet: View {
     @State private var expandedSteps: Set<UUID> = []
     /// chips：L1 规则层 init 即填；L2 LLM 异步返回（≥3 条）后替换。
     @State private var suggestionChips: [String]
-    @State private var didLoadL2 = false
+    /// L2 已跑过的 stage 锚点；stage 变化（live→paused→processing）时重算，
+    /// 长会挂窗的 chips 不再过期。比录音期 5s 一变的 transcript 重算便宜且离散。
+    @State private var lastL2Stage: AskStage?
     /// auto-send once 守卫：防止 onAppear 多次触发重复发送。
     @State private var didAutoSend = false
     /// 深链滚动 once 守卫。
@@ -67,6 +71,7 @@ public struct AgentInvokeSheet: View {
         handwritingSummary: String? = nil,
         hasStartedRecording: Bool = false,
         isLivePaused: Bool = false,
+        pipelineProgressText: String? = nil,
         linkedMeetingTitle: String? = nil,
         onJumpToTranscript: ((Double) -> Void)? = nil,
         onMinutesUpdated: ((MeetingSummary) -> Void)? = nil,
@@ -91,6 +96,7 @@ public struct AgentInvokeSheet: View {
         self.handwritingSummary = handwritingSummary
         self.hasStartedRecording = hasStartedRecording
         self.isLivePaused = isLivePaused
+        self.pipelineProgressText = pipelineProgressText
         self.linkedMeetingTitle = linkedMeetingTitle
         let stage = AskStage.from(
             phase: phase,
@@ -117,7 +123,8 @@ public struct AgentInvokeSheet: View {
             briefSummary: briefSummary,
             briefSources: briefSources,
             momentsSummary: momentsSummary,
-            handwritingSummary: handwritingSummary
+            handwritingSummary: handwritingSummary,
+            pipelineProgressText: pipelineProgressText
         ))
         self._input = State(initialValue: initialInput)
         // L1 规则层瞬时打底（init 单次确定，不依赖 onAppear 多次触发）。
@@ -163,6 +170,17 @@ public struct AgentInvokeSheet: View {
         )
     }
 
+    /// L2 chips 生成：异步闸门 → 关联上场卷宗 → 组装 → 生成（≥3 条才替换 L1）。
+    private func loadL2Chips() async {
+        let availability = await MinutesPipelineSmoke.ensureCanRun()
+        guard availability.available else { return }   // 无密钥/未配 BYOK/冷启动空窗 → 保 L1
+        let linkedBlock = linkedMeetingDossier(context: modelContext)
+        guard let dossier = composeL2Dossier(stage: stage, linkedBlock: linkedBlock) else { return } // 无可用卷宗 → 保 L1
+        let l2 = await SuggestedQuestionsGenerator.generate(stage: stage, dossier: dossier)
+        guard !Task.isCancelled, let l2, l2.count >= 3 else { return }
+        withAnimation(.recapSoft) { suggestionChips = l2 }
+    }
+
     private func syncLiveContext() {
         model.refreshContext(
             phase: phase,
@@ -173,19 +191,42 @@ public struct AgentInvokeSheet: View {
             actionItems: actionItems,
             minutesSummary: minutesSummary ?? meeting?.latestSummary,
             briefSummary: briefSummary,
-            briefSources: briefSources
+            briefSources: briefSources,
+            momentsSummary: momentsSummary,
+            handwritingSummary: handwritingSummary,
+            pipelineProgressText: pipelineProgressText
         )
     }
 
+    /// 关联上场卷宗：linked_meeting 来源携带的 `linkedMeetingId` 精确取场 → 复用纪要压缩块（截 600 字，TLDR/遗留为主）。
+    /// 单场 id fetch 成本可忽略；不做全库扫描（与 RecapWorkspaceIndex 的纪律一致）。
+    private func linkedMeetingDossier(context: ModelContext) -> String? {
+        guard let source = meeting?.brief?.sources.first(where: { $0.kind == .linkedMeeting }),
+              let linkedId = source.linkedMeetingId
+        else { return nil }
+        let target = linkedId
+        var descriptor = FetchDescriptor<Meeting>(
+            predicate: #Predicate { $0.id == target }
+        )
+        descriptor.fetchLimit = 1
+        guard let linked = (try? context.fetch(descriptor))?.first,
+              let block = AskMeetingDossier.minutesBlock(summary: linked.latestSummary)
+        else { return nil }
+        return "【关联上场：\(linked.title)】\n\(String(block.prefix(600)))"
+    }
+
     /// L2 LLM 卷宗：按阶段组装当下真实拥有的数据，无可用内容则返回 nil（跳过 L2，保 L1）。
-    private func composeL2Dossier(stage: AskStage) -> String? {
+    /// `linkedBlock` 由调用方在 `.task` 里取一次（live/preMeeting 均可注入历史背景，
+    /// 让 L2 能提「上次遗留的 X 这次定了吗」式衔接向问题——回答侧 search_meetings 早已有，
+    /// 此前只是没接到生成侧）。
+    private func composeL2Dossier(stage: AskStage, linkedBlock: String? = nil) -> String? {
         var parts: [String] = []
         switch stage {
         case .preMeeting:
             let agendaTitles = (meeting?.brief?.agenda ?? [])
                 .map(\.title)
                 .filter { !$0.isEmpty }
-            guard briefSummary != nil || !agendaTitles.isEmpty || linkedMeetingTitle != nil else {
+            guard briefSummary != nil || !agendaTitles.isEmpty || linkedBlock != nil || linkedMeetingTitle != nil else {
                 return nil                       // 底稿全空 → 跳 L2（L1 已有通用准备向兜底）
             }
             if let b = briefSummary {
@@ -194,17 +235,39 @@ public struct AgentInvokeSheet: View {
             if !agendaTitles.isEmpty {
                 parts.append("【议程】\n" + agendaTitles.prefix(8).map { "- \($0)" }.joined(separator: "\n"))
             }
-            if let linkedMeetingTitle {
+            if let linkedBlock {
+                parts.append(linkedBlock)
+            } else if let linkedMeetingTitle {
                 parts.append("【关联上场】\(linkedMeetingTitle)")
             }
         case .liveRecording, .livePaused:
             if !transcriptContext.isEmpty {
                 parts.append("【近段转写】\n\(String(transcriptContext.suffix(800)))")
             }
+            let agendaTitles = (meeting?.brief?.agenda ?? [])
+                .map(\.title)
+                .filter { !$0.isEmpty }
+            if !agendaTitles.isEmpty {
+                parts.append("【议程】\n" + agendaTitles.prefix(6).map { "- \($0)" }.joined(separator: "\n"))
+            }
+            let openItems = (meeting?.brief?.openItems ?? [])
+                .filter { $0.resolution == "open" || $0.resolution.isEmpty }
+                .map(\.text)
+                .filter { !$0.isEmpty }
+            if !openItems.isEmpty {
+                parts.append("【未决项】\n" + openItems.prefix(4).map { "- \($0)" }.joined(separator: "\n"))
+            }
+            if let linkedBlock {
+                parts.append(linkedBlock)
+            }
             if let b = briefSummary {
                 parts.append("【底稿】\n\(String(b.prefix(300)))")
             }
         case .processing:
+            // 真实进度优先：让 L2 只建议有据可答的安抚向问题，而非泛泛的「还要多久」。
+            if let progress = pipelineProgressText?.trimmingCharacters(in: .whitespacesAndNewlines), !progress.isEmpty {
+                parts.append("【纪要进度】\(progress)")
+            }
             if !transcriptContext.isEmpty {
                 parts.append("【转写片段】\n\(String(transcriptContext.suffix(400)))")
             }
@@ -239,7 +302,9 @@ public struct AgentInvokeSheet: View {
     }
 
     private var canSend: Bool {
-        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.isThinking
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.isThinking
+            && !model.isResearchActive   // 调研轮（含挂起态）期间禁发，防并发写 session
     }
 
     private var inputLineLimit: Int {
@@ -318,19 +383,20 @@ public struct AgentInvokeSheet: View {
         .onChange(of: transcriptContext) { _, _ in syncLiveContext() }
         .onChange(of: segments.count) { _, _ in syncLiveContext() }
         .onChange(of: phase) { _, _ in syncLiveContext() }
+        .onChange(of: stage) { _, newStage in
+            // stage 离散变化 = 零成本重算锚点；transcript 5s 一变仍不触发（避免频繁重算）。
+            guard lastL2Stage != newStage else { return }
+            lastL2Stage = newStage
+            Task { await loadL2Chips() }
+        }
         .onDisappear { model.cancel() }
-        // L2 LLM 动态层：仅视图生命周期触发一次（不带 id），didLoadL2 幂等，
-        // 避免录音中 transcriptContext 每 ~5s 变化导致重算。
+        // L2 LLM 动态层：视图生命周期触发一次（不带 id），lastL2Stage 幂等；
+        // 闸门走 async ensureCanRun（同步 canRunMinutesPipeline 在免费档冷启动 token
+        // 空窗会误报 noKey，静默杀掉 L2——与 runAsk 的兜底口径不一致）。
         .task {
-            guard !didLoadL2 else { return }
-            didLoadL2 = true
-            guard MinutesPipelineSmoke.canRunMinutesPipeline else { return }   // 无密钥/未配 BYOK → 保 L1
-            guard let dossier = composeL2Dossier(stage: stage) else { return } // 无可用卷宗 → 保 L1
-            let l2 = await SuggestedQuestionsGenerator.generate(stage: stage, dossier: dossier)
-            if Task.isCancelled { return }
-            if let l2, l2.count >= 3 {
-                withAnimation(.recapSoft) { suggestionChips = l2 }
-            }
+            guard lastL2Stage != stage else { return }
+            lastL2Stage = stage
+            await loadL2Chips()
         }
         .sheet(isPresented: Binding(
             get: { model.pendingApproval != nil },
@@ -654,7 +720,7 @@ public struct AgentInvokeSheet: View {
                     Image(systemName: "sparkles")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.recapInk.opacity(0.65))
-                    Text("思考与工具调用 (\(message.steps.count) 步)")
+                    Text("思考与工具调用（\(message.steps.count) 步）")
                         .font(.recapMeta.weight(.medium))
                         .foregroundStyle(Color.recapInk.opacity(0.85))
                     if let timeStr {

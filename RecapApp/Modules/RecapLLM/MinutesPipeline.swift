@@ -97,7 +97,11 @@ public struct MinutesPipeline: Sendable {
                     as: TodoListPayload.self,
                     thinkingEnabled: todoThinkingEnabled
                 )
-                return .success(todos?.action_items ?? [])
+                // 过滤空 task 条目（容错解码对坏条目降级为空串，不产出垃圾待办）
+                let items = (todos?.action_items ?? []).filter {
+                    !$0.task.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                return .success(items)
             } catch {
                 return .failure(error)
             }

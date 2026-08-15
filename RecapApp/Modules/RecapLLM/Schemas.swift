@@ -29,12 +29,44 @@ public struct TodoListPayload: Codable, Sendable {
             self.evidence_quote = evidence_quote
             self.start_seconds = start_seconds
         }
+
+        /// 容错解码：模型输出对 schema 有轻微偏差（confidence 置 null/缺失、owner 写成数字等）
+        /// 时**逐字段**降级，而非让整场待办解码失败被吞成「成功、零待办」。
+        /// task 缺失/非字符串的条目解码为空串，由消费端过滤。
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            task = (try? c.decode(String.self, forKey: .task)) ?? ""
+            owner = try? c.decodeIfPresentStringTolerant(forKey: .owner)
+            owner_source = try? c.decodeIfPresentStringTolerant(forKey: .owner_source)
+            due_text = try? c.decodeIfPresentStringTolerant(forKey: .due_text)
+            evidence_quote = try? c.decodeIfPresentStringTolerant(forKey: .evidence_quote)
+            if let d = try? c.decode(Double.self, forKey: .confidence) {
+                confidence = d
+            } else if let s = try? c.decode(String.self, forKey: .confidence),
+                      let d = Double(s) {
+                confidence = d
+            } else {
+                confidence = 0.5   // 缺失/不可解析：中性置信，不丢条目
+            }
+            if let d = try? c.decode(Double.self, forKey: .start_seconds) {
+                start_seconds = d
+            } else if let s = try? c.decode(String.self, forKey: .start_seconds), let d = Double(s) {
+                start_seconds = d
+            } else {
+                start_seconds = nil
+            }
+        }
     }
 
     public let action_items: [Item]
 
     public init(action_items: [Item]) {
         self.action_items = action_items
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        action_items = (try? c.decode([Item].self, forKey: .action_items)) ?? []
     }
 
     /// null-safe 手写 JSONSchema：可空字段用 type:["string","null"]；全字段 required + additionalProperties:false。
@@ -68,4 +100,16 @@ public struct TodoListPayload: Codable, Sendable {
         .required(["action_items"]),
         .additionalProperties(JSONSchema.boolean(false))
     )
+}
+
+extension KeyedDecodingContainer {
+    /// 字符串字段容错：null/缺失返回 nil；数字/布尔强转字符串（模型偶发把人名/日期写成数字）。
+    func decodeIfPresentStringTolerant(forKey key: Key) throws -> String? {
+        guard contains(key) else { return nil }
+        if let s = try? decode(String.self, forKey: key) { return s }
+        if let i = try? decode(Int.self, forKey: key) { return String(i) }
+        if let d = try? decode(Double.self, forKey: key) { return String(d) }
+        if let b = try? decode(Bool.self, forKey: key) { return String(b) }
+        return nil
+    }
 }

@@ -21,7 +21,7 @@ private struct PendingMeetingDelete: Identifiable {
     let openTodoCount: Int
 }
 
-/// 首页 · 会议列表（静谧青瓷 · LIVE 舞台 · 相对时间列表）。
+/// 首页 · 会议列表（纸面组文档风：非对称编辑构图 + 按日分组 + mono 时刻轴）。
 public struct MeetingListView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -58,6 +58,13 @@ public struct MeetingListView: View {
     /// 入场动画：reduceMotion 退化为 nil（立即到位），否则按 delay 错峰位移。
     private func enterAnimation(_ delay: Double) -> Animation? {
         reduceMotion ? nil : .recapHomeEnter.delay(delay)
+    }
+
+    /// 区段入场过渡：显式 AnyTransition，给大 body 的类型检查减负。
+    private var sectionTransition: AnyTransition {
+        reduceMotion
+            ? AnyTransition.opacity
+            : AnyTransition.opacity.combined(with: .scale(scale: 0.97))
     }
 
     /// 大标题折叠进度：滚过 collapseDistance 即完成 hero → 贴顶标题 的渐变（clamp 到 [0,1]）。
@@ -101,62 +108,7 @@ public struct MeetingListView: View {
 
     public var body: some View {
         NavigationStack(path: $path) {
-            ZStack(alignment: .bottom) {
-                ambientBackground
-
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        header
-                            .padding(.bottom, Spacing.huge)
-                            .offset(y: appeared ? 0 : enterOffset(14))
-                            .animation(enterAnimation(0), value: appeared)
-
-                        Group {
-                            if meetings.isEmpty {
-                                emptyState
-                                    .padding(.top, Spacing.xxl)
-                                    .offset(y: appeared ? 0 : enterOffset(14))
-                                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97)))
-                                    .animation(enterAnimation(0.04), value: appeared)
-                            } else {
-                                if !todayMeetings.isEmpty {
-                                    todaySection
-                                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97)))
-                                }
-
-                                if !earlierDayGroups.isEmpty {
-                                    earlierSection
-                                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97)))
-                                }
-                            }
-                        }
-                        .animation(reduceMotion ? nil : .recapLand, value: meetings.isEmpty)
-                    }
-                    .padding(.horizontal, Spacing.xl)
-                    .padding(.top, Spacing.sm)
-                    .padding(.bottom, 120)
-                }
-                .scrollContentBackground(.hidden)
-                .scrollIndicators(.hidden)
-                // 关掉顶部 scroll edge：避免半透明遮罩 + 硬线割裂标题区
-                .scrollEdgeEffectHidden(true, for: .top)
-                // 仅在纵向位移时收起左滑；勿用 scrollPhase——横向左滑也会进 interacting
-                .onScrollGeometryChange(for: CGFloat.self) { geo in
-                    geo.contentOffset.y
-                } action: { oldY, newY in
-                    scrollOffset = newY
-                    guard swipedMeetingID != nil, abs(newY - oldY) > 1.5 else { return }
-                    withAnimation(.recapSwipeClose) {
-                        swipedMeetingID = nil
-                    }
-                }
-
-                RecordingButton(allowsPulse: meetings.isEmpty) {
-                    startLiveMeeting()
-                }
-                .padding(.bottom, Spacing.xxl)
-                .offset(y: fabEntered ? 0 : enterOffset(18))
-            }
+            homeStage
             .overlay(alignment: .top) {
                 topFadeBackdrop
             }
@@ -176,14 +128,11 @@ public struct MeetingListView: View {
                         .opacity(max(0, (collapseProgress - 0.35) / 0.65))
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    HStack(spacing: 0) {
-                        searchButton
-                        importButton
-                    }
+                    accountButton
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .topBarTrailing) {
-                    accountButton
+                    searchImportCapsule
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -258,6 +207,82 @@ public struct MeetingListView: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { consumeDeepLinkIfNeeded() }
             }
+            // intent 写入即消费：App 已在前台（scenePhase 不变）或激活早于 perform 写入时，
+            // onAppear/scenePhase 两个时机都够不着，靠这条通知实时触发（通知已在主线程广播）。
+            .onReceive(NotificationCenter.default.publisher(for: RecapDeepLink.didUpdateNotification)) { _ in
+                consumeDeepLinkIfNeeded()
+            }
+        }
+    }
+
+    // MARK: - Stage / Scroll（body 拆分：巨型修饰链曾把类型检查顶超时）
+
+    /// 舞台：氛围底 + 列表 + 朱砂印 FAB 三层 ZStack。
+    private var homeStage: some View {
+        ZStack(alignment: .bottom) {
+            ambientBackground
+            homeScroll
+
+            RecordingButton(allowsPulse: meetings.isEmpty) {
+                startLiveMeeting()
+            }
+            .padding(.bottom, Spacing.xxl)
+            .offset(y: fabEntered ? 0 : enterOffset(18))
+        }
+    }
+
+    /// 滚动区：标题 + 区段列表；onScrollGeometryChange 同时驱动大标题折叠与左滑收起。
+    private var homeScroll: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                header
+                    .padding(.bottom, Spacing.huge)
+                    .offset(y: appeared ? 0 : enterOffset(14))
+                    .animation(enterAnimation(0), value: appeared)
+
+                Group {
+                    if meetings.isEmpty {
+                        emptyState
+                            .padding(.top, Spacing.xxl)
+                            .offset(y: appeared ? 0 : enterOffset(14))
+                            .transition(sectionTransition)
+                            .animation(enterAnimation(0.04), value: appeared)
+                    } else {
+                        if !todayMeetings.isEmpty {
+                            todaySection
+                                .transition(sectionTransition)
+                        }
+
+                        if !earlierDayGroups.isEmpty {
+                            earlierSection
+                                .transition(sectionTransition)
+                        }
+                    }
+                }
+                .animation(reduceMotion ? nil : .recapLand, value: meetings.isEmpty)
+            }
+            .padding(.horizontal, Spacing.xl)
+            .padding(.top, Spacing.sm)
+            .padding(.bottom, 150)
+        }
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(.hidden)
+        // 关掉顶部 scroll edge：避免半透明遮罩 + 硬线割裂标题区
+        .scrollEdgeEffectHidden(true, for: .top)
+        // 仅在纵向位移时收起左滑；勿用 scrollPhase——横向左滑也会进 interacting
+        .onScrollGeometryChange(for: CGFloat.self) { geo in
+            geo.contentOffset.y
+        } action: { oldY, newY in
+            // 量化 4pt 再写 state：折叠进度只有 ~50pt 行程，逐帧原始值会让整个首页
+            // body 每帧重算（ProMotion 120Hz × 全列表 diff）。动画层会把阶梯抹平。
+            let quantized = (newY / 4).rounded() * 4
+            if quantized != scrollOffset {
+                scrollOffset = quantized
+            }
+            guard swipedMeetingID != nil, abs(newY - oldY) > 1.5 else { return }
+            withAnimation(.recapSwipeClose) {
+                swipedMeetingID = nil
+            }
         }
     }
 
@@ -265,7 +290,9 @@ public struct MeetingListView: View {
 
     private var ambientBackground: some View {
         ZStack {
+            // 暖骨画布 + 纸纹颗粒：纸感来自温度 + 颗粒，纯色底读作「屏幕」
             Color.recapBg
+                .recapPaperGrain(0.022)
             // 右上朱砂暖光（品牌锚点）
             RadialGradient(
                 colors: [
@@ -319,89 +346,28 @@ public struct MeetingListView: View {
 
     // MARK: - Header
 
-    /// 非对称编辑构图：左侧纪要 wordmark + 台账统计，右侧今日日历撕页——
-    /// 录音 App 按「天」组织，首页即「今天这一页」。
+    /// 编辑构图：纪要 wordmark + 台账统计。日期语境由区段眉标（今天/昨天/月日）承担。
     private var header: some View {
-        HStack(alignment: .top, spacing: Spacing.lg) {
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                Text("纪要")
-                    .font(.recapDisplay)
-                    .tracking(Tracking.display)
-                    .foregroundStyle(Color.recapInk)
-                    // 冷启动首帧 NavigationStack+ScrollView 会先以 0 宽度 commit 一帧布局，
-                    // 纯 Text 此时可用宽度≈0、逐字换行成竖排。fixedSize 让标题按 ideal 宽度横排，
-                    // 规避这一瞬错乱；正常状态下内容短、左对齐，视觉无变化。
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Text("纪要")
+                .font(.recapDisplay)
+                .tracking(Tracking.display)
+                .foregroundStyle(Color.recapInk)
+                // 冷启动首帧 NavigationStack+ScrollView 会先以 0 宽度 commit 一帧布局，
+                // 纯 Text 此时可用宽度≈0、逐字换行成竖排。fixedSize 让标题按 ideal 宽度横排，
+                // 规避这一瞬错乱；正常状态下内容短、左对齐，视觉无变化。
+                .fixedSize(horizontal: true, vertical: false)
+
+            if !meetings.isEmpty {
+                statsRow
+                    .font(.recapMeta)
                     .fixedSize(horizontal: true, vertical: false)
-
-                if !meetings.isEmpty {
-                    statsRow
-                        .font(.recapMeta)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
             }
-
-            Spacer(minLength: Spacing.xl)
-
-            dateSheet
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Spacing.lg)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(meetings.isEmpty ? "纪要" : "纪要，\(statsLine)")
-    }
-
-    /// 今日日历撕页：月眉标 / 大日数 / 周几，纸面 + hairline + 顶部朱砂红头。
-    /// 整页唯一的「日期物」——签名式构图元素，与朱砂印、纸面组同属纸墨语言。
-    private var dateSheet: some View {
-        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        return VStack(spacing: 3) {
-            Text(monthText)
-                .font(.recapCaption.weight(.medium))
-                .tracking(0.8)
-                .foregroundStyle(Color.recapTea)
-            Text(dayText)
-                .font(.system(size: 26, weight: .semibold, design: .rounded))
-                .tracking(-0.5)
-                .foregroundStyle(Color.recapInk)
-                .fixedSize(horizontal: true, vertical: false)
-            Text(weekdayText)
-                .font(.recapCaption.weight(.regular))
-                .tracking(0.2)
-                .foregroundStyle(Color.recapTea)
-        }
-        .frame(width: 64)
-        .padding(.vertical, Spacing.sm)
-        .background(Color.recapPaper, in: shape)
-        .overlay(shape.strokeBorder(Color.recapInk.opacity(0.06), lineWidth: 0.8))
-        .shadow(color: Color.recapShadow.opacity(0.7), radius: 5, x: 0, y: 2)
-        // 红头：撕页顶部的朱砂细条（日历脊），与 FAB 印章同谱呼应
-        .overlay(alignment: .top) {
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Color.recapCinnabar.opacity(0.85))
-                .frame(width: 18, height: 2.5)
-                .padding(.top, 5)
-                .allowsHitTesting(false)
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("今天，\(dateEyebrow)")
-    }
-
-    private var monthText: String {
-        Date().formatted(
-            Date.FormatStyle().month(.wide).locale(Locale(identifier: "zh_CN"))
-        )
-    }
-
-    private var dayText: String {
-        Date().formatted(
-            Date.FormatStyle().day().locale(Locale(identifier: "zh_CN"))
-        )
-    }
-
-    private var weekdayText: String {
-        Date().formatted(
-            Date.FormatStyle().weekday(.abbreviated).locale(Locale(identifier: "zh_CN"))
-        )
     }
 
     /// 编辑风数字排版：数字 mono 提亮成墨色、单位留茶灰——统计行不再是均质灰串。
@@ -412,30 +378,21 @@ public struct MeetingListView: View {
             parts.append(
                 Text("\(total)")
                     .font(.recapMono.weight(.medium))
-                    .foregroundColor(.recapInk)
-                + Text(" 场记录").foregroundColor(.recapTea)
+                    .foregroundStyle(Color.recapInk)
+                + Text(" 场记录").foregroundStyle(Color.recapTea)
             )
         }
         if openTodoCount > 0 {
             parts.append(
                 Text("\(openTodoCount)")
                     .font(.recapMono.weight(.medium))
-                    .foregroundColor(.recapInk)
-                + Text(" 条待办").foregroundColor(.recapTea)
+                    .foregroundStyle(Color.recapInk)
+                + Text(" 条待办").foregroundStyle(Color.recapTea)
             )
         }
         guard let first = parts.first else { return Text("") }
-        let separator = Text(" · ").foregroundColor(Color.recapTea.opacity(0.6))
+        let separator = Text(" · ").foregroundStyle(Color.recapTea.opacity(0.6))
         return parts.dropFirst().reduce(first) { result, part in result + separator + part }
-    }
-
-    private var dateEyebrow: String {
-        Date().formatted(
-            Date.FormatStyle()
-                .month(.defaultDigits).day()
-                .weekday(.abbreviated)
-                .locale(Locale(identifier: "zh_CN"))
-        )
     }
 
     private var statsLine: String {
@@ -499,18 +456,32 @@ public struct MeetingListView: View {
         }
     }
 
-    /// 纸面组：同区段会议收进一张连续纸——底色 + hairline 描边 + 极淡全站投影（纸落在桌上的呼吸感）。
-    /// 组统一 clipShape 同时负责收口平铺行的左滑越界（删除钮在组圆角处成型）。
+    /// 纸面组：同区段会议收进一张连续纸——底色 + 颗粒 + hairline 描边 + 顶缘受光 + 双层落影。
+    /// 组统一 clipShape 同时负责收口平铺行的左滑越界（删除钮在组圆角处成型）；
+    /// grain 在行之上、裁切之内：行在纸上滑动时颗粒静止，属于纸而非内容。
     private func paperGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
         return VStack(spacing: 0) {
             content()
         }
         .background(shape.fill(Color.recapPaper))
-        // strokeBorder 画在形内：组 clipShape 不会裁掉描边外半
-        .overlay(shape.strokeBorder(Color.recapTea.opacity(0.12), lineWidth: 0.8))
+        .recapPaperGrain(0.018)
+        // strokeBorder 画在形内：组 clipShape 不会裁掉描边外半。
+        // 纸边是纸性的主承载之一（影已极轻），透明度给到「看得见但不抢」。
+        .overlay(shape.strokeBorder(Color.recapTea.opacity(0.15), lineWidth: 0.8))
+        // 顶缘受光：与草稿卡内芯同源的 1px 上亮下无描边——光落在纸边上的暗示
+        .overlay(
+            shape.strokeBorder(
+                LinearGradient(
+                    colors: [Color.recapCoreGlow, .clear],
+                    startPoint: .top,
+                    endPoint: .center
+                ),
+                lineWidth: 1
+            )
+        )
         .clipShape(shape)
-        .recapCardShadow()
+        .recapPaperShadow()
     }
 
     /// 纸面组内行分隔线：leading 对齐时刻轴右缘（行内 padding + 时刻列 + 列间距），
@@ -619,7 +590,7 @@ public struct MeetingListView: View {
         }
     }
 
-    /// 区段眉标 + 台账计数 + 柔和渐隐 hairline。
+    /// 区段眉标 + 台账计数。
     private func sectionEyebrow(_ title: String, count: Int? = nil) -> some View {
         HStack(spacing: Spacing.sm) {
             Text(title)
@@ -632,57 +603,44 @@ public struct MeetingListView: View {
                     .foregroundStyle(Color.recapTea.opacity(0.65))
                     .fixedSize(horizontal: true, vertical: false)
             }
-            LinearGradient(
-                colors: [Color.recapTea.opacity(0.14), Color.recapTea.opacity(0.0)],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-            .frame(height: 0.8)
         }
     }
 
     // MARK: - Empty
 
     private var emptyState: some View {
-        HStack(alignment: .top, spacing: Spacing.lg) {
-            VStack(alignment: .leading, spacing: Spacing.lg) {
-                // 微缩 bezel：外壳圆 + 内芯圆嵌套（间距 = Bezel.inset，与草稿卡壳同源）
-                ZStack {
-                    Circle()
-                        .fill(Color.recapShell)
-                        .frame(width: 52 + Bezel.inset * 2, height: 52 + Bezel.inset * 2)
-                        .overlay(
-                            Circle().strokeBorder(Color.recapShellRing, lineWidth: Bezel.hairline)
-                        )
-                    Circle()
-                        .fill(Color.recapCinnabar.opacity(0.06))
-                        .frame(width: 52, height: 52)
-                    Image(systemName: "waveform")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.recapCinnabar)
-                }
-
-                VStack(alignment: .leading, spacing: Spacing.xs) {
-                    Text("把一场对话\n收成可行动的纪要")
-                        .font(.recapDisplay)
-                        .tracking(Tracking.display)
-                        .foregroundStyle(Color.recapInk)
-                        .lineSpacing(Leading.body)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Text("转写、整理、待办，在同一条时间线里长出来。")
-                        .font(.recapBodyS)
-                        .foregroundStyle(Color.recapTea)
-                        .lineSpacing(Leading.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 300, alignment: .leading)
-                }
+        VStack(alignment: .leading, spacing: Spacing.lg) {
+            // 微缩 bezel：外壳圆 + 内芯圆嵌套（间距 = Bezel.inset，与草稿卡壳同源）
+            ZStack {
+                Circle()
+                    .fill(Color.recapShell)
+                    .frame(width: 52 + Bezel.inset * 2, height: 52 + Bezel.inset * 2)
+                    .overlay(
+                        Circle().strokeBorder(Color.recapShellRing, lineWidth: Bezel.hairline)
+                    )
+                Circle()
+                    .fill(Color.recapCinnabar.opacity(0.06))
+                    .frame(width: 52, height: 52)
+                Image(systemName: "waveform")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(Color.recapCinnabar)
             }
 
-            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: Spacing.xs) {
+                Text("把一场对话\n收成可行动的纪要")
+                    .font(.recapDisplay)
+                    .tracking(Tracking.display)
+                    .foregroundStyle(Color.recapInk)
+                    .lineSpacing(Leading.body)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            // 与 header 同款日历撕页：首启也是「今天这一页」
-            dateSheet
+                Text("转写、整理、待办，在同一条时间线里长出来。")
+                    .font(.recapBodyS)
+                    .foregroundStyle(Color.recapTea)
+                    .lineSpacing(Leading.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 300, alignment: .leading)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, Spacing.xl)
@@ -754,24 +712,29 @@ public struct MeetingListView: View {
         path.append(MeetingRoute.live(meeting.id))
     }
 
-    private var searchButton: some View {
-        RecapToolbarIcon(
-            RecapSymbol.search,
-            accessibilityLabel: "搜索"
-        ) {
-            path.append(MeetingRoute.search)
-        }
-    }
+    /// 搜索 + 导入合并胶囊（右上）：两枚裸像共一粒玻璃胶囊，中缝 hairline 分隔——
+    /// 复用 RecapToolbarIconImage 保证与全站顶栏图标同字重同墨色。
+    private var searchImportCapsule: some View {
+        HStack(spacing: 0) {
+            Button {
+                path.append(MeetingRoute.search)
+            } label: {
+                RecapToolbarIconImage(RecapSymbol.search)
+            }
+            .buttonStyle(RecapPressStyle())
+            .accessibilityLabel("搜索")
 
-    /// 导入外部音频（plan 046）：录音笔/通话录音/语音消息 → 转码 → 全管线。
-    private var importButton: some View {
-        RecapToolbarIcon(
-            RecapSymbol.importFile,
-            accessibilityLabel: "导入音频",
-            accessibilityHint: "导入录音笔、通话录音等音频文件，自动转写生成纪要"
-        ) {
-            showImport = true
+            // 导入外部音频（plan 046）：录音笔/通话录音/语音消息 → 转码 → 全管线。
+            Button {
+                showImport = true
+            } label: {
+                RecapToolbarIconImage(RecapSymbol.importFile)
+            }
+            .buttonStyle(RecapPressStyle())
+            .accessibilityLabel("导入音频")
+            .accessibilityHint("导入录音笔、通话录音等音频文件，自动转写生成纪要")
         }
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 
     private var accountButton: some View {
@@ -879,12 +842,19 @@ private struct MeetingListRow: View {
     /// rowDivider 的 leading 缩进依赖此值，改动需同步。
     static let timeColumnWidth: CGFloat = 54
 
+    private var isShortEmptyMeeting: Bool {
+        if let preview = meeting.tldrPreview, preview.contains("无有效会议内容") {
+            return true
+        }
+        return meeting.durationSeconds > 0 && meeting.durationSeconds < 45 && meeting.actionItems.isEmpty && meeting.latestSummary == nil
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: Spacing.lg) {
+        HStack(alignment: isShortEmptyMeeting ? .center : .top, spacing: Spacing.lg) {
             // 左列时刻：mono 提亮成墨色——时间轴是行的锚点，不是灰注脚
             Text(whenText)
                 .font(.recapMono.weight(.medium))
-                .foregroundStyle(Color.recapInk)
+                .foregroundStyle(Color.recapInk.opacity(isShortEmptyMeeting ? 0.6 : 1.0))
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(width: Self.timeColumnWidth, alignment: .leading)
@@ -894,44 +864,57 @@ private struct MeetingListRow: View {
                 .fill(Color.recapTea.opacity(0.15))
                 .frame(width: 0.8)
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .center, spacing: 8) {
+            if isShortEmptyMeeting {
+                HStack(spacing: Spacing.sm) {
                     Text(meeting.title)
-                        .font(.recapTitleS)
-                        .tracking(Tracking.titleS)
-                        .foregroundStyle(Color.recapInk)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // 处理中状态：标题行尾独立胶囊，不混入底栏灰文，避免被读成普通上下文
-                    if meeting.phase == .processing {
-                        processingBadge
-                            .layoutPriority(1)
-                    }
-                }
-                // 胶囊出现/消失平滑插值，不硬切；reduceMotion 交给系统默认（无动画）
-                .animation(reduceMotion ? nil : .recapSoft, value: meeting.phase == .processing)
-
-                if let preview = meeting.tldrPreview {
-                    Text(preview)
                         .font(.recapBodyS)
                         .foregroundStyle(Color.recapTea)
-                        .lineLimit(2)
-                        .lineSpacing(Leading.tight)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                // 时长：时长为 0 的异常会议不展示（durationText 会给出「—」，比露出更干净）
-                if meeting.durationSeconds > 0 {
-                    Text(meeting.durationText)
-                        .font(.recapMono)
-                        .foregroundStyle(Color.recapTea.opacity(0.85))
                         .lineLimit(1)
+                    Spacer()
+                    Text(meeting.durationSeconds > 0 ? meeting.durationText : "未录音")
+                        .font(.recapCaption)
+                        .foregroundStyle(Color.recapTea.opacity(0.6))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(meeting.title)
+                            .font(.recapTitleS)
+                            .tracking(Tracking.titleS)
+                            .foregroundStyle(Color.recapInk)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        // 处理中状态：标题行尾独立胶囊，不混入底栏灰文，避免被读成普通上下文
+                        if meeting.phase == .processing {
+                            processingBadge
+                                .layoutPriority(1)
+                        }
+                    }
+                    // 胶囊出现/消失平滑插值，不硬切；reduceMotion 交给系统默认（无动画）
+                    .animation(reduceMotion ? nil : .recapSoft, value: meeting.phase == .processing)
+
+                    if let preview = meeting.tldrPreview {
+                        Text(preview)
+                            .font(.recapBodyS)
+                            .foregroundStyle(Color.recapTea)
+                            .lineLimit(2)
+                            .lineSpacing(Leading.tight)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    // 时长：时长为 0 的异常会议不展示（durationText 会给出「—」，比露出更干净）
+                    if meeting.durationSeconds > 0 {
+                        Text(meeting.durationText)
+                            .font(.recapMono)
+                            .foregroundStyle(Color.recapTea.opacity(0.85))
+                            .lineLimit(1)
+                    }
                 }
             }
         }
         .padding(.horizontal, Spacing.lg)
-        .padding(.vertical, Spacing.lg)
+        .padding(.vertical, isShortEmptyMeeting ? Spacing.md : Spacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
@@ -999,17 +982,20 @@ private struct SwipeableMeetingRow<Content: View>: View {
             // 删除钮闭合时被圆角裁掉，左滑露出时自动带外壳右圆角。
             // flat 无行级裁切：越界部分由纸面组的 clipShape 统一收口。
             HStack(spacing: 0) {
-                content()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    // 内容背景盖住右侧删除区，避免未滑开时透出；
-                    // bezel 时为内芯（纸面 + 顶部反光 hairline），四周留壳内衬
-                    .background(contentBackdrop)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        // 左滑过程中 / 刚结束时不进详情
-                        guard !swipeEngaged else { return }
-                        onTap()
-                    }
+                // Button 而非裸 onTapGesture：行获得「指尖落纸」的按压墨染（RecapRowPressStyle）。
+                // 左滑由外层 UIKit pan 夺取；swipeEngaged 守卫挡住滑动结束后的补发 tap。
+                Button {
+                    guard !swipeEngaged else { return }
+                    onTap()
+                } label: {
+                    content()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // 内容背景盖住右侧删除区，避免未滑开时透出；
+                        // bezel 时为内芯（纸面 + 顶部反光 hairline），四周留壳内衬
+                        .background(contentBackdrop)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(RecapRowPressStyle())
 
                 deleteAction
             }

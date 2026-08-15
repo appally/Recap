@@ -27,6 +27,48 @@ final class SearchTranscriptToolTests: XCTestCase {
         XCTAssertTrue(hits.contains { $0.text.contains("回报率") })
     }
 
+    func testEqualScoreSortsChronologically() {
+        // 同词频命中：按时间升序输出，保叙事时序（先说的在前）
+        let segs = [
+            makeSeg(start: 300, end: 310, text: "关于报价先说三点"),
+            makeSeg(start: 100, end: 110, text: "关于报价补充一点"),
+        ]
+        let hits = SearchTranscriptTool.search(
+            query: "报价",
+            segments: segs,
+            speakers: speakers,
+            limit: 6
+        )
+        XCTAssertEqual(hits.count, 2)
+        XCTAssertEqual(hits.first?.text, "关于报价补充一点")
+        XCTAssertEqual(hits.last?.text, "关于报价先说三点")
+    }
+
+    func testRecencyBoostPrefersRecentSegment() {
+        // 同词频：末 5 分钟窗口内片段 +1 胜出（会中「刚说的」优先）
+        let segs = [
+            makeSeg(start: 0, end: 10, text: "关于报价先说三点"),
+            makeSeg(start: 1700, end: 1710, text: "关于报价补充一点"),
+        ]
+        let hits = SearchTranscriptTool.search(
+            query: "报价",
+            segments: segs,
+            speakers: speakers,
+            limit: 6,
+            nowSeconds: 1710
+        )
+        XCTAssertEqual(hits.first?.text, "关于报价补充一点")
+
+        // 不传 nowSeconds（会后口径）：不加成，按时间序
+        let plain = SearchTranscriptTool.search(
+            query: "报价",
+            segments: segs,
+            speakers: speakers,
+            limit: 6
+        )
+        XCTAssertEqual(plain.first?.text, "关于报价先说三点")
+    }
+
     func testRecentWindowSelectsTailSegments() {
         let segs = [
             makeSeg(start: 0, end: 10, text: "开头"),

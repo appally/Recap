@@ -241,11 +241,16 @@ public enum AskQueryIntentClassifier {
 
 /// 本地转写检索（不经 LLM function call）。
 public enum SearchTranscriptTool {
+    /// 近窗加成窗口（秒）：`nowSeconds` 提供时，窗口内片段 +1 分。
+    /// 会中「刚刚说的」应胜过同词频的陈旧片段；+1 不颠覆词法主导，只做同质量倾向。
+    public static let recencyBoostWindow: Double = 5 * 60
+
     public static func search(
         query: String,
         segments: [TranscriptSegment],
         speakers: [Speaker],
-        limit: Int = 6
+        limit: Int = 6,
+        nowSeconds: Double? = nil
     ) -> [TranscriptHit] {
         let tokens = QueryTokenizer.tokenize(query)
         guard !tokens.isEmpty else { return [] }
@@ -256,10 +261,13 @@ public enum SearchTranscriptTool {
         for seg in segments {
             let text = seg.text
             guard !text.isEmpty else { continue }
-            let score = tokens.reduce(0) { acc, t in
+            var score = tokens.reduce(0) { acc, t in
                 acc + (text.localizedCaseInsensitiveContains(t) ? 1 : 0)
             }
-            guard score > 0 else { continue }
+            if score == 0 { continue }
+            if let now = nowSeconds, now - seg.startSeconds <= recencyBoostWindow {
+                score += 1
+            }
             let name = speakers.first(where: { $0.id == seg.speakerId })?.name ?? "?"
             scored.append(Scored(
                 hit: TranscriptHit(startSeconds: seg.startSeconds, speakerName: name, text: text),
@@ -267,8 +275,12 @@ public enum SearchTranscriptTool {
             ))
         }
 
+        // 同分按时间升序：证据块保叙事时序，模型不会把「先说 A 后改口 B」讲反。
         return scored
-            .sorted { $0.score > $1.score }
+            .sorted {
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.hit.startSeconds < $1.hit.startSeconds
+            }
             .prefix(limit)
             .map(\.hit)
     }

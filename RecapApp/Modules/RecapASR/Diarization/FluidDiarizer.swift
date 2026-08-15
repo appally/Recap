@@ -49,20 +49,42 @@ public actor FluidDiarizer: MeetingDiarizer {
     ///   WebKit/SpeechAnalyzer 预取并发会争资源致卡顿；延后到首帧渲染后再编译可移出启动关键路径。
     ///   分离只在会后 REVIEW 触发，用户录满一场会前 prefetch 必已就绪，故延后无副作用。
     nonisolated public static func prefetchInBackground(delaySeconds: TimeInterval = 0) {
-        Task.detached(priority: .utility) {
+        prefetchLock.lock()
+        prefetchTask?.cancel()
+        prefetchTask = Task.detached(priority: .utility) {
             if delaySeconds > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
             }
+            // 已被取消（如用户在延迟窗口内开麦）则不启动编译
+            guard !Task.isCancelled else { return }
             _ = try? await DiarizerModels.download()
         }
+        prefetchLock.unlock()
     }
+
+    /// 开麦时让路：ANE 特化编译与端侧 LIVE ASR 推理争 ANE。取消挂起的 prefetch
+    /// （仅延迟窗口内有效——编译一旦开始 CoreML 不可中断，只能等它跑完）。
+    nonisolated public static func cancelPrefetch() {
+        prefetchLock.lock()
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchLock.unlock()
+    }
+
+    private static let prefetchLock = NSLock()
+    private nonisolated(unsafe) static var prefetchTask: Task<Void, Never>?
 
     public func unload() async {
         // 等待在飞推理完成：diarize 的 exclusive 跑在 CoreMLInferenceGate actor，此期间本 actor
         // 挂起、unload 可插入；若直接 cleanup 会与 performCompleteDiarization 竞争 manager 致崩。
         // isInferring 由本 actor 串行化读写一致；unload 低频，50ms 轮询等待可接受。
+        // 取消即放弃等待（sleep 抛 CancellationError 被吞后若无此退出会退化成无延迟热自旋）。
         while isInferring {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {
+                return   // unload 的包裹 Task 被取消：不再等推理，直接放弃
+            }
         }
         managerBox?.manager.cleanup()
         managerBox = nil
