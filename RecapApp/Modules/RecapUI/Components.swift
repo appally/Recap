@@ -185,14 +185,24 @@ public struct SpeakerBlockView: View {
         return parts.joined(separator: "，")
     }
 
+    /// 未定稿行底文：底稿 + 尾随空格 + 朱砂「▎」游标（run 级前景色）。
+    /// iOS 26 弃用 Text 的 `+` 拼接，改由 AttributedString 表达；run 属性优先于
+    /// 外层 Text 修饰符，与原逐段拼接的渲染一致。（构造放 builder 外——
+    /// ViewBuilder 分支内的多语句声明会让 Group 退到 TableColumn 重载、推不出类型。）
+    private var streamingLineText: AttributedString {
+        var text = AttributedString(block.polished + " ")
+        var cursor = AttributedString("▎")
+        cursor.foregroundColor = Color.recapCinnabar.opacity(0.7)
+        text += cursor
+        return text
+    }
+
     private var polishedLine: some View {
         Group {
             if block.isFinal {
                 Text(block.polished)
             } else {
-                Text(block.polished)
-                    + Text(" ")
-                    + Text("▎").foregroundStyle(Color.recapCinnabar.opacity(0.7))
+                Text(streamingLineText)
             }
         }
         // 已润色成稿用 semibold 拉开权重；未润色原话用 medium

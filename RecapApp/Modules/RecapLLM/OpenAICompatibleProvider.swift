@@ -320,7 +320,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         req.timeoutInterval = 90
 
         // P1-B: 瞬态重试（URLError 瞬态 + 5xx，与流式 runStream 同构），避免单次网络抖动丢全部待办。
-        let (respData, http) = try await performToolRequest(req)
+        let (respData, _) = try await performToolRequest(req)
 
         guard let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
               let choices = root["choices"] as? [[String: Any]],

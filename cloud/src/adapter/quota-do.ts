@@ -1,5 +1,5 @@
-import { checkQuota, mergeIfSamePeriod, QuotaState, MONTH_MS } from '../core/quota';
-import { DEFAULT_EXPIRE_SECONDS, Env } from '../env';
+import { checkQuota, elapsedChargeSeconds, mergeIfSamePeriod, QuotaState, MONTH_MS } from '../core/quota';
+import { Env } from '../env';
 
 /**
  * per-user 配额计数 Durable Object(按 userId 取实例,强一致无全局瓶颈)。
@@ -66,8 +66,7 @@ export class QuotaDO {
 
         if (isAsr) {
           // ASR 独立桶:实耗计量(封顶一个 token 寿命),与 LLM 桶隔离
-          const last = reset ? now : (stored.asrLastIssueAt ?? now - DEFAULT_EXPIRE_SECONDS);
-          charge = Math.min(Math.max(now - last, 0), DEFAULT_EXPIRE_SECONDS);
+          charge = elapsedChargeSeconds(stored.asrLastIssueAt, reset, now);
           bucketUsed = asrUsed;
           limit = stored.signedIn ? limitMonthly : limitAnon;
         } else if (fixedSecondsRaw !== null) {
@@ -76,9 +75,8 @@ export class QuotaDO {
           bucketUsed = llmUsed;
           limit = stored.signedIn ? limitMonthly : limitAnon;
         } else {
-          // Pro LLM:实耗(首签按满额扣,不给"每月首张 token 免费"的漏洞)
-          const last = reset ? now : (stored.lastIssueAt ?? now - DEFAULT_EXPIRE_SECONDS);
-          charge = Math.min(Math.max(now - last, 0), DEFAULT_EXPIRE_SECONDS);
+          // Pro LLM:实耗(旧记录无时间戳按满额扣,不给"每月首张 token 免费"的漏洞)
+          charge = elapsedChargeSeconds(stored.lastIssueAt, reset, now);
           bucketUsed = llmUsed;
           limit = limitMonthly;
         }

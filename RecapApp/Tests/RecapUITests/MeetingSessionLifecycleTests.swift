@@ -109,6 +109,53 @@ final class MeetingSessionLifecycleTests: XCTestCase {
         XCTAssertNotEqual(session.statusMessage, "上一轮整理仍在进行…")
         XCTAssertFalse(MinutesTaskRegistry.shared.isRunning(for: meeting.id))
     }
+
+    // MARK: - shouldRejectRetranscribe（重转拒收守卫，三条路径共用；052 P0-2 回归）
+
+    /// 构造总字数为 `chars` 的分段（单段承载，计数与分段无关）。
+    private nonisolated func segments(chars: Int) -> [TranscriptSegment] {
+        [TranscriptSegment(startSeconds: 0, endSeconds: 1, text: String(repeating: "字", count: chars))]
+    }
+
+    func testRejectRetranscribe_ShortNewResultRejected() {
+        // 旧稿 400 字、新稿 200 字（<60%）→ 拒收保旧稿
+        XCTAssertTrue(MeetingSession.shouldRejectRetranscribe(
+            new: segments(chars: 200), old: segments(chars: 400)))
+    }
+
+    func testRejectRetranscribe_SufficientNewResultAccepted() {
+        // 旧稿 400 字、新稿 240 字（恰好 60%）→ 接受（严格小于才拒）
+        XCTAssertFalse(MeetingSession.shouldRejectRetranscribe(
+            new: segments(chars: 240), old: segments(chars: 400)))
+    }
+
+    func testRejectRetranscribe_ThinOldDraftNeverRejected() {
+        // 旧稿 <200 字（LIVE 短会/启动即走）：新稿再短也不拒——守卫只保护「实质内容」
+        XCTAssertFalse(MeetingSession.shouldRejectRetranscribe(
+            new: segments(chars: 5), old: segments(chars: 100)))
+    }
+
+    func testRejectRetranscribe_EmptyNewAgainstThinOldNotRejected() {
+        // 语义边界：空结果的拦截由调用方 isEmpty 守卫负责，本函数只看字数比
+        XCTAssertFalse(MeetingSession.shouldRejectRetranscribe(
+            new: [], old: segments(chars: 100)))
+    }
+
+    // MARK: - PipelineStage 重转文案按来源区分（052 P0-3 回归）
+
+    func testRetranscribingStageTitleFollowsCause() {
+        XCTAssertEqual(PipelineStage.retranscribing(.dialect).title, "检测到方言口音，云端精转中…")
+        XCTAssertEqual(PipelineStage.retranscribing(.onDevice).title, "本机高保真精转中…")
+    }
+
+    func testRetranscribingStageCountsAsProcessing() {
+        XCTAssertTrue(PipelineStage.retranscribing(.onDevice).isProcessingStage)
+        XCTAssertTrue(PipelineStage.retranscribing(.dialect).isProcessingStage)
+        XCTAssertTrue(PipelineStage.organizing.isProcessingStage)
+        XCTAssertTrue(PipelineStage.generating.isProcessingStage)
+        XCTAssertFalse(PipelineStage.idle.isProcessingStage)
+        XCTAssertFalse(PipelineStage.done.isProcessingStage)
+    }
 }
 
 /// registry 查询/注销语义（旧 token 不抹新条目）。

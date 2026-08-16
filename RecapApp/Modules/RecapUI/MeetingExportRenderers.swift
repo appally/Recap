@@ -108,15 +108,43 @@ enum MeetingExportRenderers {
         }
     }
 
-    /// AttributedString → NSAttributedString，统一字体/文字色（SwiftUI Color 属性在
-    /// NSAttributedString 转换后不可靠，此处显式覆盖）。
-    private static func nsString(_ source: AttributedString,
-                                 font: UIFont,
-                                 color: UIColor) -> NSAttributedString {
+    /// AttributedString → NSAttributedString，统一字体/文字色。
+    ///
+    /// ⚠️ SwiftUI 的 `Font`/`Color` 属性经 `NSAttributedString(_:)` 转换后停留在私有键
+    /// （`SwiftUI.Font`），CoreText/字符串绘制一概不认——修复前所有正文块按默认 12pt
+    /// Helvetica 级联布局，字号/字重/斜体全丢。字体必须在 UIKit 侧 `addAttribute` 重设；
+    /// 行内意图（**粗体**/*斜体*/`代码`）在此映射回 UIFont 变体。
+    /// internal 供回归测试断言行距与字体桥接。
+    static func nsString(_ source: AttributedString,
+                         font: UIFont,
+                         color: UIColor) -> NSAttributedString {
         var mutable = source
         mutable.font = Font(font)
         mutable.foregroundColor = Color(color)
-        return NSAttributedString(mutable)
+        let result = NSMutableAttributedString(mutable)
+        let full = NSRange(location: 0, length: result.length)
+        result.addAttribute(.font, value: font, range: full)
+        result.addAttribute(.foregroundColor, value: color, range: full)
+        for run in mutable.runs {
+            guard let intent = run.inlinePresentationIntent, !intent.isEmpty else { continue }
+            let nsRange = NSRange(run.range, in: mutable)
+            let resolved: UIFont
+            if intent.contains(.code) {
+                resolved = .monospacedSystemFont(ofSize: font.pointSize, weight: .regular)
+            } else {
+                var traits = font.fontDescriptor.symbolicTraits
+                if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
+                if intent.contains(.emphasized) { traits.insert(.traitItalic) }
+                if traits != font.fontDescriptor.symbolicTraits,
+                   let descriptor = font.fontDescriptor.withSymbolicTraits(traits) {
+                    resolved = UIFont(descriptor: descriptor, size: 0)
+                } else {
+                    resolved = font
+                }
+            }
+            result.addAttribute(.font, value: resolved, range: nsRange)
+        }
+        return result
     }
 
     private static func titleBlock(_ title: String) -> Block {
@@ -241,11 +269,17 @@ enum MeetingExportRenderers {
     /// 把整块 NSAttributedString 按 CTFramesetter 切成行 fragment（保留原属性），
     /// 返回 [(可绘制片段, 推进高度)]。行高优先取相邻行 origin 差（含空行/行距，最稳），
     /// 末行回退光学高度。块间换行由调用方的 spacingAfter 提供。
-    private static func lineFragments(of attributed: NSAttributedString,
-                                      width: CGFloat) -> [(NSAttributedString, CGFloat)] {
+    /// internal 供回归测试断言行距不塌缩。
+    ///
+    /// ⚠️ 帧高不能用 `.greatestFiniteMagnitude`：首行 origin.y ≈ 帧高（1.8e308），
+    /// double 在该量级的精度间隔远大于行高，相邻 origin 相减恒为 0 → 每行 advance
+    /// 全部落进 `max(advance, 4)` 的 4pt 兜底 → 导出物行行压叠（2026-08-16 实测）。
+    /// 单块排版不过数千 pt，1e5 绰绰有余且精度无损。
+    static func lineFragments(of attributed: NSAttributedString,
+                              width: CGFloat) -> [(NSAttributedString, CGFloat)] {
         guard attributed.length > 0 else { return [] }
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
-        let path = CGPath(rect: CGRect(x: 0, y: 0, width: width, height: .greatestFiniteMagnitude), transform: nil)
+        let path = CGPath(rect: CGRect(x: 0, y: 0, width: width, height: 100_000), transform: nil)
         let frame = CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), path, nil)
         let cfLines = CTFrameGetLines(frame) as NSArray
         let lines = cfLines as? [CTLine] ?? []

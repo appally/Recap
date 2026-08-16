@@ -38,7 +38,9 @@ public enum RecapSymbol {
     // 资料动作
     public static let scan = "doc.viewfinder"
     public static let paste = "doc.on.clipboard"
-    public static let importFile = "square.and.arrow.down"
+    /// 导入外部音频：plus（几何中心=光学中心，与 search 单笔画同重量同轴）。
+    /// 弃 square.and.arrow.down——方形沉底箭头压顶，重心偏下，且与放大镜重量不齐。
+    public static let importAudio = "plus"
     public static let linkPrior = "link"
     public static let research = "sparkles"
     public static let researchProgress = "arrow.triangle.2.circlepath"

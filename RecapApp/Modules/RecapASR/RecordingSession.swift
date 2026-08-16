@@ -39,9 +39,18 @@ public final class RecordingSession: ObservableObject {
         // 托管凭证(recapCloud+Pro 或 免费档):先确保 Recap 云凭证就绪。ASR 走后端签发的
         // 阿里临时 token(≤30min);warmup 失败不阻断启动,回落链(端侧/BYOK)兜底。
         // 免费档以 usage=.asr 计量,扣独立 ASR 桶(国行/非 AI 机型端侧不可用兜底)。
+        // 例外:网关明确 403(配额耗尽/会员验证被拒)时云端兜底必然失败——记下真实原因,
+        // 若引擎解析也失败(端侧不可用)则透传,避免误报「请检查网络后重试」。
+        var credentialDeniedMessage: String?
         if RecapCredentialProvider.shared.isActiveCloud {
             do {
                 try await RecapCredentialProvider.shared.ensureFresh(usage: .asr)
+            } catch let error as RecapCredentialError {
+                if case .issueFailed(let status, _) = error, status == 403 {
+                    credentialDeniedMessage = error.userMessage
+                } else {
+                    self.onError?("云凭证准备失败，将尝试其他引擎…")
+                }
             } catch {
                 self.onError?("云凭证准备失败，将尝试其他引擎…")
             }
@@ -64,6 +73,14 @@ public final class RecordingSession: ObservableObject {
             }
         } catch is RecordingSessionError {
             throw RecordingSessionError.prepareTimeout
+        } catch {
+            // 端侧不可用(非 AI 机型/模拟器)且云凭证已被 403 拒:真实原因是额度/会员而非网络,
+            // 用凭证文案替代 resolver 的「请检查网络」兜底(MeetingSession 按 AsrResolveError
+            // 分支直接显示 detail)。resolve 成功走端侧时凭证 403 不影响录音,不会进这里。
+            if let credentialDeniedMessage {
+                throw AsrResolveError.noneAvailable(credentialDeniedMessage)
+            }
+            throw error
         }
         engine = resolved
         engineKind = resolved.kind

@@ -193,13 +193,15 @@ targets:
         UIBackgroundModes:
           - audio
         UILaunchScreen: {}
-        # 退出 iPad 多任务(Slide Over/分屏)。iPad 只支持 3 个方向, 不满足多任务所需的全部 4 方向,
-        # 故必须声明 UIRequiresFullScreen=true 以过 ASC 90474。
-        UIRequiresFullScreen: true
+        # UIRequiresFullScreen 已删(iOS 26 起弃用且被系统忽略, iPad 一律参与多任务窗口)。
+        # 但「方向不全须全屏」校验仍生效——iPad 运行时即报 "All interface orientations
+        # must be supported unless the app requires full screen."。故 iPad 补齐第 4 方向
+        # (竖屏倒置), 不回加弃用 key; SwiftUI 布局对倒置竖屏自动适配, 零额外工作。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     entitlements:

@@ -9,6 +9,7 @@ final class BenchViewModel: ObservableObject {
     @Published var audioName: String = "(未选择音频)"
     @Published var selected: Set<AsrEngineKind> = [.speechAnalyzer, .volcSeedASR]  // 默认勾选无需 FluidAudio 的两个
     @Published var referenceText: String = ""
+    @Published var referenceRTTM: String = ""
     @Published var records: [BenchRecord] = []
     @Published var isRunning = false
     @Published var status: String = "就绪"
@@ -30,6 +31,8 @@ final class BenchViewModel: ObservableObject {
             let audio = try await AudioFileReader.loadResampled(url: url)
             let ref = referenceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                        ? nil : referenceText
+            let rttm = referenceRTTM.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                       ? nil : referenceRTTM
 
             for kind in AsrEngineKind.allCases where selected.contains(kind) {
                 guard let engine = Self.makeEngine(kind) else {
@@ -41,7 +44,8 @@ final class BenchViewModel: ObservableObject {
                     engine: engine,
                     audio: audio,
                     audioName: audioName,
-                    reference: ref)
+                    reference: ref,
+                    referenceRTTM: rttm)
                 records.insert(record, at: 0)
             }
             status = "完成，共 \(records.count) 条记录"
@@ -96,6 +100,14 @@ struct ContentView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
+                Section("说话人时间轴 RTTM（可选，分离引擎算 DER）") {
+                    TextEditor(text: $vm.referenceRTTM)
+                        .frame(minHeight: 80)
+                        .font(.system(size: 12, design: .monospaced))
+                    Text("粘贴 RTTM 标注（SPEAKER file 1 start dur <NA> <NA> 说话人 <NA> <NA>）。留空则分离引擎只报说话人数/段数，不算 DER。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Section {
                     Button {
                         Task { await vm.runAll() }
@@ -138,6 +150,9 @@ struct ResultRow: View {
                 } else if let cer = record.cer {
                     Text(String(format: "CER %.1f%%", cer * 100))
                         .font(.headline).foregroundStyle(cerColor(cer))
+                } else if let der = record.der {
+                    Text(String(format: "DER %.1f%%", der * 100))
+                        .font(.headline).foregroundStyle(cerColor(der))
                 }
             }
             if let err = record.error {
@@ -161,6 +176,9 @@ struct ResultRow: View {
             // 分离引擎：显示说话人数 / 分离段（替代 ASR 的首字延迟 / 分块）。
             items.append(("说话人", "\(sc)"))
             items.append(("分离段", "\(record.segmentCount ?? 0)"))
+            if let der = record.der {
+                items.append(("DER", String(format: "%.1f%%", der * 100)))
+            }
         } else {
             items.append(("首字延迟", record.firstTokenLatencyMs.map { String(format: "%.0f ms", $0) } ?? "—"))
             items.append(("分块", "\(record.chunkCount)"))

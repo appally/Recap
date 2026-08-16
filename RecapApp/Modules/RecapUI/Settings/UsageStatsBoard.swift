@@ -36,17 +36,11 @@ struct UsageStatsBoard: View {
 
             // Heatmap Section (平面热力网格)
             VStack(alignment: .leading, spacing: Spacing.sm) {
-                HStack {
-                    Text("近一年活动热力")
-                        .font(.recapEyebrow)
-                        .tracking(Tracking.eyebrow)
-                        .foregroundStyle(Color.recapTea)
-                    Spacer()
-                    Text("电光青点亮活跃日")
-                        .font(.recapCaption)
-                        .foregroundStyle(Color.recapTea.opacity(0.75))
-                }
-                .padding(.horizontal, 4)
+                Text("近一年活动热力")
+                    .font(.recapEyebrow)
+                    .tracking(Tracking.eyebrow)
+                    .foregroundStyle(Color.recapTea)
+                    .padding(.horizontal, 4)
 
                 VStack(alignment: .leading, spacing: Spacing.sm) {
                     ActivityHeatmapGrid(dailyCounts: stats.dailyCounts, showMonthLabels: true)

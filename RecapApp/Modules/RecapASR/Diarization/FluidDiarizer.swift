@@ -201,6 +201,12 @@ public actor FluidDiarizer: MeetingDiarizer {
         let models = try await DiarizerModels.download(progressHandler: { dp in
             progress?(dp.fractionCompleted, "下载")
         })
+        // 052 P2-3：内容级校验（LFS 哈希清单，见 FluidAudioBootstrap.lfsSHA256）。
+        // 失配即清除缓存并抛错——损坏/被篡改的权重不构造 manager、不留盘。
+        if !FluidAudioBootstrap.verifyModelIntegrity(repo: .diarizer) {
+            FluidAudioBootstrap.removeDiarizerCache()
+            throw DiarizationError.engineFailed("分离模型校验失败（下载可能损坏），已清除，请重试")
+        }
         // unload() 可能在下载期间 cancel 本任务（内存告警卸模型）。下载完成后先查取消，
         // 避免无视取消继续构造模型、再被 awaiter 回填 managerBox（刚卸载又驻留，告警失效）。
         try Task.checkCancellation()

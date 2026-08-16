@@ -121,10 +121,14 @@ public enum AsrEngineResolver {
     public static func resolveCloudFirst() async throws -> any AsrEngine {
         if hasFunCredentials, let cloud = try? await prepare(.funASR) { return cloud }
         if let onDevice = try? await prepare(.speechAnalyzer) { return onDevice }
-        if ASRFeatureFlags.fluidRetranscribeEnabled,
-           FluidAudioBootstrap.modelsPreloaded,
-           let fluid = try? await prepare(.fluidSenseVoice) {
-            return fluid
+        if ASRFeatureFlags.fluidRetranscribeEnabled, FluidAudioBootstrap.modelsPreloaded {
+            if let fluid = try? await prepare(.fluidSenseVoice) {
+                return fluid
+            }
+            // prepare 失败（闸门校验与加载间的竞态 / CoreML 加载失败）：清预下载标记保持
+            // 诚实，与 maybeOnDeviceUpgrade 的 assetDownloadFailed 兜底同语义；
+            // 不清则每次自动重转都白等一次注定失败的 prepare。
+            FluidAudioBootstrap.modelsPreloaded = false
         }
         throw AsrResolveError.noneAvailable("转写服务暂不可用，请检查网络或登录后重试。")
     }

@@ -28,14 +28,14 @@ public enum LLMProviderFactory {
             // Pro 托管:Recap 网关签发的阿里临时 token + qwen 兼容端点(不经 BYOK key)。
             guard RecapAccountStore.current.tier == .pro else { throw FactoryError.requiresMembership }
             let cred = try RecapCredentialProvider.shared.current()
-            let template = LLMProviderTemplate.qwen
-            let userPicked = LLMSelection.selectedModel
+            // cred.llmModel 为非可选：网关下发的模型名即唯一来源（原 `??` 右侧是
+            // 永不生效的死代码，2026-08-02 已统一单一来源，此处删净）。
             return OpenAICompatibleProvider(
                 id: "recap-cloud",
                 apiKey: cred.token,
                 baseURL: cred.llmBase,
-                defaultModel: cred.llmModel ?? userPicked ?? template.defaultModel,
-                summaryModel: cred.llmModel ?? userPicked ?? template.summaryModel
+                defaultModel: cred.llmModel,
+                summaryModel: cred.llmModel
             )
         case .freeTrial:
             // 免费档:网关签发的阿里 token(服务端按次计量);无 ASR token,转写走端侧。

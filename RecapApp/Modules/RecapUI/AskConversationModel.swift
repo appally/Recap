@@ -44,6 +44,9 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
     public var isDegraded: Bool
     /// 调研轮：该 assistant 气泡对应的结构化草稿 AIOutput(.draft) id；非 nil 时渲染「结构化视图」入口。
     public var draftOutputId: UUID?
+    /// user 气泡是调研目标（待办卡 ✦ 代发）→ 渲染为「深度调研」任务卡而非普通聊天气泡。
+    /// 文本以 `AgentResearchPrompt.objectivePrefix` 为单一判定源，live 与重载口径一致。
+    public var isResearchObjective: Bool
 
     public init(
         id: UUID = UUID(),
@@ -54,7 +57,8 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
         steps: [AskStepChip] = [],
         isStreaming: Bool = false,
         isDegraded: Bool = false,
-        draftOutputId: UUID? = nil
+        draftOutputId: UUID? = nil,
+        isResearchObjective: Bool = false
     ) {
         self.id = id
         self.role = role
@@ -65,6 +69,18 @@ public struct AskBubble: Identifiable, Equatable, Sendable {
         self.isStreaming = isStreaming
         self.isDegraded = isDegraded
         self.draftOutputId = draftOutputId
+        self.isResearchObjective = isResearchObjective
+    }
+}
+
+/// 调研轮实时进度（流式气泡下挂一行）：当前状态 + 已完成工具步数。
+public struct ResearchLiveProgress: Equatable, Sendable {
+    public let status: String
+    public let stepCount: Int
+
+    public init(status: String, stepCount: Int) {
+        self.status = status
+        self.stepCount = stepCount
     }
 }
 
@@ -275,6 +291,14 @@ public final class AskConversationModel {
         return runner.liveStreaming
     }
 
+    /// 调研轮实时进度：仅本轮 streaming 时非 nil。读 runner 的 @Observable 属性，
+    /// SwiftUI 观察链自动续上——状态随工具步流式更新（与 liveResearchBubble 同一机制）。
+    public var researchLiveProgress: ResearchLiveProgress? {
+        guard isResearchStreaming else { return nil }
+        let status = researchRunner?.liveStatus ?? "调研中…"
+        return ResearchLiveProgress(status: status, stepCount: researchRunner?.liveSteps.count ?? 0)
+    }
+
     /// 把 runner 的 live mirror 投影成对话里的 streaming 气泡（仅在进行中且尚未落库时）。
     /// 读取 runner 的 @Observable 属性 → SwiftUI 观察链自动续上，气泡随流式更新。
     public var liveResearchBubble: AskBubble? {
@@ -301,12 +325,20 @@ public final class AskConversationModel {
         return out
     }
 
-    /// 在当前会话内为某待办发起一轮深度调研（委派 runner，本模型不双写）。
+    /// 在当前会话内为某待办发起一轮深度调研（委派 runner，本模型不双写 assistant 侧）。
     public func startResearch(actionItem: ActionItemSnapshot) {
         guard !isThinking, !isResearchActive else { return }
         ensureSession(titleSeed: String(actionItem.task.prefix(20)))
         guard let meeting, let session else { return }
         wireResearchCallback()
+        // 用户侧回显：runner 只把调研目标落库，不进内存 messages——此处同步补一条，
+        // 让对话窗一打开就锚定「调研的是什么」，assistant 不再凭空出现；
+        // 完成时 loadSession 全量替换为落库记录（同文本同判定，无重影）。
+        messages.append(AskBubble(
+            role: .user,
+            text: AgentResearchPrompt.objective(for: actionItem),
+            isResearchObjective: true
+        ))
         statusLabel = "调研中…"
         isThinking = true
         do {
@@ -466,7 +498,8 @@ public final class AskConversationModel {
                     steps: steps,
                     isStreaming: false,
                     isDegraded: record.isDegraded,
-                    draftOutputId: record.draftOutputId
+                    draftOutputId: record.draftOutputId,
+                    isResearchObjective: role == .user && AgentResearchPrompt.isObjective(record.text)
                 )
             }
     }

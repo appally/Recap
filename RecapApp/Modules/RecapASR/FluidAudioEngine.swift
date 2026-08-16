@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import FluidAudio
 import RecapModels
 
@@ -172,13 +173,53 @@ public enum FluidAudioBootstrap {
     }
 
     /// 端侧 ASR 模型（SenseVoice）是否已预下载完成。
-    /// `maybeOnDeviceUpgrade` 据此决定是否自动重转——避免未预下载用户在 endLive 管线里
-    /// 触发 447MB 下载阻塞纪要。由 `preloadASRModels` 成功置位；prepare 失败时清零保持诚实。
+    /// `maybeOnDeviceUpgrade` / `resolveCloudFirst` 据此决定是否放行自动重转——避免未预下载
+    /// 用户在管线里触发 447MB 下载阻塞纪要（重转超时预算只包 transcribe，不包 prepare 下载）。
+    /// 由 `preloadASRModels` 成功置位；prepare 失败时清零保持诚实。
+    ///
+    /// 标记诚实性：标记存 UserDefaults，而模型目录（Application Support）可能被独立清除——
+    /// 残留 true 时闸门形同虚设，自动路径在 `SenseVoiceManager.load` 里静默现场下载，
+    /// UI 停在「重转中…」无进度无超时（导入首转实测踩坑）。故 getter 同时校验缓存真实在盘，
+    /// 判据与 SDK `SenseVoiceModels.download` 的「要不要下载」严格同口径：闸门开 ⇔ 不会下载。
     private static let preloadedKey = "asr.fluidModelsPreloaded"
     public static var modelsPreloaded: Bool {
-        get { UserDefaults.standard.bool(forKey: preloadedKey) }
+        get { Self.preloadedGate(flag: UserDefaults.standard.bool(forKey: preloadedKey), cacheRoot: nil) }
         set { UserDefaults.standard.set(newValue, forKey: preloadedKey) }
     }
+
+    /// 闸门判定（抽纯函数供确定性测试注入缓存根目录）：标记为真且模型缓存真实在盘。
+    static func preloadedGate(flag: Bool, cacheRoot: URL?) -> Bool {
+        guard flag else { return false }
+        return senseVoiceCachePresent(root: cacheRoot)
+    }
+
+    /// SenseVoice 缓存是否在盘（精度与 `FluidAudioEngine` 的 `preferInt8 = false` 对应，恒 fp16）。
+    /// 目录重建 SDK 私有的 `SenseVoiceModels.modelsRootDirectory()`
+    /// （Application Support/FluidAudio/Models）；存在性用 SDK 公开的 `modelsExist`
+    /// ——即 SDK 决定「下载还是直接加载」的同一判据。
+    public static func senseVoiceCachePresent(root: URL? = nil) -> Bool {
+        guard let modelsRoot = root ?? FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true) else { return false }
+        let dir = modelsRoot.appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true)
+        return SenseVoiceModels.modelsExist(at: dir, precision: .fp16)
+    }
+
+#if DEBUG
+    /// 供单测在临时目录伪造「已预下载」缓存（`modelsExist` 同口径三要件：
+    /// preprocessor .mlmodelc + fp16 encoder .mlmodelc + vocab.json，目录即可）。
+    static func fabricateSenseVoiceCache(root: URL) throws {
+        let dir = root.appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent(ModelNames.SenseVoice.preprocessorFile, isDirectory: true),
+            withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: dir.appendingPathComponent(ModelNames.SenseVoice.encoderFile, isDirectory: true),
+            withIntermediateDirectories: true)
+        try Data("[]".utf8).write(to: dir.appendingPathComponent(ModelNames.SenseVoice.vocabularyFile))
+    }
+#endif
 
     /// 预下载并加载端侧 ASR 模型（SenseVoice），报告进度。
     /// - Parameter progress: `(fraction 0...1, 模型名)`；**在后台队列调用**，UI 更新需自行切主线程。
@@ -189,8 +230,148 @@ public enum FluidAudioBootstrap {
         _ = try await SenseVoiceManager.load(precision: .fp16) { p in
             progress(p.fractionCompleted, "SenseVoice")
         }
+        // 052 P2-3：内容级校验——镜像源的尺寸/HTML 校验之上，按烤定的 LFS 哈希清单复验。
+        // 失配即清除（不留损坏件在盘）、不置闸门，用户重试即重下。
+        guard Self.verifyModelIntegrity(repo: .senseVoiceSmall) else {
+            Self.removeSenseVoiceCache()
+            throw FluidAudioEngineError.assetDownloadFailed("模型校验失败（下载可能损坏），已清除，请重试")
+        }
         // 模型已落盘：排除 iCloud 备份（447MB 级，可重下，见 BackupExclusion）。
         BackupExclusion.excludeFluidAudioModels()
         modelsPreloaded = true   // SenseVoice 就绪；后续 maybeOnDeviceUpgrade 据此放行自动重转
+    }
+
+    // MARK: - 模型管理（052 P2-1/P2-2/P2-3：清理入口 · 闸门对账 · 内容校验）
+
+    /// 已知内容哈希（LFS 文件；2026-08-16 自 hf-mirror tree API 采集，pin 到当前仓库版本）。
+    /// 供应链加固：第三方镜像上的尺寸校验抓不住比特级篡改，这里对大权重做 sha256 复验。
+    /// ⚠️上游若重传权重会失配 → 下载后被清除；升级 FluidAudio / 换仓库版本时须同步更新本清单。
+    /// 非 LFS 小文件（model.mil / vocab.json / metadata.json）不入清单——SDK 尺寸校验已覆盖。
+    private static let lfsSHA256: [Repo: [String: String]] = [
+        .senseVoiceSmall: [
+            "SenseVoicePreprocessor.mlmodelc/analytics/coremldata.bin":
+                "5bdb0b132e48c7e852ec18eeba7e217b6cb7153e6a939ce76b5ed17242e956dd",
+            "SenseVoicePreprocessor.mlmodelc/coremldata.bin":
+                "e64cc73b2a9b01bad799a23874bc20dba3cf3342c23e3f60012c3e884f682944",
+            "SenseVoicePreprocessor.mlmodelc/weights/weight.bin":
+                "69c630a115da5e4db36ec41662f0b776c0ef33ec6776d86f8cdaaba022518396",
+            "SenseVoiceSmall.mlmodelc/analytics/coremldata.bin":
+                "2dd2919d1ef534ecd4d0c9843dea078b0ad337e0918e692d9811cb16a31fb02b",
+            "SenseVoiceSmall.mlmodelc/coremldata.bin":
+                "8af6326236369150e5540e15996877a71b281e98cb9ede6b646c2f4b3d9be88c",
+            "SenseVoiceSmall.mlmodelc/weights/weight.bin":
+                "f435f29513464bcda175e449fd72e28ef5183b963f116394a38eadbbc12ca694",
+        ],
+        .diarizer: [
+            "pyannote_segmentation.mlmodelc/analytics/coremldata.bin":
+                "b379db0541b35344a34bb7540783ae704c11599bbed5aa8bbbda11c20ad215ee",
+            "pyannote_segmentation.mlmodelc/coremldata.bin":
+                "4a450ea1b053b9eb7eef0cab6971018076600840c7e246d064e7c5387f456c98",
+            "pyannote_segmentation.mlmodelc/weights/weight.bin":
+                "0266f4ad4d843ecf31ef9220ad6b80616b3ec64a4404b64f3ea0371554e236ec",
+            "wespeaker_v2.mlmodelc/analytics/coremldata.bin":
+                "d2b1fcde6121aea3ff0e14c1dc50d09dacb0314a2e89156353c31804230a422f",
+            "wespeaker_v2.mlmodelc/coremldata.bin":
+                "6feb2472a71fa9d8a84020c85206138a4f6261c565c9884bf518d59dd5838da7",
+            "wespeaker_v2.mlmodelc/weights/weight.bin":
+                "34004f6798d35cad7071e2fdc67e63faaa782f53697e1cb49bcb452cf81ae151",
+        ],
+    ]
+
+    /// FluidAudio 模型缓存根目录（SDK 私有 `modelsRootDirectory()` 的重建，路径见 senseVoiceCachePresent）。
+    public static func modelsRootURL() -> URL? {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("FluidAudio", isDirectory: true)
+            .appendingPathComponent("Models", isDirectory: true)
+    }
+
+    /// diarizer 缓存目录（pyannote 分段 + WeSpeaker 声纹）。
+    public static func diarizerCacheURL() -> URL? {
+        modelsRootURL()?.appendingPathComponent(Repo.diarizer.folderName, isDirectory: true)
+    }
+
+    /// diarizer 两件套是否在盘（与 `DiarizerModels.download` 的 requiredModels 同口径）。
+    public static func diarizerCachePresent() -> Bool {
+        guard let dir = diarizerCacheURL() else { return false }
+        return FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent(ModelNames.Diarizer.segmentationFile).path)
+            && FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent(ModelNames.Diarizer.embeddingFile).path)
+    }
+
+    /// 递归目录总字节（目录不存在返回 0）。供「本机模型」分区显示占用。
+    public static func directoryBytes(_ url: URL) -> Int64 {
+        guard let en = FileManager.default.enumerator(
+            at: url, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in en {
+            if let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+               values.isRegularFile == true {
+                total += Int64(values.fileSize ?? 0)
+            }
+        }
+        return total
+    }
+
+    /// SenseVoice 缓存占用（字节；未下载返回 0）。「本机模型」分区与对账用（052 P2-1/P2-2）。
+    public static func senseVoiceCacheBytes() -> Int64 {
+        guard let root = modelsRootURL() else { return 0 }
+        return directoryBytes(root.appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true))
+    }
+
+    /// diarizer 缓存占用（字节；未下载返回 0）。
+    public static func diarizerCacheBytes() -> Int64 {
+        guard let dir = diarizerCacheURL() else { return 0 }
+        return directoryBytes(dir)
+    }
+
+    /// 校验在盘模型内容与烤定哈希清单（缺文件/哈希不符 → false）。
+    /// SenseVoice fp16 全集 ~472MB、diarizer ~14MB；sha256 在后台 Task 里跑，设备上数秒。
+    public static func verifyModelIntegrity(repo: Repo) -> Bool {
+        guard let manifest = lfsSHA256[repo],
+              let root = modelsRootURL() else { return false }
+        let repoDir = root.appendingPathComponent(repo.folderName, isDirectory: true)
+        for (relPath, expected) in manifest {
+            let fileURL = repoDir.appendingPathComponent(relPath)
+            guard let stream = InputStream(url: fileURL) else { return false }
+            stream.open()
+            defer { stream.close() }
+            var hasher = SHA256()
+            let bufSize = 1 << 20
+            let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
+            defer { buf.deallocate() }
+            while stream.hasBytesAvailable {
+                let n = stream.read(buf, maxLength: bufSize)
+                if n > 0 { hasher.update(data: Data(bytes: buf, count: n)) }
+                else if n < 0 { return false }
+                else { break }
+            }
+            let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            if hex != expected.lowercased() { return false }
+        }
+        return true
+    }
+
+    /// 删除 SenseVoice 缓存并清闸门/就绪标记（052 P2-1「本机模型」分区）。
+    /// @discardableResult 返回是否实际删除了目录。
+    @discardableResult
+    public static func removeSenseVoiceCache() -> Bool {
+        modelsPreloaded = false
+        guard let root = modelsRootURL() else { return false }
+        let dir = root.appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: dir.path) else { return false }
+        try? FileManager.default.removeItem(at: dir)
+        return true
+    }
+
+    /// 删除 diarizer 缓存（052 P2-1）。⚠️调用方须先 `FluidDiarizer.shared.unload()`——
+    /// 删驻留模型的映射文件有崩溃风险（cleanup/推理竞争由 unload 的 isInferring 等待兜住）。
+    @discardableResult
+    public static func removeDiarizerCache() -> Bool {
+        guard let dir = diarizerCacheURL(),
+              FileManager.default.fileExists(atPath: dir.path) else { return false }
+        try? FileManager.default.removeItem(at: dir)
+        return true
     }
 }

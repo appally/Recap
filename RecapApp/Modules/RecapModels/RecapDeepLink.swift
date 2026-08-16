@@ -30,8 +30,16 @@ public enum RecapDeepLink {
         set {
             lock.withLock { $0 = newValue }
             guard newValue != nil else { return }
-            let post = { NotificationCenter.default.post(name: didUpdateNotification, object: nil) }
-            if Thread.isMainThread { post() } else { DispatchQueue.main.async(execute: post) }
+            // 显式标 @MainActor @Sendable 才能直接作为 `DispatchQueue.main.async(execute:)`
+            // 的 block 参数（SDK 26 起该参数要求 @MainActor @Sendable，普通函数值会告警）。
+            let post: @MainActor @Sendable () -> Void = {
+                NotificationCenter.default.post(name: didUpdateNotification, object: nil)
+            }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { post() }
+            } else {
+                DispatchQueue.main.async(execute: post)
+            }
         }
     }
 }

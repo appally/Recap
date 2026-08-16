@@ -25,8 +25,16 @@ public enum AgentResearchPrompt {
     「来源清单」每行一个来源（URL 或 mm:ss 转写时间）。
     """
 
+    /// 调研目标固定前缀：持久化 user 记录与内存气泡共用；对话窗据此识别「调研任务卡」。
+    public static let objectivePrefix = "调研并拟定方案："
+
     public static func objective(for item: ActionItemSnapshot) -> String {
-        "调研并拟定方案：\(item.task)"
+        objectivePrefix + item.task
+    }
+
+    /// 持久化记录文本 → 是否调研目标（live 发起与 loadSession 重载走同一判定，渲染口径一致）。
+    public static func isObjective(_ text: String) -> Bool {
+        text.hasPrefix(objectivePrefix)
     }
 
     public static func userPrompt(

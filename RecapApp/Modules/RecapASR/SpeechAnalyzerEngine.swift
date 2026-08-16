@@ -66,7 +66,7 @@ public actor SpeechAnalyzerEngine: AsrEngine {
             guard status != .installed else { return }
             guard let request = try? await AssetInventory.assetInstallationRequest(supporting: [probe]) else { return }
             try? await request.downloadAndInstall()
-            try? await AssetInventory.reserve(locale: locale)
+            _ = try? await AssetInventory.reserve(locale: locale)
         }
     }
 

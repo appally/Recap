@@ -32,7 +32,8 @@ public enum PipelineStage: Equatable {
     case organizing  // 管线已启动，等待首段摘要（梳理原稿）
     case generating  // 摘要流式中（提炼议题/决议/待办）
     case done        // 管线结束
-    case retranscribing  // 检测到方言，云端 Fun-ASR 精转中（会后自动重转）
+    /// 会后自动重转（endLive 专属）：方言→云端 Fun-ASR；端侧→SenseVoice。文案随来源区分。
+    case retranscribing(RetranscribeCause)
 
     /// 主句：随阶段切换，由 .id() 触发 contentTransition 平滑变形。
     public var title: String {
@@ -41,7 +42,28 @@ public enum PipelineStage: Equatable {
         case .organizing: return "正在梳理语音对话原稿…"
         case .generating: return "正在提炼核心议题与关键决议…"
         case .done: return "整理完毕"
-        case .retranscribing: return "检测到方言口音，云端精转中…"
+        case .retranscribing(let cause): return cause.stageTitle
+        }
+    }
+
+    /// 是否处于纪要管线可询问进度的阶段（organizing/generating/会后重转）。
+    public var isProcessingStage: Bool {
+        switch self {
+        case .organizing, .generating, .retranscribing: return true
+        default: return false
+        }
+    }
+}
+
+/// 会后自动重转的触发来源（舞台文案据此区分，避免端侧路径误显方言话术）。
+public enum RetranscribeCause: Equatable {
+    case dialect    // 端侧置信度低判定方言 → 云端 Fun-ASR 精转
+    case onDevice   // 实验开关 → SenseVoice 本机高保真重转
+
+    var stageTitle: String {
+        switch self {
+        case .dialect:  return "检测到方言口音，云端精转中…"
+        case .onDevice: return "本机高保真精转中…"
         }
     }
 }
@@ -65,7 +87,7 @@ public final class MeetingSession: ObservableObject {
     /// 仅在整理阶段非 nil；stage 变化触发 body 重渲染时刷新，不做秒级 tick。
     public var pipelineProgressText: String? {
         guard phase == .processing,
-              pipelineStage == .organizing || pipelineStage == .generating || pipelineStage == .retranscribing,
+              pipelineStage.isProcessingStage,
               let started = pipelineStartedAt
         else { return nil }
         let elapsed = Int(Date().timeIntervalSince(started))
@@ -852,22 +874,11 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
-    /// 重转引擎解析意图：指定引擎 / 跟随偏好 / 云端优先（不向用户暴露引擎名）。
-    private enum RetranscribeIntent { case kind(AsrEngineKind), auto, cloudFirst }
-
-    /// REVIEW：触发本地音频重转写（后台 Task，可被 `cancelPostMeetingCompute` 取消）。
-    /// - Parameter engineKind: 指定重转引擎（如 `.fluidSenseVoice` 端侧高保真）；nil 跟随用户 LIVE 偏好。
-    public func retranscribeFromDisk(engineKind: AsrEngineKind? = nil) {
-        // 防重入：不与在飞重转/分离/润色并发。重转会使分离标签与新 raw 失效（清 polished、重排分离），
-        // 运行中再发起纯属浪费 + 竞争。
-        guard !isRetranscribing, !isDiarizing, !isPolishing else { return }
-        // 同步置位：堵住「两次点击间 Task 尚未起跑、flag 仍为 false」的竞态窗口。
-        isRetranscribing = true
-        let intent: RetranscribeIntent = engineKind.map { .kind($0) } ?? .auto
-        retranscribeTask = Task { [weak self] in
-            _ = await self?.performRetranscribe(intent: intent, chainPostProcess: true)
-        }
-    }
+    /// 重转引擎解析意图：跟随偏好 / 云端优先（不向用户暴露引擎名）。
+    /// 历史上的 `kind(AsrEngineKind)` 指名路径已删（052 P2-4）：cloudFirst 的回落链
+    /// （Fun-ASR → SpeechAnalyzer → SenseVoice）已覆盖「指名端侧重转」的全部真实场景
+    /// （无网/额度尽/非 AI 机型），专设菜单项冗余。
+    private enum RetranscribeIntent { case auto, cloudFirst }
 
     /// 「重新转写」单一入口：云端优先（托管档实际跑 paraformer-realtime-v2），无凭证端侧兜底；
     /// 不向用户暴露引擎名。完成后自动联动润色 + 分离。
@@ -953,7 +964,8 @@ public final class MeetingSession: ObservableObject {
     /// 重转结果覆盖判定：旧稿已有实质内容（≥200 字）而新结果不足其 60% 字数时拒收——
     /// 网络故障/中途 403 会让云端分块重转静默跳段，返回部分结果；覆盖即丢字幕。
     /// 与 endLive 的「保留更完整一侧」同范式。
-    nonisolated private static func shouldRejectRetranscribe(
+    /// 三条重转路径（手动/方言云端/端侧升级）共用；internal 供 RecapUITests 回归。
+    nonisolated static func shouldRejectRetranscribe(
         new: [TranscriptSegment], old: [TranscriptSegment]
     ) -> Bool {
         let oldChars = old.reduce(0) { $0 + $1.text.count }
@@ -1006,7 +1018,6 @@ public final class MeetingSession: ObservableObject {
             }
             let engine: any AsrEngine
             switch intent {
-            case .kind(let kind): engine = try await AsrEngineResolver.resolve(kind: kind)
             case .auto:           engine = try await AsrEngineResolver.resolve()
             case .cloudFirst:     engine = try await AsrEngineResolver.resolveCloudFirst()
             }
@@ -1090,7 +1101,7 @@ public final class MeetingSession: ObservableObject {
             try? await RecapCredentialProvider.shared.ensureFresh()
         }
 
-        pipelineStage = .retranscribing
+        pipelineStage = .retranscribing(.dialect)
         markPipelineStarted()
         var preparedEngine: (any AsrEngine)?
         defer { if let e = preparedEngine { Task { await e.release() } } }
@@ -1151,7 +1162,8 @@ public final class MeetingSession: ObservableObject {
     /// 会后端侧高保真升级（普通话路径）：LIVE 用 Apple SpeechAnalyzer 产出后，若开启实验开关，
     /// 用端侧 SenseVoice 重转 PCM 提升中文精度 + 补标点/情感。仅 .speechAnalyzer 路径触发
     /// （Pro 云端 LIVE 已是高保真，不升级；fork B：端侧优先给 Free/BYOK，Pro 保云端）。
-    /// 与方言重转互斥（方言已重转则跳过）。失败/模型未就绪/取消均静默保留原转写，不阻断纪要。
+    /// 与方言重转串联：方言重转成功则跳过；未成功（非方言/失败/额度尽）才落到本路径
+    /// （行为上是方言的二道兜底，SenseVoice 亦支持 zh/yue）。失败/模型未就绪/取消均静默保留原转写，不阻断纪要。
     /// 默认关（fluidRetranscribeEnabled），真机 POC 验证 SenseVoice CoreML 质量/性能后再考虑默认开。
     private func maybeOnDeviceUpgrade(engineKind: AsrEngineKind?) async {
         guard ASRFeatureFlags.fluidRetranscribeEnabled else { return }
@@ -1168,9 +1180,11 @@ public final class MeetingSession: ObservableObject {
             return
         }
 
-        pipelineStage = .retranscribing
+        pipelineStage = .retranscribing(.onDevice)
         markPipelineStarted()
-        statusMessage = "端侧高保真重转中…"
+        // 不写 statusMessage：processing 态不渲染该字段，且 commitAISummary 进 REVIEW 时
+        // 不清空——成功后会以「重转中…」残留在转写页头部。舞台标题已按来源区分，失败路径
+        // 按设计静默保留原转写（实验特性，不打扰）。
         var preparedEngine: (any AsrEngine)?
         defer { if let e = preparedEngine { Task { await e.release() } } }
         do {
@@ -1197,6 +1211,12 @@ public final class MeetingSession: ObservableObject {
             guard meetingIsWritable else { return }
             guard !result.segments.isEmpty else {
                 RecapLog.session.info("on-device-upgrade: 重转无字幕，保留原转写")
+                return
+            }
+            // 同 performRetranscribe/方言路径：拒收显著变短的残缺结果——SenseVoice 大面积丢字时
+            // 直接整表覆盖会毁掉更完整的 LIVE 稿（三条重转路径此前唯独这里缺这道守卫）。
+            if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
+                RecapLog.session.info("on-device-upgrade: 重转结果显著少于原转写，保留原稿")
                 return
             }
             meeting.segments = result.segments
@@ -1454,7 +1474,8 @@ public final class MeetingSession: ObservableObject {
             self.liveDialectSuspected = false
 
             // 方言自动重转（端侧产出且判定方言 -> 云端 Fun-ASR 重转；失败/非方言降级放行）
-            // 与端侧升级互斥：方言已重转则跳过；普通话（.keep）才走 SenseVoice 端侧高保真升级
+            // 串联次序：方言云端重转优先，成功即跳过端侧；未成功（.keep/失败/额度尽）才落
+            // SenseVoice 端侧升级——后者是前者的二道兜底，两者不会都跑。
             let dialectRetranscribed = await self.maybeDialectRetranscribe(engineKind: recordingToStop?.engineKind)
             if !dialectRetranscribed {
                 await self.maybeOnDeviceUpgrade(engineKind: recordingToStop?.engineKind)

@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import MapKit
 import RecapModels
 
 /// 开录时自动采集会议地点（GPS 一次性定位 + 反地理编码）。
@@ -24,15 +25,17 @@ public final class LocationCaptureService {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard let coordinate = await self.currentCoordinate() else { return }
-            let placemark = await self.reverseGeocode(
+            let item = await self.reverseGeocode(
                 CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
             )
-            // 反编码失败 / 无可读地址 → 不落库（location 保持 nil，UI 不展示地点行）
-            guard let placemark,
+            // 反编码失败 / 无可读地址 → 不落库（location 保持 nil，UI 不展示地点行）。
+            // MKMapItem 没有 locality/thoroughfare 细分字段：POI 名仍优先；
+            // 回退串用 shortAddress（缺则 fullAddress）整体充当原「区 + 街道」角色。
+            guard let item,
                   let label = MeetingLocation.composeLabel(
-                      .init(name: placemark.name,
-                            locality: placemark.locality,
-                            thoroughfare: placemark.thoroughfare)
+                      .init(name: item.name,
+                            locality: item.address?.shortAddress ?? item.address?.fullAddress,
+                            thoroughfare: nil)
                   ) else { return }
             // 删除竞态（C1）：定位 8s + 反编码 await 期间会议可能已删除——写已销毁模型会崩溃
             guard !meeting.isDeleted, meeting.modelContext != nil else { return }
@@ -75,12 +78,11 @@ public final class LocationCaptureService {
         }
     }
 
-    /// 单次、串行反地理编码（CLGeocoder 不可并发且限流；开录仅调一次）。
-    private func reverseGeocode(_ location: CLLocation) async -> CLPlacemark? {
-        do {
-            return try await CLGeocoder().reverseGeocodeLocation(location).first
-        } catch {
-            return nil
-        }
+    /// 单次、串行反地理编码（开录仅调一次；失败返回 nil 不落库）。
+    /// iOS 26 起弃用 CLGeocoder，改用 MapKit `MKReverseGeocodingRequest`（结果为 MKMapItem）。
+    private func reverseGeocode(_ location: CLLocation) async -> MKMapItem? {
+        guard let request = MKReverseGeocodingRequest(location: location) else { return nil }
+        let items = try? await request.mapItems
+        return items?.first
     }
 }

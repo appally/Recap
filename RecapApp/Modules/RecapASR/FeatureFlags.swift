@@ -10,7 +10,9 @@ public enum ASRFeatureFlags {
     /// 会后端侧高保真重转写（FluidAudio SenseVoice）自动升级入口。
     /// 默认值按构建区分：DEBUG 默认开（真机 POC / 自测自动升级）；Release 默认关——避免被动 447MB
     /// 端侧模型后台下载与未标定方言阈值自动云端重转。用户可在设置显式打开（显式选择始终被尊重）。
-    /// 自动重转有 modelsPreloaded 闸门（未预下载则跳过，绝不触发下载）；手动重转菜单用户点选才下载。
+    /// 自动重转（maybeOnDeviceUpgrade）与手动「重新转写」（resolveCloudFirst 兜底）共用
+    /// modelsPreloaded 闸门——开关开 ⇔ 缓存已在盘，绝不被动下载；唯一下载入口是
+    /// 设置页预下载卡（用户显式点按）。
     public static var fluidRetranscribeEnabled: Bool {
         get {
             if UserDefaults.standard.object(forKey: fluidRetranscribeKey) == nil {

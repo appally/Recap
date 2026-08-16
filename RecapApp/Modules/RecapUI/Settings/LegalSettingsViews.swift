@@ -246,22 +246,21 @@ struct AboutRecapView: View {
 /// 开源许可致谢（随包分发的第三方组件与模型权重来源）。
 /// License 类型均按本地 SPM checkout 的 LICENSE 文件核实（2026-08-15）。
 struct OpenSourceAcknowledgementsView: View {
-    /// (名称, 许可, 用途)
+    /// (名称, 许可, 用途)——仅列实际链接进 App 二进制的依赖；swift-argument-parser
+    /// 是构建工具链依赖未随包分发，不列。
     private static let libraries: [(name: String, license: String, role: String)] = [
         ("mermaid.js", "MIT", "Markdown 图表渲染（流程图 / 时序图）"),
         ("FluidAudio", "Apache-2.0", "端侧语音转写与说话人分离"),
-        ("argmax SpeakerKit (argmax-oss-swift)", "MIT", "端侧说话人声纹嵌入"),
+        ("argmax SpeakerKit", "MIT", "端侧说话人声纹嵌入"),
         ("OpenAI Swift SDK (MacPaw)", "MIT", "大模型 API 客户端"),
-        ("swift-argument-parser", "Apache-2.0", "命令行参数解析（依赖传递）"),
-        ("swift-http-types", "Apache-2.0", "HTTP 类型（依赖传递）"),
-        ("swift-openapi-runtime", "Apache-2.0", "OpenAPI 运行时（依赖传递）"),
+        ("swift-openapi-runtime · swift-http-types", "Apache-2.0", "OpenAI SDK 运行时依赖（随 App 链接）"),
     ]
 
-    /// 模型权重：代码许可与权重发布条款分开，如实注明来源与条款位置。
+    /// 模型权重：代码许可与权重发布条款分开，如实注明分发方式与条款位置。
     private static let modelWeights: [(name: String, source: String, terms: String)] = [
-        ("SenseVoice 语音识别模型", "FunAudioLLM（Hugging Face / hf-mirror 分发）", "权重遵循其发布页条款"),
-        ("pyannote 说话人分离模型", "pyannote-audio（Hugging Face / hf-mirror 分发）", "代码 MIT；权重遵循 HF 发布页条款"),
-        ("WeSpeaker 声纹模型", "WeSpeaker（Hugging Face / hf-mirror 分发）", "代码 Apache-2.0；权重遵循 HF 发布页条款"),
+        ("SenseVoice 语音识别模型", "FunAudioLLM · 随包预置", "权重遵循其发布页条款"),
+        ("pyannote 说话人分离模型", "pyannote-audio · 使用时下载", "代码 MIT；权重遵循 HF 发布页条款"),
+        ("WeSpeaker 声纹模型", "WeSpeaker · 使用时下载", "代码 Apache-2.0；权重遵循 HF 发布页条款"),
     ]
 
     var body: some View {
@@ -295,7 +294,7 @@ struct OpenSourceAcknowledgementsView: View {
                 }
 
                 VStack(alignment: .leading, spacing: Spacing.sm) {
-                    Text("内置模型权重")
+                    Text("模型权重")
                         .font(.recapEyebrow)
                         .tracking(Tracking.eyebrow)
                         .foregroundStyle(Color.recapTea)

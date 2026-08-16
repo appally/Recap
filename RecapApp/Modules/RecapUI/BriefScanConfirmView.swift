@@ -157,7 +157,8 @@ struct BriefScanConfirmView: View {
     }
 
     private func removeOpenItem(_ index: Int) {
-        withAnimation(removeAnimation) {
+        // 闭包末句是 remove 的返回值（被删元素），withAnimation 结果须显式丢弃。
+        _ = withAnimation(removeAnimation) {
             openItems.remove(at: index)
         }
     }

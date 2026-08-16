@@ -1,5 +1,7 @@
 /** 配额纯函数(无副作用,易测)。月度周期:按 30 天窗口对齐。 */
 
+import { DEFAULT_EXPIRE_SECONDS } from '../env';
+
 export interface QuotaState {
   usedSeconds: number;
   periodStart: number; // epoch ms
@@ -35,6 +37,22 @@ export function checkQuota(
     nextState: { usedSeconds: nextUsed, periodStart },
     remainingSeconds: limitSeconds - nextUsed,
   };
+}
+
+/**
+ * 实耗档(免费 ASR / Pro)本次签发的扣额:距上次签发实际流逝的秒数,封顶一个 token 寿命。
+ * 时间戳均为 epoch ms(DO 存储原样),换算成秒后才进配额——曾因 ms 当 s 直接比较,
+ * 2s 后的段间续签也被按满额 1800s 扣,免费 ASR 桶(300s)一次签发后全部续签被拒。
+ * - reset(跨周期首签):不扣额(「首签0」容忍;防刷由 30 天窗口兜底)。
+ * - 旧记录无时间戳:按满额 1800s 计(无法证实未用,从紧)。
+ */
+export function elapsedChargeSeconds(
+  lastIssueMs: number | undefined,
+  reset: boolean,
+  nowMs: number,
+): number {
+  const last = reset ? nowMs : lastIssueMs ?? nowMs - DEFAULT_EXPIRE_SECONDS * 1000;
+  return Math.min(Math.max((nowMs - last) / 1000, 0), DEFAULT_EXPIRE_SECONDS);
 }
 
 /**

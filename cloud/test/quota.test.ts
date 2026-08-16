@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkQuota, mergeIfSamePeriod, MONTH_MS } from '../src/core/quota';
+import { checkQuota, elapsedChargeSeconds, mergeIfSamePeriod, MONTH_MS } from '../src/core/quota';
 
 describe('checkQuota', () => {
   const limit = 108000; // 30h/月
@@ -59,6 +59,38 @@ describe('checkQuota — 免费档固定扣额(FREE_PER_ISSUE=120)', () => {
     const over = checkQuota(state, anonLimit, now, perIssue);
     expect(over.allow).toBe(false);
     expect(over.remainingSeconds).toBe(0);
+  });
+});
+
+describe('elapsedChargeSeconds — 实耗扣额(回归:ms 当 s 用,2s 续签被扣满 1800 拒签)', () => {
+  const now = 1_700_000_000_000;
+
+  it('跨周期首签不扣额(「首签0」容忍)', () => {
+    expect(elapsedChargeSeconds(undefined, true, now)).toBe(0);
+    expect(elapsedChargeSeconds(now - 5 * 60 * 1000, true, now)).toBe(0);
+  });
+
+  it('短间隔续签按实际秒数扣:2s 间隔扣 2s(曾误扣满 1800s)', () => {
+    expect(elapsedChargeSeconds(now - 2_000, false, now)).toBe(2);
+  });
+
+  it('长间隔封顶一个 token 寿命(1800s)', () => {
+    expect(elapsedChargeSeconds(now - 40 * 60 * 1000, false, now)).toBe(1800);
+  });
+
+  it('旧记录无时间戳:按满额 1800s 计(从紧)', () => {
+    expect(elapsedChargeSeconds(undefined, false, now)).toBe(1800);
+  });
+
+  it('回归场景:免费 ASR 匿名桶(300s)首签后 2s 续签应放行', () => {
+    // 首签:reset=true,charge=0
+    const first = checkQuota({ usedSeconds: 0, periodStart: now - (now % MONTH_MS) }, 300, now, elapsedChargeSeconds(undefined, true, now));
+    expect(first.allow).toBe(true);
+    expect(first.remainingSeconds).toBe(300);
+    // 2s 后段间续签:charge=2,而非旧 bug 的 1800
+    const second = checkQuota(first.nextState, 300, now, elapsedChargeSeconds(now - 2_000, false, now));
+    expect(second.allow).toBe(true);
+    expect(second.remainingSeconds).toBe(298);
   });
 });
 

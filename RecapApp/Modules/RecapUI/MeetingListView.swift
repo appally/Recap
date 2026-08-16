@@ -236,7 +236,8 @@ public struct MeetingListView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 header
-                    .padding(.bottom, Spacing.huge)
+                    // 头部→列表：48 收到 32——顶部不再空悬，列表上移接管页面重心
+                    .padding(.bottom, Spacing.xxxl)
                     .offset(y: appeared ? 0 : enterOffset(14))
                     .animation(enterAnimation(0), value: appeared)
 
@@ -371,28 +372,36 @@ public struct MeetingListView: View {
     }
 
     /// 编辑风数字排版：数字 mono 提亮成墨色、单位留茶灰——统计行不再是均质灰串。
+    /// iOS 26 弃用 Text 的 `+` 拼接：改用 AttributedString run 级样式（run 属性优先
+    /// 于外层 Text 修饰符，与原逐段拼接的样式语义一致）。
     private var statsRow: Text {
         let total = todayMeetings.count + earlierMeetings.count
-        var parts: [Text] = []
+        var parts: [AttributedString] = []
         if total > 0 {
-            parts.append(
-                Text("\(total)")
-                    .font(.recapMono.weight(.medium))
-                    .foregroundStyle(Color.recapInk)
-                + Text(" 场记录").foregroundStyle(Color.recapTea)
-            )
+            parts.append(Self.statsPair(count: total, unit: " 场记录"))
         }
         if openTodoCount > 0 {
-            parts.append(
-                Text("\(openTodoCount)")
-                    .font(.recapMono.weight(.medium))
-                    .foregroundStyle(Color.recapInk)
-                + Text(" 条待办").foregroundStyle(Color.recapTea)
-            )
+            parts.append(Self.statsPair(count: openTodoCount, unit: " 条待办"))
         }
         guard let first = parts.first else { return Text("") }
-        let separator = Text(" · ").foregroundStyle(Color.recapTea.opacity(0.75))
-        return parts.dropFirst().reduce(first) { result, part in result + separator + part }
+        var separator = AttributedString(" · ")
+        separator.foregroundColor = Color.recapTea.opacity(0.75)
+        var joined = first
+        for part in parts.dropFirst() {
+            joined += separator
+            joined += part
+        }
+        return Text(joined)
+    }
+
+    /// 数字段（mono 墨色）+ 单位段（茶灰）。
+    private static func statsPair(count: Int, unit: String) -> AttributedString {
+        var number = AttributedString("\(count)")
+        number.font = Font.recapMono.weight(.medium)
+        number.foregroundColor = Color.recapInk
+        var unitText = AttributedString(unit)
+        unitText.foregroundColor = Color.recapTea
+        return number + unitText
     }
 
     private var statsLine: String {
@@ -434,7 +443,7 @@ public struct MeetingListView: View {
     private func meetingSection(_ label: String, meetings: [Meeting], emphasizeTimeOnly: Bool) -> some View {
         let drafts = meetings.filter { $0.phase == .live }
         let finished = meetings.filter { $0.phase != .live }
-        return VStack(alignment: .leading, spacing: Spacing.lg) {
+        return VStack(alignment: .leading, spacing: Spacing.xl) {
             sectionEyebrow(label, count: meetings.count)
 
             if !drafts.isEmpty {
@@ -484,13 +493,12 @@ public struct MeetingListView: View {
         .recapPaperShadow()
     }
 
-    /// 纸面组内行分隔线：leading 对齐时刻轴右缘（行内 padding + 时刻列 + 列间距），
-    /// 分隔线从内容起笔而非纸边——文档式缩进呼吸。
+    /// 纸面组内行分隔线：leading 对齐内容起笔（行内 padding）——文档式缩进呼吸。
     private var rowDivider: some View {
         Rectangle()
             .fill(Color.recapTea.opacity(0.08))
             .frame(height: 0.8)
-            .padding(.leading, Spacing.lg + MeetingListRow.timeColumnWidth + Spacing.lg)
+            .padding(.leading, Spacing.lg)
     }
 
     private func meetingButton(_ m: Meeting, emphasizeTimeOnly: Bool = false, shell: RowShell? = nil) -> some View {
@@ -728,7 +736,7 @@ public struct MeetingListView: View {
             Button {
                 showImport = true
             } label: {
-                RecapToolbarIconImage(RecapSymbol.importFile)
+                RecapToolbarIconImage(RecapSymbol.importAudio)
             }
             .buttonStyle(RecapPressStyle())
             .accessibilityLabel("导入音频")
@@ -803,21 +811,11 @@ private struct LiveMeetingCard: View {
 
             Spacer(minLength: 0)
 
-            // 极简微胶囊「接上 ›」：Button-in-Button——箭头套小圆壳，不裸放
-            HStack(spacing: 5) {
-                Text("接上")
-                    .font(.recapMeta.weight(.semibold))
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color.recapTea)
-                    .frame(width: 16, height: 16)
-                    .background(Color.recapTea.opacity(0.12), in: Circle())
-            }
-            .foregroundStyle(Color.recapTea)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(Color.recapTea.opacity(0.10), in: Capsule())
-            .accessibilityHidden(true)
+            // 行尾指引：裸 chevron——全行可点，「接上」胶囊是装饰（v6 教训：加的元素会被判多余）
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.recapTea.opacity(0.55))
+                .accessibilityHidden(true)
         }
         // bezel 壳有 6pt 内衬，行内 padding 收一档抵消壳厚，内容密度与普通行近似
         .padding(.horizontal, Spacing.md)
@@ -829,18 +827,14 @@ private struct LiveMeetingCard: View {
 
 // MARK: - List Row
 
-/// Agenda 时间轴行：左列 mono 时刻成轴（全列表行严格纵向对齐）、垂直 hairline 分界、
-/// 右区标题 + TL;DR + 时长。日期语境由区段眉标承担，左列永远只放表盘时刻。
+/// 传统单列行（v7.2 撤 54pt 时刻轴列）：标题（唯一墨色主角）+ 单行 TL;DR +
+/// 末行「时刻 · 时长」mono 台账注脚。日期语境由区段眉标承担，时间不再单独成列。
 private struct MeetingListRow: View {
     let meeting: Meeting
-    /// 左列时刻：今天区与按日分组区均为纯时刻文本（分组语境由眉标承担）。
+    /// 行尾时刻：今天区与按日分组区均为纯时刻文本（分组语境由眉标承担）。
     let whenText: String
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// 时刻列宽：全列表统一，各行时刻纵向成轴；mono tabular 保证数字宽度一致。
-    /// rowDivider 的 leading 缩进依赖此值，改动需同步。
-    static let timeColumnWidth: CGFloat = 54
 
     private var isShortEmptyMeeting: Bool {
         if let preview = meeting.tldrPreview, preview.contains("无有效会议内容") {
@@ -850,73 +844,61 @@ private struct MeetingListRow: View {
     }
 
     var body: some View {
-        HStack(alignment: isShortEmptyMeeting ? .center : .top, spacing: Spacing.lg) {
-            // 左列时刻：mono 提亮成墨色——时间轴是行的锚点，不是灰注脚
-            Text(whenText)
-                .font(.recapMono.weight(.medium))
-                .foregroundStyle(Color.recapInk.opacity(isShortEmptyMeeting ? 0.6 : 1.0))
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-                .frame(width: Self.timeColumnWidth, alignment: .leading)
-
-            // 垂直 hairline：时间轴与内容的分界
-            Rectangle()
-                .fill(Color.recapTea.opacity(0.15))
-                .frame(width: 0.8)
-
-            if isShortEmptyMeeting {
-                HStack(spacing: Spacing.sm) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                if isShortEmptyMeeting {
                     Text(meeting.title)
                         .font(.recapBodyS)
                         .foregroundStyle(Color.recapTea)
                         .lineLimit(1)
-                    Spacer()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
                     Text(meeting.durationSeconds > 0 ? meeting.durationText : "未录音")
                         .font(.recapCaption)
                         .foregroundStyle(Color.recapTea.opacity(0.75))
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .center, spacing: 8) {
-                        Text(meeting.title)
-                            .font(.recapTitleS)
-                            .tracking(Tracking.titleS)
-                            .foregroundStyle(Color.recapInk)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    Text(meeting.title)
+                        .font(.recapTitleS)
+                        .tracking(Tracking.titleS)
+                        .foregroundStyle(Color.recapInk)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        // 处理中状态：标题行尾独立胶囊，不混入底栏灰文，避免被读成普通上下文
-                        if meeting.phase == .processing {
-                            processingBadge
-                                .layoutPriority(1)
-                        }
-                    }
-                    // 胶囊出现/消失平滑插值，不硬切；reduceMotion 交给系统默认（无动画）
-                    .animation(reduceMotion ? nil : .recapSoft, value: meeting.phase == .processing)
-
-                    if let preview = meeting.tldrPreview {
-                        Text(preview)
-                            .font(.recapBodyS)
-                            .foregroundStyle(Color.recapTea)
-                            .lineLimit(2)
-                            .lineSpacing(Leading.tight)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    // 时长：时长为 0 的异常会议不展示（durationText 会给出「—」，比露出更干净）
-                    if meeting.durationSeconds > 0 {
-                        Text(meeting.durationText)
-                            .font(.recapMono)
-                            .foregroundStyle(Color.recapTea.opacity(0.85))
-                            .lineLimit(1)
+                    // 处理中状态：标题行尾独立胶囊，不混入台账注脚，避免被读成普通上下文
+                    if meeting.phase == .processing {
+                        processingBadge
+                            .layoutPriority(1)
                     }
                 }
             }
+            // 胶囊出现/消失平滑插值，不硬切；reduceMotion 交给系统默认（无动画）
+            .animation(reduceMotion ? nil : .recapSoft, value: meeting.phase == .processing)
+
+            if !isShortEmptyMeeting {
+                if let preview = meeting.tldrPreview {
+                    Text(preview)
+                        .font(.recapBodyS)
+                        .foregroundStyle(Color.recapTea)
+                        .lineLimit(1)
+                }
+
+                // 末行台账注脚：时刻 · 时长独占一行（不挤标题行、不混摘要）
+                Text(trailingMetaText)
+                    .font(.recapMono)
+                    .foregroundStyle(Color.recapTea.opacity(0.85))
+                    .lineLimit(1)
+            }
         }
         .padding(.horizontal, Spacing.lg)
-        .padding(.vertical, isShortEmptyMeeting ? Spacing.md : Spacing.lg)
+        // 行内呼吸：16→20——v7 减文本后行高偏紧，密度让位于留白（信息少一行，空气多一档）
+        .padding(.vertical, isShortEmptyMeeting ? Spacing.lg : Spacing.xl)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    /// 行尾台账注脚：「时刻 · 时长」；无时长的异常会议只留时刻。
+    private var trailingMetaText: String {
+        meeting.durationSeconds > 0 ? "\(whenText) · \(meeting.durationText)" : whenText
     }
 
     /// 处理中状态胶囊：标题行尾，赭石软底；仅 phase == .processing 出现，提示纪要尚未就绪。

@@ -79,10 +79,12 @@ public enum AudioImporter {
         //（照抄 Bench 的 @unchecked Sendable 持有模式）。
         final class FeedState: @unchecked Sendable {
             var pending: AVAudioPCMBuffer?
+            // 总帧数也入 box：写点在下方局部函数里，编译器对被捕获变量的流分析会
+            // 误判 `guard totalFrames > 0` 恒走 throw、return 不可达（误报
+            // "Will never be executed"）；走类属性即不经过该分析。
+            var totalFrames: Int64 = 0
         }
         let state = FeedState()
-
-        var totalFrames: Int64 = 0
         let inChunk: AVAudioFrameCount = 16384
         let outChunk: AVAudioFrameCount = 32768
         // 防御性安全阀：converter 若因格式怪癖反复返回 .haveData 且 0 帧，避免死循环。
@@ -111,7 +113,7 @@ public enum AudioImporter {
                 } catch {
                     throw AudioImportError.writeFailed
                 }
-                totalFrames += Int64(out.frameLength)
+                state.totalFrames += Int64(out.frameLength)
             }
             return status
         }
@@ -145,7 +147,7 @@ public enum AudioImporter {
             drainIterations += 1
         }
 
-        guard totalFrames > 0 else { throw AudioImportError.emptyOutput }
-        return Result(frameCount: totalFrames)
+        guard state.totalFrames > 0 else { throw AudioImportError.emptyOutput }
+        return Result(frameCount: state.totalFrames)
     }
 }

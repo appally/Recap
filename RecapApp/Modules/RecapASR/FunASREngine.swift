@@ -241,7 +241,7 @@ public actor FunASREngine: AsrEngine {
         if let t = sendTask {
             self.sendTask = nil
             let drained = DrainFlag()
-            await RaceTimeout.run(seconds: 3) { [weak self] in
+            await RaceTimeout.run(seconds: 3) {
                 await t.value
                 drained.set(true)
             }
@@ -501,7 +501,7 @@ public actor FunASREngine: AsrEngine {
     private func waitUntilTaskStarted(timeoutSeconds: Double) async throws {
         // 快速路径：事件已先于等待到达（task-started/task-failed 已置位）。
         if taskStarted || taskFailedMessage != nil { return }
-        try await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             taskStartCont = cont
             taskStartTimeoutTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(timeoutSeconds))

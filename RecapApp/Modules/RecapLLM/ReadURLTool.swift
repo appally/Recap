@@ -52,7 +52,7 @@ public enum ReadURLTool {
 
     public static func normalize(_ raw: String, maxChars: Int) -> String {
         let capped = max(maxChars, 1)
-        var lines = raw
+        let lines = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .components(separatedBy: "\n")

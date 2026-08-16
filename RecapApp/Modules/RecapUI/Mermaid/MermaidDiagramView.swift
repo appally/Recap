@@ -117,10 +117,12 @@ struct MermaidDiagramView: UIViewRepresentable {
             renderedTheme = theme
             renderTask?.cancel()
             let mode = allowsZoom ? "fullscreen" : "inline"
+            let script = "renderMermaid(\(quoted), '\(theme)', '\(mode)')"
             renderTask = Task { @MainActor [weak webView] in
                 try? await Task.sleep(nanoseconds: 80_000_000)
                 guard !Task.isCancelled, let webView else { return }
-                webView.evaluateJavaScript("renderMermaid(\(quoted), '\(theme)', '\(mode)')", completionHandler: nil)
+                // completionHandler 版已弃用；async 版返回 Any，显式丢弃避免未用结果告警。
+                _ = try? await webView.evaluateJavaScript(script)
             }
         }
 

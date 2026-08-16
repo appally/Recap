@@ -1110,9 +1110,9 @@ public struct MeetingNoteView: View {
 
     /// REVIEW 顶栏 SafeArea + Floating Bar 避让（Color.clear 占位高度），与 customTopBar 实际高度对齐。
     private var reviewTopClear: CGFloat { 60 }
-    /// REVIEW 正文底部留白 = AgentAskBar(44) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 140。
-    /// 确保滚动到最底部时所有文字与待办完全露出，不被悬浮输入栏遮挡。
-    private var reviewBottomPadding: CGFloat { 140 }
+    /// REVIEW 正文底部留白 = AgentAskBar(48) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 144。
+    /// 确保滚动到最底部时所有文字与待办完全露出，不被悬浮输入栏遮挡。调 AskBar 高度须同步调此值。
+    private var reviewBottomPadding: CGFloat { 144 }
 
     private func scrollLiveToLatest(proxy: ScrollViewProxy) {
         guard session.blocks.last != nil else { return }
@@ -1551,7 +1551,7 @@ public struct MeetingNoteView: View {
         return meeting.segments.map { TranscriptBlock(segment: $0, speakers: meeting.speakers) }
     }
 
-    private static func parseTimestamp(_ ts: String) -> Double {
+    nonisolated private static func parseTimestamp(_ ts: String) -> Double {
         let parts = ts.split(separator: ":").compactMap { Int($0) }
         guard parts.count == 2 else { return 0 }
         return Double(parts[0] * 60 + parts[1])
@@ -2554,7 +2554,12 @@ public struct MeetingNoteView: View {
                         onSeek: hasLocalAudio
                             ? { openAudioPlayer(seekTo: blockStartSeconds(block), autoplay: true) }
                             : nil,
-                        onMarkMe: { handleMarkMe(block) },
+                        // 声纹身份可用（FluidDiarizer 路径，voiceprintId 非空）才提供「标记我」入口；
+                        // SpeakerKit 路径 voiceprintId 恒 nil——handleMarkMe 会静默 return，
+                        // 可点的死按钮毫无反馈，不如降级为纯文本（长按「纠正发言人」仍有解释文案）。
+                        onMarkMe: (block.speaker.voiceprintId?.isEmpty == false)
+                            ? { handleMarkMe(block) }
+                            : nil,
                         onSpeakerInfo: { pendingSpeakerCorrection = block.speaker }
                     )
                     .id(row.id)
@@ -3351,7 +3356,7 @@ private struct AgentAskBar: View {
             HStack(spacing: Spacing.sm) {
                 Text(placeholder)
                     .font(.recapBodyS)
-                    .foregroundStyle(Color.recapTea)
+                    .foregroundStyle(Color.recapTea.opacity(0.7))
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
@@ -3363,10 +3368,11 @@ private struct AgentAskBar: View {
                     .foregroundStyle(Color.recapTea)
                     .frame(width: 30, height: 30)
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 16)
+            .padding(.trailing, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity)
-            .frame(height: 44)
+            .frame(height: 48)
             // 显式命中形状：label 含 Spacer 大片空白，Button 默认只命中「渲染了内容的区域」
             // （左侧文字），导致点击右半（空白 + 发送钮）无反应。Capsule 与背景同形，整条胶囊均可触发。
             .contentShape(Capsule())
@@ -3547,7 +3553,7 @@ private struct LiveWaveformVisualizer: View {
     /// 录音↔暂停 平滑插值（0 录音中 · 1 已暂停）。幅度下沉 + 整体淡出，颜色不硬切。
     @State private var pausedBlend = 0.0
 
-    private var barCount: Int { isCompact ? 28 : 36 }
+    private var barCount: Int { isCompact ? 24 : 32 }
     private var maxAmp: CGFloat { isCompact ? 10 : 44 }
     private var base: CGFloat { isCompact ? 3 : 4 }
     private var cap: CGFloat { isCompact ? 16 : 48 }
@@ -3584,39 +3590,27 @@ private struct LiveWaveformVisualizer: View {
         }
     }
 
-    // MARK: - 绘制（Canvas 三层叠加：bloom 宽淡 + halo 柔边 + 亮芯渐变，单色朱砂「发射光」）
+    // MARK: - 绘制（单层 crisp 柱。2026-08-16 重做：旧版 bloom/halo/亮芯三层辉光在 3pt 柱距下
+    // 交叠成雾，被判「不干净不高级」。高级感来自克制——细柱 · 等距留白 · 墨灰单色无辉光；
+    // 朱砂让位状态点与 FAB：红=状态/动作，灰=仪表）
     private func drawBars(ctx: GraphicsContext, size: CGSize, t: Double) {
         let count = barCount
-        let gap: CGFloat = isCompact ? 3 : 3.5
-        let barWidth: CGFloat = 3
+        let barWidth: CGFloat = isCompact ? 2.2 : 2.5
+        let gap: CGFloat = isCompact ? 3.8 : 4.5
         let totalW = CGFloat(count) * barWidth + CGFloat(max(0, count - 1)) * gap
         let originX = (size.width - totalW) * 0.5
         let midY = size.height * 0.5
-        let cinnabar = Color.recapCinnabar
-        let grad = Gradient(colors: [Color(hex: 0xF27464), cinnabar])
 
         for i in 0..<count {
             let h = barHeight(for: i, count: count, t: t)
-            let cx = originX + CGFloat(i) * (barWidth + gap) + barWidth * 0.5
-            let topY = midY - h * 0.5
-
-            // 1. bloom：宽淡柱，铺出发射光软尾（相邻柱 bloom 交叠 → 融成连续光带）。
-            let bloomW = barWidth * 3.2
-            let bloomRect = CGRect(x: cx - bloomW * 0.5, y: midY - max(h, barWidth) * 0.5,
-                                   width: bloomW, height: max(h, barWidth))
-            ctx.fill(Path(roundedRect: bloomRect, cornerRadius: bloomW * 0.5),
-                     with: .color(cinnabar.opacity(0.18)))
-            // 2. halo：紧贴柱体的柔边，过渡芯与辉光。
-            let haloW = barWidth * 1.7
-            let haloRect = CGRect(x: cx - haloW * 0.5, y: topY, width: haloW, height: h)
-            ctx.fill(Path(roundedRect: haloRect, cornerRadius: haloW * 0.5),
-                     with: .color(cinnabar.opacity(0.5)))
-            // 3. 亮芯：竖向亮→深渐变，光的内核。
-            let coreRect = CGRect(x: cx - barWidth * 0.5, y: topY, width: barWidth, height: h)
-            ctx.fill(Path(roundedRect: coreRect, cornerRadius: 1.5),
-                     with: .linearGradient(grad,
-                                           startPoint: CGPoint(x: cx, y: topY),
-                                           endPoint: CGPoint(x: cx, y: topY + h)))
+            let rect = CGRect(
+                x: originX + CGFloat(i) * (barWidth + gap),
+                y: midY - h * 0.5,
+                width: barWidth,
+                height: max(h, barWidth)   // 柱高低于柱宽时退化为圆点（暂停沉底形态）
+            )
+            ctx.fill(Path(roundedRect: rect, cornerRadius: barWidth * 0.5),
+                     with: .color(Color.recapTea))
         }
     }
 
@@ -3632,15 +3626,13 @@ private struct LiveWaveformVisualizer: View {
         if reduceMotion {                                            // 静态钟形，无时间动画
             activeClamped = min(cap, max(base, bellFactor * maxAmp * 0.45 + base))
         } else {
-            let phase = t * 2.6 + Double(index) * 0.45
+            let phase = t * 1.8 + Double(index) * 0.55
             let body = 0.5 + 0.5 * sin(phase)                        // 0~1
-            // 主体增益：low/mid 非线性放大（人声常处低位），安静保底呼吸、元音显著鼓起
-            let lm = pow(Double(bands.low) * 0.6 + Double(bands.mid) * 0.4, 0.8)
+            // 主体增益：low/mid 非线性放大（人声常处低位）+ high 轻度掺入（擦音仍可见），
+            // 安静保底呼吸、元音显著鼓起；不再叠高频 shimmer——快相位毛刺即「脏」
+            let lm = pow(Double(bands.low) * 0.55 + Double(bands.mid) * 0.30 + Double(bands.high) * 0.15, 0.8)
             let bodyGain = isCompact ? (0.4 + 0.6 * lm) : (0.28 + 0.72 * lm)
-            // 高频细纹：更快相位、更小幅度，high band 越强越显（擦音边缘起毛），仍乘 bell 不外溢
-            let shimmerPhase = t * 6.5 + Double(index) * 1.7
-            let shimmer = (0.5 + 0.5 * sin(shimmerPhase)) * Double(bands.high) * 0.28
-            let h = (body * bodyGain + shimmer) * bellFactor * Double(maxAmp) + Double(base)
+            let h = body * bodyGain * bellFactor * Double(maxAmp) + Double(base)
             activeClamped = min(cap, max(base, CGFloat(h)))
         }
         return activeClamped + (base - activeClamped) * CGFloat(pausedBlend)
@@ -3668,7 +3660,7 @@ private struct AILightDisclaimer: View {
     var body: some View {
         Text("内容由 AI 生成，仅供参考")
             .font(.recapMeta)
-            .foregroundStyle(Color.recapTea.opacity(0.75))
+            .foregroundStyle(Color.recapTea.opacity(0.5))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.bottom, Spacing.xs)
     }

@@ -633,24 +633,28 @@ public struct AgentInvokeSheet: View {
     private func messageRow(_ message: AskBubble) -> some View {
         switch message.role {
         case .user:
-            HStack {
-                Spacer(minLength: 56)
-                Text(message.text)
-                    .font(.recapBodyS)
-                    .lineSpacing(Leading.body)
-                    .foregroundStyle(Color.recapInk)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        Color(light: 0xF0F2F1, dark: 0x22262B),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
-                    )
-                    .shadow(color: Color.recapShadow.opacity(0.6), radius: 4, x: 0, y: 2)
+            if message.isResearchObjective {
+                researchTaskCard(message)
+            } else {
+                HStack {
+                    Spacer(minLength: 56)
+                    Text(message.text)
+                        .font(.recapBodyS)
+                        .lineSpacing(Leading.body)
+                        .foregroundStyle(Color.recapInk)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            Color(light: 0xF0F2F1, dark: 0x22262B),
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.recapInk.opacity(0.06), lineWidth: 0.5)
+                        )
+                        .shadow(color: Color.recapShadow.opacity(0.6), radius: 4, x: 0, y: 2)
+                }
             }
         case .assistant:
             VStack(alignment: .leading, spacing: Spacing.sm) {
@@ -660,6 +664,12 @@ public struct AgentInvokeSheet: View {
                         .accessibilityLabel("正在思考")
                 } else {
                     AskMarkdownText(source: message.text, isStreaming: message.isStreaming)
+                }
+
+                // 调研轮实时进度：状态随工具步流式更新，替代分钟级「只有三个点」的死空气。
+                if message.isStreaming, message.id == model.liveResearchBubble?.id,
+                   let progress = model.researchLiveProgress {
+                    liveResearchProgressRow(progress)
                 }
 
                 if message.isDegraded, !message.isStreaming {
@@ -700,6 +710,64 @@ public struct AgentInvokeSheet: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// 调研任务卡（待办卡 ✦ 代发的调研目标）：全宽纸面卡 + ✦ 标记，区别于普通用户气泡——
+    /// 诚实表达这是系统代发的任务，并把待办原文锚定在对话流里（不再凭空冒出 assistant 气泡）。
+    private func researchTaskCard(_ message: AskBubble) -> some View {
+        let taskText = message.text.hasPrefix(AgentResearchPrompt.objectivePrefix)
+            ? String(message.text.dropFirst(AgentResearchPrompt.objectivePrefix.count))
+            : message.text
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: RecapSymbol.research)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.recapInk.opacity(0.7))
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("深度调研")
+                    .font(.recapMeta.weight(.semibold))
+                    .foregroundStyle(Color.recapTea)
+                Text(taskText.isEmpty ? message.text : taskText)
+                    .font(.recapBodyS.weight(.medium))
+                    .foregroundStyle(Color.recapInk)
+                    .lineSpacing(Leading.body)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.recapPaper, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.recapInk.opacity(0.08), lineWidth: 0.8)
+        )
+        .recapCardShadow()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("深度调研任务：\(taskText.isEmpty ? message.text : taskText)")
+    }
+
+    /// 调研轮实时进度行：liveStatus 随工具步流式更新 + 已完成步数 mono 注脚。
+    private func liveResearchProgressRow(_ progress: ResearchLiveProgress) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: RecapSymbol.research)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.recapInk.opacity(0.75))
+            Text(progress.status)
+                .font(.recapMeta.weight(.medium))
+                .foregroundStyle(Color.recapInk.opacity(0.75))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            if progress.stepCount > 0 {
+                Text("· \(progress.stepCount) 步")
+                    .font(.recapMono)
+                    .foregroundStyle(Color.recapTea)
+            }
+            Spacer(minLength: 0)
+        }
+        .transition(.opacity)
     }
 
     private func stepsRow(_ message: AskBubble) -> some View {
