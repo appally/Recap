@@ -25,7 +25,8 @@ export interface Env {
   /** 英文会议的 ASR 模型(客户端带 X-Recap-Lang: en 时下发;默认 fun-asr-realtime 多语言)。
    *  ⚠️ 同 ASR_MODEL 约束:切换前须在百炼控制台给 key 白名单加该模型 + 词表绑定 target_model 一致。 */
   ASR_MODEL_EN?: string;
-  /** 服务端统一下发的 LLM 模型(默认 qwen-plus;Pro 想用强模型改此)。 */
+  /** 服务端统一下发的 LLM 模型(钉快照 qwen-plus-2025-12-01:别名已冻结,新款涨价 2.5-4 倍,
+   *  裸别名有被阿里重指涨价款的静默成本风险;升级须同步百炼 key 白名单 + 客户端兜底常量)。 */
   LLM_MODEL?: string;
   /** 百炼全局共享热词表 id(运营在控制台创建,Paraformer 系 ≤500 词;账号级上限 10 表 → 托管档只能全局共享,无法每用户)。
    *  随 /v1/issue 下发 asr_vocabulary_id,客户端 run-task payload 顶层携带(paraformer 不支持 input.context)。
@@ -46,6 +47,13 @@ export interface Env {
 }
 
 export const DEFAULT_EXPIRE_SECONDS = 1800; // 单次签发 30min,客户端滚动续签
+
+/** 免费档 LLM token TTL 封顶(15min):纪要管线数分钟级够用;「30min 无限次调用」滥用窗口减半。 */
+export const FREE_LLM_EXPIRE_SECONDS = 900;
+
+/** per-IP 签发限流(防换 device id 无限铸造匿名桶;NAT 大办公室不误伤的宽限值)。 */
+export const ISSUE_IP_MAX_PER_HOUR = 240;
+export const ISSUE_IP_MAX_DEVICES_PER_HOUR = 40;
 
 /** Pro 订阅月度配额:按 token 覆盖时长计,30h/月(网关不见音频,只能按 token 有效期计量,是真实音频成本的上界)。 */
 export const PRO_MONTHLY_QUOTA_SECONDS = 30 * 60 * 60; // 108000

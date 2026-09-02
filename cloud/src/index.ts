@@ -7,10 +7,14 @@ import {
   FREE_PER_ISSUE_SECONDS,
   FREE_ANON_ASR_SECONDS,
   FREE_MONTHLY_ASR_SECONDS,
+  FREE_LLM_EXPIRE_SECONDS,
+  ISSUE_IP_MAX_PER_HOUR,
+  ISSUE_IP_MAX_DEVICES_PER_HOUR,
 } from './env';
 import { issueAliyunToken } from './core/aliyun';
 import { verifyPro } from './core/prove';
 import { verifyFreeApple } from './core/prove-free';
+import { isPlausibleDeviceId } from './core/ratelimit';
 import { landingHTML, privacyHTML, termsHTML, supportHTML } from './core/legal';
 import { ICON_PNG_BASE64 } from './core/icon';
 
@@ -100,6 +104,25 @@ async function handleAccountDelete(req: Request, env: Env): Promise<Response> {
  * 免费档身份锚定:Sign-in 验过后设备配额迁移到 apple:<sub> 共享桶(跨设备/重装统一,防刷),
  * 未登录设备走一次性匿名小桶。用途由 X-Recap-Usage 头(asr|llm)区分,决定免费档扣哪个桶。 */
 async function handleIssue(req: Request, env: Env): Promise<Response> {
+  // 入口风控(先于 Apple 验证,连 txn 枚举放大器一并压制):
+  // ① device id 卫生:客户端真实来源是 IDFV(hex/UUID)。垃圾串在进任何 DO 之前拒绝。
+  const deviceHeader = req.headers.get('X-Recap-Device') ?? '';
+  if (deviceHeader && !isPlausibleDeviceId(deviceHeader)) {
+    return Response.json({ error: 'invalid_device' }, { status: 400 });
+  }
+  // ② per-IP 限流:同 IP 每小时签发次数 + 不同 device id 数双上限——「换 ID 刷匿名桶」
+  //    的特征是同 IP 大量新 device,与 NAT 后真人(数十字节内)像素级不同。宽限:
+  //    240 次/h、40 设备/h(NAT 大办公室不误伤;刷量脚本动辄数千次/h)。
+  const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
+  const rl = (await env.QUOTA.get(env.QUOTA.idFromName(`ip:${ip}`))
+    .fetch(`https://quota/iprl?max=${ISSUE_IP_MAX_PER_HOUR}&maxDevices=${ISSUE_IP_MAX_DEVICES_PER_HOUR}` +
+      `&device=${encodeURIComponent(deviceHeader)}`)
+    .then((r) => r.json())) as { allow: boolean; reason: string | null };
+  if (!rl.allow) {
+    console.log(`[ratelimit] issue denied ip=${ip} reason=${rl.reason}`);
+    return Response.json({ error: 'rate_limited' }, { status: 429 });
+  }
+
   let user = await verifyPro(req, env);
   const txnHeader = req.headers.get('X-Apple-Transaction-Id');
 
@@ -189,15 +212,28 @@ async function handleIssue(req: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'quota_exceeded', remaining_seconds: quota.remainingSeconds }, { status: 403 });
   }
 
+  // 免费档 token TTL 封顶(2026-09-02 审计 F2:事后扣费下每桶天然超限「一个 token 寿命」):
+  //   ASR 按桶剩余封顶——把超限窗口从 30min 压到秒级(匿名 300s 名义桶此前单 token 实跑 30min≈6 倍);
+  //   LLM 固定 15min——纪要管线(数分钟级串行调用)够用,「30min 无限次调用」的滥用窗口减半。
+  //   Pro 维持 30min(付费权益+滚动续签节奏依赖)。
+  let expireSeconds = DEFAULT_EXPIRE_SECONDS;
+  if (user.tier === 'free') {
+    expireSeconds = usage === 'asr'
+      ? Math.max(60, Math.min(DEFAULT_EXPIRE_SECONDS, Math.floor(quota.remainingSeconds)))
+      : FREE_LLM_EXPIRE_SECONDS;
+  }
+
   let token: string;
   try {
     // ASR/LLM 物理隔离:usage=asr 且配置了 ASR 专用 key 时用它签发(白名单仅 ASR 模型),
     // 防止 ASR 桶 token 被用于调用更贵的 LLM/其他模型(阿里临时 token 无独立 scope,继承 key 权限)。
     const masterKey =
       usage === 'asr' && env.DASHSCOPE_ASR_API_KEY ? env.DASHSCOPE_ASR_API_KEY : env.DASHSCOPE_API_KEY;
-    token = (await issueAliyunToken(masterKey, DEFAULT_EXPIRE_SECONDS)).token;
+    token = (await issueAliyunToken(masterKey, expireSeconds)).token;
   } catch (e) {
-    return Response.json({ error: 'issue_failed', detail: String(e) }, { status: 502 });
+    // detail 只进日志(可能含上游内部信息),客户端收固定错误码(F9)。
+    console.log(`[issue] aliyun token failed: ${String(e)}`);
+    return Response.json({ error: 'issue_failed' }, { status: 502 });
   }
 
   return Response.json(
@@ -206,6 +242,7 @@ async function handleIssue(req: Request, env: Env): Promise<Response> {
       tier: user.tier,
       remainingSeconds: quota.remainingSeconds,
       signedIn: quota.signedIn ?? false,
+      expiresInSeconds: expireSeconds,
       env,
       // 语言感知模型下发:英文会议请求英文模型(X-Recap-Lang: en),其余走 ASR_MODEL 原逻辑。
       lang: (req.headers.get('X-Recap-Lang') ?? 'zh').toLowerCase() === 'en' ? 'en' : 'zh',
@@ -228,13 +265,15 @@ export function buildIssueResponse(args: {
   tier: string;
   remainingSeconds: number;
   signedIn: boolean;
+  /** token 实际 TTL(免费档按桶剩余封顶;见 handleIssue)。 */
+  expiresInSeconds: number;
   env: Pick<Env, 'ASR_WSS' | 'LLM_BASE' | 'ASR_MODEL' | 'ASR_MODEL_EN' | 'LLM_MODEL' | 'ASR_VOCABULARY_ID'>;
   lang?: 'zh' | 'en';
 }): Record<string, unknown> {
   const asrModel = resolveAsrModel(args.env, args.lang ?? 'zh');
   const body: Record<string, unknown> = {
     dashscope_token: args.token,
-    expires_in: DEFAULT_EXPIRE_SECONDS,
+    expires_in: args.expiresInSeconds,
     asr_wss: args.env.ASR_WSS,
     llm_base: args.env.LLM_BASE,
     remaining_seconds: args.remainingSeconds,

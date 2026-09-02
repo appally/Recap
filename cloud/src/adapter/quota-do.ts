@@ -1,4 +1,5 @@
 import { checkQuota, elapsedChargeSeconds, graceActive, mergeIfSamePeriod, QuotaState, MONTH_MS } from '../core/quota';
+import { emptyIpRateLimitState, ipRateLimitDecision } from '../core/ratelimit';
 import { Env } from '../env';
 
 /**
@@ -34,6 +35,9 @@ async function boundAppleSubOf(storage: DurableObjectStorage): Promise<string> {
 
 export class QuotaDO {
   constructor(private readonly state: DurableObjectState) {}
+
+  /// per-IP 签发限流的内存态(本 DO 以 `ip:<addr>` 取实例;DO 逐出即重置,尽力而为风控)。
+  private ipRateLimit = emptyIpRateLimitState();
 
   // env 参数:跨 DO 迁移需要 QUOTA namespace(同 Worker 绑定,DO 内可用)。
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -204,6 +208,26 @@ export class QuotaDO {
       }
       await this.state.storage.deleteAll();
       return Response.json({ ok: true });
+    }
+
+    // GET /iprl?max=N&maxDevices=N&windowMs=Ms[&device=<id>] —— per-IP 签发限流(内存态)。
+    //   index.ts 的 /v1/issue 在验身份之前调用,防「换 device id 无限铸造匿名免费桶」
+    //   (2026-09-02 审计 F1)与 txn 枚举打 Apple API 的放大器。仅 Worker 内部可达。
+    if (url.pathname === '/iprl') {
+      const decision = ipRateLimitDecision(this.ipRateLimit, {
+        max: Number(url.searchParams.get('max') ?? '240'),
+        maxDevices: Number(url.searchParams.get('maxDevices') ?? '40'),
+        windowMs: Number(url.searchParams.get('windowMs') ?? String(60 * 60 * 1000)),
+        device: url.searchParams.get('device') ?? '',
+        now: Date.now(),
+      });
+      if (decision.allow) this.ipRateLimit = decision.next;
+      return Response.json({
+        allow: decision.allow,
+        reason: decision.reason ?? null,
+        count: decision.count,
+        devices: decision.deviceCount,
+      });
     }
 
     // GET /status —— 查询当前用量(供客户端展示「本月剩余」)

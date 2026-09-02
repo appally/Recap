@@ -41,9 +41,10 @@ public enum LLMPresets {
     public static let deepSeekFlash = "deepseek-v4-flash"   // 日常/会中问答/短任务
     public static let deepSeekPro = "deepseek-v4-pro"       // 纪要/待办/调研(thinking)
     /// 云端档(Pro/免费)LLM 模型的客户端兜底默认——仅当网关 /v1/issue 未下发 llm_model 时用。
-    /// 权威来源是网关 wrangler.jsonc 的 LLM_MODEL(现 qwen-plus),各路径统一读 cred.llmModel;
+    /// 权威来源是网关 wrangler.jsonc 的 LLM_MODEL(现 qwen-plus-2025-12-01 钉快照:别名已冻结,
+    /// 新款 qwen3.X-plus 涨 2.5-4 倍,裸别名有被重指涨价款的静默成本风险),各路径统一读 cred.llmModel;
     /// 此常量只作防御性兜底,值须与网关 LLM_MODEL 保持一致,否则会请求到白名单外的模型 -> 403。
-    public static let cloudDefaultModel = "qwen-plus"
+    public static let cloudDefaultModel = "qwen-plus-2025-12-01"
     /// 与 `LLMProviderTemplate.deepseek.keychainAccount` 对齐。
     public static let deepSeekKeychainAccount = "llm.deepseek.apikey"
 }

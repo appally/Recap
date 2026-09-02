@@ -14,6 +14,7 @@ describe('buildIssueResponse', () => {
     tier: 'pro',
     remainingSeconds: 108000,
     signedIn: true,
+    expiresInSeconds: 1800,
   };
 
   it('配置词表 → 响应含 asr_vocabulary_id', () => {
@@ -35,7 +36,7 @@ describe('buildIssueResponse', () => {
     const body = buildIssueResponse({ ...baseArgs, env: { ...baseEnv, ASR_VOCABULARY_ID: 'vocab-123' } });
     expect(body).toEqual({
       dashscope_token: 'sts-test-token',
-      expires_in: 1800,
+      expires_in: 1800,   // = baseArgs.expiresInSeconds(免费档封顶后小于 1800,见 ratelimit/TTL 用例)
       asr_wss: baseEnv.ASR_WSS,
       llm_base: baseEnv.LLM_BASE,
       remaining_seconds: 108000,
@@ -70,6 +71,11 @@ describe('buildIssueResponse', () => {
     });
     expect(body['asr_model']).toBe('fun-asr-realtime');
     expect(!('asr_vocabulary_id' in body)).toBe(true);
+  });
+
+  it('expiresInSeconds 透传(免费档 TTL 封顶:ASR 按桶剩余/LLM 15min)', () => {
+    const body = buildIssueResponse({ ...baseArgs, expiresInSeconds: 300, env: baseEnv });
+    expect(body['expires_in']).toBe(300);
   });
 
   it('zh 且未配置 ASR_MODEL → 不带 asr_model 键(客户端回落 BYOK 常量)', () => {

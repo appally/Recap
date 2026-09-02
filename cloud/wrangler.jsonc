@@ -13,7 +13,11 @@
     // 检测/时间戳/热词)——百炼无英文专用实时模型(paraformer-realtime-en-v1 不存在,
     // 2026-08-23 探针 ModelNotFound + 官方文档双确认),与 zh 同模型、白名单已放通。
     "ASR_MODEL_EN": "fun-asr-realtime",
-    "LLM_MODEL": "qwen-plus",
+    // 钉死快照(2026-09-02):官方价格页确认 `qwen-plus` 别名已冻结=2025-12-01,plus 新款
+    // (qwen3.X-plus)涨价 2.5-4 倍——裸别名有被阿里日后重指涨价款的静默成本风险。
+    // ⚠️ 切换/升级时须同步:百炼 key 白名单加新模型名 + 客户端 LLMProviderConfig.cloudDefaultModel
+    // (TranscriptChunker 按 contains 匹配 qwen-plus 前缀,快照名天然兼容)。
+    "LLM_MODEL": "qwen-plus-2025-12-01",
     // 百炼控制台「业务定制—热词」创建的全局共享词表 id(≤500 词,运营维护品牌词/常见术语)。
     // ⚠️ 词表 target_model 必须与 ASR_MODEL 一致——换模型须同步改绑词表并重跑
     // scripts/verify-gateway-asr.mjs 词表探针,否则托管档 run-task task-failed。
@@ -36,7 +40,7 @@
 
   // Secrets(部署后注入,wrangler secret put):
   //   DASHSCOPE_API_KEY     阿里主 key(RAM 最小权限子账号)。⚠️ 必须在百炼控制台配「模型访问限制」白名单:
-  //                        fun-asr-realtime + paraformer-realtime-v2 + qwen-plus(漏开则 st-token 403;
+  //                        fun-asr-realtime + paraformer-realtime-v2 + qwen-plus-2025-12-01(漏开则 st-token 403;
   //                        多开则免费用户可持 ASR 桶 token 调高价模型——临时 token 继承 key 全部权限)。
   //                        部署后跑 scripts/verify-gateway-asr.mjs(含负向探针)+ verify-sts-llm.mjs 双确认。
   //   DASHSCOPE_ASR_API_KEY (可选加固)ASR 专用子账号 key,白名单仅开两个 ASR 模型;
