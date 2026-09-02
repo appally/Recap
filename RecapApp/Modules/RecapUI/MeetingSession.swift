@@ -2129,6 +2129,16 @@ public final class MeetingSession: ObservableObject {
                 self.pendingSummaryModelId = provider.summaryModel
                 RecapLog.session.info("LLM 纪要: provider=\(provider.id, privacy: .public) summary=\(provider.summaryModel, privacy: .public) todo=\(provider.defaultModel, privacy: .public) 转写\(transcript.count) 字")
                 var warning: String?
+                // map-reduce 缺段警示（coverage）：并入 warning 统一组装——单独写 statusMessage
+                // 会被 .summaryReady 的 composedReviewStatus(warning) 覆盖，缺段在 REVIEW 全程不可见。
+                var coverageNote: String?
+                func combinedWarning() -> String? {
+                    let parts = [warning, coverageNote].compactMap { note -> String? in
+                        guard let note, !note.isEmpty else { return nil }
+                        return note
+                    }
+                    return parts.isEmpty ? nil : parts.joined(separator: "；")
+                }
                 for try await event in MinutesPipeline(provider: provider).run(
                     transcript: transcript,
                     briefSummary: briefSummary,
@@ -2156,7 +2166,7 @@ public final class MeetingSession: ObservableObject {
                         summaryText = full
                         self.commitAISummary(raw: full, persistSummary: persistSummary)
                         didCommitSummary = true
-                        self.statusMessage = self.composedReviewStatus(warning)
+                        self.statusMessage = self.composedReviewStatus(combinedWarning())
                     case .todos(let items):
                         persistTodos(items)
                         // 同 applySummaryDraft：todoCount + revealStep 合一事务，避免同帧多事务。
@@ -2165,14 +2175,15 @@ public final class MeetingSession: ObservableObject {
                             if !items.isEmpty, self.revealStep < 4 { self.revealStep = 4 }
                         }
                     case .coverage(let note):
+                        coverageNote = note
                         self.statusMessage = note
                     case .finished:
                         if !didCommitSummary {
                             if !summaryText.isEmpty {
                                 self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
-                                self.statusMessage = self.composedReviewStatus(warning)
+                                self.statusMessage = self.composedReviewStatus(combinedWarning())
                             } else {
-                                self.statusMessage = self.composedReviewStatus(warning, fallback: "未生成纪要")
+                                self.statusMessage = self.composedReviewStatus(combinedWarning(), fallback: "未生成纪要")
                                 self.finishReviewWithoutMock()
                             }
                         } else if self.phase != .review {
