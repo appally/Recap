@@ -890,6 +890,12 @@ public actor FunASREngine: AsrEngine {
                 ?? "unknown"
             taskFailedMessage = msg
             taskFinished = true
+            // 任务被服务端拒绝即连接语义已亡：直接设 sendError 让下一次 feed() 立刻抛出
+            // **真实原因**（配额/参数/词表错），而不是等服务端断开后靠 send 抛错兜底、
+            // 或连接滞留时缓冲 2min 溢出才以「网络较慢」误报。
+            if sendError == nil {
+                sendError = FunASRError.taskFailed(msg)
+            }
             resumeTaskStartIfNeeded()
 
         default:

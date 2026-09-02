@@ -54,6 +54,9 @@ public actor SpeechAnalyzerEngine: AsrEngine {
     private var isStreaming = false
     /// `analyzer.start` 异步失败时记录；feed() 据此抛错上报（此前错误只存在 task result 里被吞）。
     private var startError: SpeechAnalyzerEngineError?
+    /// results 流中段中断时记录（首个语言槽错误生效）；feed() 据此抛错——
+    /// 静默半稿比显式降级更糟（liveDegraded 触发 endLive 补转的前提是错误浮出）。
+    private var resultsError: SpeechAnalyzerEngineError?
 
     /// 双转写器合并的语言先验（由 resolve 语言注入，见 AsrEngineFactory）：
     /// - .zh：中文会场——CJK 存在性先于置信度/粘性。方言把 zh 模块置信度打塌时，
@@ -218,7 +221,12 @@ public actor SpeechAnalyzerEngine: AsrEngine {
                         )
                     }
                 } catch {
-                    // results 流错误时已收集部分仍可用
+                    // results 流中断：不吞——此前静默意味着整场无字幕且 liveDegraded=false，
+                    // 显式选端侧的 Pro 用户既无提示也无 .pro 补转（隐私红线禁自动上云）。
+                    // 记录状态位 + 掐断输入流让 feed 抛错 → RecordingSession.onError 上报，
+                    // endLive 以 liveDegraded 触发补转。stopStreaming 拆机路径先置
+                    // isStreaming=false 再 cancel，此处 guard 天然区分两者。
+                    await self?.recordResultsFailure(error, language: language)
                 }
             }
             collectTasks.append(task)
@@ -248,8 +256,23 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         inputContinuation = nil
     }
 
+    /// results 流中断（对称 recordStartFailure）：feed 抛错上报，已收集定稿仍随
+    /// stopStreaming 的 currentSegments() 返回。首个语言槽错误即生效——另一半槽的
+    /// 定稿缺失已足以污染语言判定，宁可上报降级也不静默半稿。
+    private func recordResultsFailure(_ error: Error, language: MeetingLanguage) {
+        guard isStreaming else { return }
+        if resultsError == nil {
+            resultsError = SpeechAnalyzerEngineError.resultsFailed(
+                error.localizedDescription.isEmpty ? "结果流中断" : error.localizedDescription)
+        }
+        RecapLog.session.error("SpeechAnalyzer results 流中断 lang=\(language.rawValue, privacy: .public)：\(error.localizedDescription, privacy: .public)")
+        inputContinuation?.finish()
+        inputContinuation = nil
+    }
+
     public func feed(_ samples: [Float]) async throws {
         if let startError { throw startError }
+        if let resultsError { throw resultsError }
         guard isStreaming, let format, let inputContinuation else {
             throw SpeechAnalyzerEngineError.notStreaming
         }
@@ -524,10 +547,13 @@ public actor SpeechAnalyzerEngine: AsrEngine {
     private func emitPartial(text: String, language: MeetingLanguage) {
         partials[language] = text
         // partial 无 runs 置信度（final 才计算），粘性语言（近期定稿胜方）优先 + 语言倾向择优。
+        // bias 必须透传实例偏置：漏传落默认 .en 会让 zh 会场的「CJK 先于粘性」旁路
+        // 在生产 partial 路径失效（一次误胜的 en 定稿经粘性锁死英文草稿字幕）。
         guard let candidate = Self.preferredPartial(
             zh: partials[.zh].map { (text: $0, confidence: nil) },
             en: partials[.en].map { (text: $0, confidence: nil) },
-            sticky: lastFinalWinner
+            sticky: lastFinalWinner,
+            bias: mergeBias
         ) else { return }
         eventContinuation?.yield(.partial(text: candidate))
     }
@@ -593,6 +619,7 @@ public actor SpeechAnalyzerEngine: AsrEngine {
 public enum SpeechAnalyzerEngineError: Error, LocalizedError, Sendable {
     case unavailable, noChinese, assetUnavailable, formatFailed, bufferFailed, notStreaming
     case startFailed(String)
+    case resultsFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -603,6 +630,7 @@ public enum SpeechAnalyzerEngineError: Error, LocalizedError, Sendable {
         case .bufferFailed:     return "AVAudioPCMBuffer 分配失败"
         case .notStreaming:     return "未处于流式会话中"
         case .startFailed(let reason): return "端侧转写引擎启动失败：\(reason)"
+        case .resultsFailed(let reason): return "端侧转写结果流中断：\(reason)"
         }
     }
 }
