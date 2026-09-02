@@ -1423,8 +1423,12 @@ public final class MeetingSession: ObservableObject {
             meeting.polishedSegmentsData = nil
             meeting.polishedModelId = nil
             // 重转改写文本 → 重算语言（云端英文模型直出可能改变分类）。
-            meeting.language = TranscriptLanguageClassifier.classify(result.segments)
-            adoptSegmentsAsBlocks(result.segments)
+            // freeTrial 时按拼接后全稿分类（含 LIVE 尾段），与 meeting.segments 同口径。
+            meeting.language = TranscriptLanguageClassifier.classify(meeting.segments)
+            // adopt 必须吃 meeting.segments（freeTrial=拼接稿），不能吃 result.segments
+            // （仅云端前 10min）——否则 persistTranscriptCheckpoint 用 blocks 重建 segments
+            // 时整表覆盖，尾段在任何地方都不复存在（blocks/merger/DB 三处只剩前 10min）。
+            adoptSegmentsAsBlocks(meeting.segments)
             persistTranscriptCheckpoint()
             checkpointSaver?()
             if reason == .freeTrial {
