@@ -111,3 +111,50 @@ final class SpeakerCorrectionTests: XCTestCase {
         XCTAssertNotNil(gallery.speaker(id: "vp-A"))
     }
 }
+
+// MARK: - 跨会议画廊名字重放（2026-09-02 P1-2：承诺「改名后今后会议自动沿用」兑现名字层）
+
+final class VoiceprintNameReplayTests: XCTestCase {
+
+    func testGalleryUserNameReplaysAcrossMeetings() {
+        // 新会议：preserve 为空（本场还没说话人），画廊里 vp-A 已被用户命名「王工」
+        let map = DiarizationService.voiceprintNameMap(
+            preserving: [],
+            galleryNames: [("vp-A", "王工"), ("vp-B", "我")]
+        )
+        XCTAssertEqual(map["vp-A"], "王工", "画廊用户命名必须跨会议重放")
+        XCTAssertEqual(map["vp-B"], "我", "标记我的名字同样重放")
+    }
+
+    func testPlaceholderNamesDoNotReplay() {
+        // 画廊自动建条目（IdentityMatcher「发言人 N」）与 makeSpeakers 兜底（「发言人N」）
+        // 都是占位名——重放只会把假名钉死到每场会议
+        let map = DiarizationService.voiceprintNameMap(
+            preserving: [],
+            galleryNames: [("vp-A", "发言人 3"), ("vp-B", "发言人7"), ("vp-C", "  ")]
+        )
+        XCTAssertTrue(map.isEmpty, "占位名/空白名不参与重放")
+    }
+
+    func testCurrentMeetingCorrectionWinsOverGallery() {
+        // 本场刚改名 → 本场优先；本场占位名不应压掉画廊真名
+        let map = DiarizationService.voiceprintNameMap(
+            preserving: [
+                Speaker(id: "spk0", name: "王工程师", colorIndex: 0, voiceprintId: "vp-A"),
+                Speaker(id: "spk1", name: "发言人 1", colorIndex: 1, voiceprintId: "vp-B"),
+            ],
+            galleryNames: [("vp-A", "王工"), ("vp-B", "李总")]
+        )
+        XCTAssertEqual(map["vp-A"], "王工程师", "本场纠错名优先于画廊名")
+        XCTAssertEqual(map["vp-B"], "李总", "本场占位名不遮蔽画廊真名")
+    }
+
+    func testLegacySpeakerKitPathUnaffectedWithoutGallery() {
+        // SpeakerKit 回退路径（无画廊/未同意）：行为与旧实现等价——只回放本场非占位名
+        let map = DiarizationService.voiceprintNameMap(
+            preserving: [Speaker(id: "spk0", name: "张三", colorIndex: 0, voiceprintId: "vp-Z")],
+            galleryNames: []
+        )
+        XCTAssertEqual(map["vp-Z"], "张三")
+    }
+}

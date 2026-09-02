@@ -86,12 +86,12 @@ public enum DiarizationService {
         // spk 索引在重跑分离后按出现顺序重排，以其为 key 会把纠错名贴错人。
         // uniquingKeysWith 防御：多次重转/手改/迁移残留可能产生重复，取首个（保留最初命名）。
         let nameMap = Dictionary(preserveSpeakerNames.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
-        let voiceprintNameMap = Dictionary(
-            preserveSpeakerNames.compactMap { sp -> (String, String)? in
-                guard let vp = sp.voiceprintId, !vp.isEmpty else { return nil }
-                return (vp, sp.name)
-            },
-            uniquingKeysWith: { a, _ in a }
+        // 跨会议重放：画廊里用户命名的身份（改名/标记我/合并保留名）跟随到本场——
+        // SpeakerDetailSheet 承诺「改名或合并后，今后会议自动沿用」此前只兑现 id 未兑现名字：
+        // 本场 preserve 列表在新会议为空，身份命中仍显「发言人N」。
+        let voiceprintNameMap = Self.voiceprintNameMap(
+            preserving: preserveSpeakerNames,
+            galleryNames: VoiceprintGallery.shared.snapshot().map { ($0.id, $0.name) }
         )
         let speakers = SpeakerAligner.makeSpeakers(
             from: timeline,
@@ -100,5 +100,40 @@ public enum DiarizationService {
         )
         let labeled = SpeakerAligner.assignSpeakers(segments: segments, timeline: timeline)
         return Outcome(segments: labeled, speakers: speakers, timeline: timeline)
+    }
+
+    /// 声纹名字重放表（纯函数，RecapASRTests 回归锁定）：画廊用户命名 ∪ 本场纠错名，
+    /// 本场优先（用户可能刚在本场改名）。**占位名不参与重放**——IdentityMatcher 自动建
+    /// 条目叫「发言人 N」（带空格）、makeSpeakers 兜底叫「发言人N」，把假名钉死到每场
+    /// 会议只会误导；画廊与占位名同时存在时以画廊真名兜底。
+    public static func voiceprintNameMap(
+        preserving speakers: [Speaker],
+        galleryNames: [(voiceprintId: String, name: String)]
+    ) -> [String: String] {
+        func isPlaceholder(_ name: String) -> Bool {
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return true }
+            return trimmed.range(of: #"^发言人\s*\d+$"#, options: .regularExpression) != nil
+        }
+        func entries(
+            _ list: [(voiceprintId: String, name: String)]
+        ) -> [String: String] {
+            Dictionary(
+                list.compactMap { entry -> (String, String)? in
+                    guard !entry.voiceprintId.isEmpty, !isPlaceholder(entry.name) else { return nil }
+                    return (entry.voiceprintId, entry.name)
+                },
+                uniquingKeysWith: { a, _ in a }
+            )
+        }
+        let gallery = entries(galleryNames)
+        let current = entries(
+            speakers.compactMap { sp -> (voiceprintId: String, name: String)? in
+                guard let vp = sp.voiceprintId, !vp.isEmpty else { return nil }
+                return (vp, sp.name)
+            }
+        )
+        // merging 闭包首参来自接收者(gallery)、次参来自入参(current)——本场名必须胜出
+        return gallery.merging(current) { _, currentMeeting in currentMeeting }
     }
 }
