@@ -356,7 +356,15 @@ public final class MeetingSession: ObservableObject {
         // 漏置会让 isPostMeetingComputeBusy 守卫在整段重转期间失真——processImportedAudio 是对的样板）
         isRetranscribing = true
 
-        retranscribeTask = Task { [weak self] in
+        // 登记 MinutesTaskRegistry：processing 态离场重进（重建 session）时
+        // resumeOrRecoverProcessing 据此「等旧编排退出」而非再起一条——双跑会双扣
+        // ASR/LLM 配额 + 两 session 交错写 meeting.segments（checkpoint 代际 per-session 失守）。
+        // 步骤 ③ startProcessing 会以新 token 登记管线任务覆盖本条目；本任务 defer 的
+        // unregister 因 token 不匹配自动失效，互不干扰。
+        let retranscribeToken = UUID()
+        let meetingID = meeting.id
+        let orchestration = Task { [weak self] in
+            defer { MinutesTaskRegistry.shared.unregister(token: retranscribeToken, for: meetingID) }
             guard let self else { return }
             // ① 云端重转（不联动下游，编排方接管）
             let ok = await self.performRetranscribe(intent: .cloudFirst, chainPostProcess: false)
@@ -376,6 +384,8 @@ public final class MeetingSession: ObservableObject {
             // ③ 重跑纪要管线（内部含 LLM 闸门；blocks 此时已带 polished）
             self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
         }
+        retranscribeTask = orchestration
+        MinutesTaskRegistry.shared.register(orchestration, token: retranscribeToken, for: meeting.id)
     }
 
     /// 导入音频的首转编排（结构照抄 `regenerateWithRetranscribe`，差异仅一处：允许 blocks 为空——
@@ -403,7 +413,12 @@ public final class MeetingSession: ObservableObject {
 
         // 同步置位防重入（045 B8 的教训）：堵住「Task 尚未起跑、flag 仍 false」的竞态窗口。
         isRetranscribing = true
-        retranscribeTask = Task { [weak self] in
+        // 登记 registry（同 regenerateWithRetranscribe）：重进时旧首转在飞 → 等待而非双跑
+        // （导入首转双跑 = 双倍烧 ASR 桶 + 新 session blocks 为空再起一条云端转写）。
+        let retranscribeToken = UUID()
+        let meetingID = meeting.id
+        let orchestration = Task { [weak self] in
+            defer { MinutesTaskRegistry.shared.unregister(token: retranscribeToken, for: meetingID) }
             guard let self else { return }
             // 首转前语言未知（默认 zh）——记录初始值，供下方「语言自愈」判定。
             let wasEnglish = self.meeting.language == .en
@@ -436,6 +451,8 @@ public final class MeetingSession: ObservableObject {
             // ③ 纪要管线（内部含 LLM 闸门；blocks 此时已带 polished）
             self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
         }
+        retranscribeTask = orchestration
+        MinutesTaskRegistry.shared.register(orchestration, token: retranscribeToken, for: meeting.id)
     }
 
     /// 重新打开卡在 processing 的会议：有纪要则收尾进 review，否则继续跑管线。
