@@ -250,7 +250,7 @@ struct ASRSettingsView: View {
                         showVoiceprintConsent = true
                     }
                 } label: {
-                    Label("录入我的声音", systemImage: "mic.badge.waveform")
+                    Label("录入我的声音", systemImage: "waveform.badge.mic")
                         .font(.recapBodyS)
                         .foregroundStyle(Color.recapInk)
                         .frame(maxWidth: .infinity)
@@ -347,7 +347,7 @@ struct ASRSettingsView: View {
             UserDefaults.standard.set(false, forKey: "asr.fluidModelsReady")
         }
         asrModelBytes = asrPresent ? FluidAudioBootstrap.senseVoiceCacheBytes() : 0
-        diarizerModelsReady = FluidAudioBootstrap.diarizerCachePresent()
+        diarizerModelsReady = FluidAudioBootstrap.diarizerModelsAvailable()
         diarizerModelBytes = diarizerModelsReady ? FluidAudioBootstrap.diarizerCacheBytes() : 0
     }
 
@@ -533,7 +533,45 @@ struct ASRSettingsView: View {
                     }
                 }
             )
+
+            identityMatchToggle
         }
+    }
+
+    // MARK: - 声纹身份匹配（声纹升级方案 Step 4b）
+    // 注意不能用 @AppStorage 初始化（flag 的 DEBUG/Release 默认值不同，AppStorage 无此语义）：
+    // 用 @State + onAppear 从 ASRFeatureFlags 同步一次；用户显式切换后写同一 key，后续启动尊重显式值。
+
+    @State private var identityMatcher = ASRFeatureFlags.identityMatcherEnabled
+
+    private var identityMatchToggle: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            Toggle(isOn: $identityMatcher) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("跨会议说话人识别（CAM++）")
+                        .font(.recapHeading)
+                        .foregroundStyle(Color.recapInk)
+                    Text("用新版声纹模型自动认出已知说话人；关掉则回退旧引擎。识别只在用户同意声纹处理且完成分离后运行，全部在本地。")
+                        .font(.recapMeta)
+                        .foregroundStyle(Color.recapTea.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .toggleStyle(.switch)
+            .onAppear { identityMatcher = ASRFeatureFlags.identityMatcherEnabled }
+            .onChange(of: identityMatcher) { _, newValue in
+                ASRFeatureFlags.identityMatcherEnabled = newValue
+            }
+        }
+        .padding(Spacing.lg)
+        .background(
+            Color.recapPaper,
+            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .strokeBorder(Color.recapTea.opacity(0.08), lineWidth: 1)
+        )
     }
 
     // MARK: - Credentials

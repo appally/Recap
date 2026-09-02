@@ -159,7 +159,37 @@ struct SpeakerDetailSheet: View {
                     .foregroundStyle(Color.recapTea)
                     .multilineTextAlignment(.center)
             }
+            if isLegacyVoiceprint {
+                legacyHint
+            }
         }
+    }
+
+    /// legacy 迁移提示（声纹升级 Step 4b）：v1 时代（旧引擎）的声纹条目不参与新引擎自动匹配，
+    /// 名字保留；用户在后续会议手动归名后自动重建为新引擎身份。
+    private var legacyHint: some View {
+        HStack(alignment: .top, spacing: Spacing.sm) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 14))
+                .foregroundStyle(Color.recapCinnabar)
+            Text("这个名字来自旧版声纹引擎，新会议不会自动认出 TA。遇到 TA 的发言时点「这是谁」认领一次，之后就能自动识别了。")
+                .font(.recapCaption)
+                .foregroundStyle(Color.recapTea)
+                .lineSpacing(Leading.tight)
+                .multilineTextAlignment(.leading)
+        }
+        .padding(Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.recapCinnabar.opacity(0.06))
+        )
+    }
+
+    /// 该说话人的 voiceprintId 是否指向旧引擎（v1 legacy）画廊条目。
+    private var isLegacyVoiceprint: Bool {
+        guard let vp = speaker.voiceprintId, !vp.isEmpty else { return false }
+        return VoiceprintGallery.shared.legacyEntryIDs().contains(vp)
     }
 
     private var renameSection: some View {

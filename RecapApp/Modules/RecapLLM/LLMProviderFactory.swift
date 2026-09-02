@@ -27,7 +27,7 @@ public enum LLMProviderFactory {
         case .recapCloud:
             // Pro 托管:Recap 网关签发的阿里临时 token + qwen 兼容端点(不经 BYOK key)。
             guard RecapAccountStore.current.tier == .pro else { throw FactoryError.requiresMembership }
-            let cred = try RecapCredentialProvider.shared.current()
+            let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
             // cred.llmModel 为非可选：网关下发的模型名即唯一来源（原 `??` 右侧是
             // 永不生效的死代码，2026-08-02 已统一单一来源，此处删净）。
             return OpenAICompatibleProvider(
@@ -40,7 +40,7 @@ public enum LLMProviderFactory {
         case .freeTrial:
             // 免费档:网关签发的阿里 token(服务端按次计量);无 ASR token,转写走端侧。
             // 模型名以网关下发的 cred.llmModel 为准(与 Pro/Ask 路径同一来源),不再客户端自定。
-            let cred = try RecapCredentialProvider.shared.current()
+            let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
             return OpenAICompatibleProvider(
                 id: "recap-free",
                 apiKey: cred.token,
@@ -74,11 +74,12 @@ public enum LLMProviderFactory {
             throw FactoryError.missingAPIKey(account: template.keychainAccount)
         }
         // 用户显式选过模型则全任务统一用它；否则按厂商分档（摘要 summaryModel / 待办 defaultModel）。
+        // 端点读 selectedBaseURL：custom 用设置页保存的地址，而非模板占位符。
         let userPicked = LLMSelection.selectedModel
         return OpenAICompatibleProvider(
             id: template.rawValue,
             apiKey: key,
-            baseURL: template.baseURL,
+            baseURL: LLMSelection.selectedBaseURL,
             defaultModel: userPicked ?? template.defaultModel,
             summaryModel: userPicked ?? template.summaryModel
         )

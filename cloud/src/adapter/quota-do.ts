@@ -1,4 +1,4 @@
-import { checkQuota, elapsedChargeSeconds, mergeIfSamePeriod, QuotaState, MONTH_MS } from '../core/quota';
+import { checkQuota, elapsedChargeSeconds, graceActive, mergeIfSamePeriod, QuotaState, MONTH_MS } from '../core/quota';
 import { Env } from '../env';
 
 /**
@@ -106,6 +106,27 @@ export class QuotaDO {
     if (url.pathname === '/probe') {
       const bound = await boundAppleSubOf(this.state.storage);
       return Response.json({ appleSub: bound || undefined, bound: !!bound });
+    }
+
+    // /grace —— Pro Apple 验证宽限期打点/判定(本 DO 以 `txn:<transactionId>` 取实例,
+    //   与配额桶隔离)。POST = 验证成功时打时间戳 + 记录 verify 返回的真实 userId
+    //   (= originalTransactionId ?? txnId,即正常 Pro 配额桶的口径);GET = 是否在宽限
+    //   窗口内 + 该 userId。宽限签发用它路由回用户本来的计量桶——否则 `txn:` 前缀是
+    //   全新空桶,Apple 故障窗口内该用户配额上限实际翻倍(计量不连续)。
+    if (url.pathname === '/grace') {
+      if (req.method === 'POST') {
+        const body = (await req.json().catch(() => ({}))) as { userId?: string };
+        await this.state.storage.put('graceLastVerifiedAt', Date.now());
+        if (body.userId) await this.state.storage.put('graceUserId', body.userId);
+        return Response.json({ ok: true });
+      }
+      const last = await this.state.storage.get<number>('graceLastVerifiedAt');
+      const graceUserId = await this.state.storage.get<string>('graceUserId');
+      return Response.json({
+        active: graceActive(last, Date.now()),
+        lastVerifiedAt: last ?? null,
+        userId: graceUserId ?? null,
+      });
     }
 
     // POST /elevate?sub=<appleSub> —— Sign-in-with-Apple 验过后:

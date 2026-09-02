@@ -76,23 +76,28 @@ public enum AsrEngineResolver {
     }
 
     @available(iOS 26.0, *)
-    public static func resolve(preference: ASRPreference = .current) async throws -> any AsrEngine {
+    public static func resolve(preference: ASRPreference = .current,
+                               language: MeetingLanguage = .zh) async throws -> any AsrEngine {
+        // 英文会议云端走 en 实例（托管档网关按 X-Recap-Lang: en 下发 fun-asr-realtime +
+        // language_hints；BYOK 同模型但报文带语种声明）。端侧 SpeechAnalyzer 双模块
+        // 语种无关，但语言注入合并偏置（en 会场保六批成果 / zh 会场 CJK 优先）。
+        let cloudKind: AsrEngineKind = language == .en ? .funASREn : .funASR
         switch preference {
         case .speechAnalyzer:
-            return try await prepare(.speechAnalyzer)
+            return try await prepare(.speechAnalyzer, language: language)
         case .funASR:
-            return try await prepare(.funASR)
+            return try await prepare(cloudKind)
         case .auto:
             // 端侧 → Fun-ASR（火山已下线：无 Pro 网关分支、与 Fun 职责重叠）
             // Pro 会员(recapCloud)：云端高保真优先（已付费），端侧兜底（离线/网络故障）。
             // 免费/BYOK：端侧优先（省额度/隐私），云端兜底。
             let proCloud = AIServiceMode.current == .recapCloud
             if proCloud {
-                if let engine = try? await prepare(.funASR) { return engine }
-                if let engine = try? await prepare(.speechAnalyzer) { return engine }
+                if let engine = try? await prepare(cloudKind) { return engine }
+                if let engine = try? await prepare(.speechAnalyzer, language: language) { return engine }
             } else {
-                if let engine = try? await prepare(.speechAnalyzer) { return engine }
-                if let engine = try? await prepare(.funASR) { return engine }
+                if let engine = try? await prepare(.speechAnalyzer, language: language) { return engine }
+                if let engine = try? await prepare(cloudKind) { return engine }
             }
 
             // 两种引擎都不可用时给一句可操作的引导，避免泄漏 SpeechAnalyzer/Fun-ASR/百炼 等内部术语。
@@ -117,8 +122,15 @@ public enum AsrEngineResolver {
     /// 始终云端优先解析（用于「重新转写」单一入口，不暴露引擎名给用户）：
     /// 托管档(Pro/免费)实际跑 paraformer-realtime-v2(worker 下发)；BYOK fun key 也走云端；
     /// 无云端凭证时端侧兜底（SpeechAnalyzer → 实验性 FluidAudio，需 flag 开 + 模型已预下载）。
+    /// - Parameter language: 英文会议优先解析英文模型（funASREn → 端侧双模块 → 中文云端兜底），
+    ///   其余语言保持原序（funASR → 端侧 → FluidAudio）。
     @available(iOS 26.0, *)
-    public static func resolveCloudFirst() async throws -> any AsrEngine {
+    public static func resolveCloudFirst(language: MeetingLanguage = .zh) async throws -> any AsrEngine {
+        if language == .en {
+            if hasFunCredentials, let cloud = try? await prepare(.funASREn) { return cloud }
+            // 端侧双模块（zh+en）就绪时同样可出英文；无云端凭证的隐私档靠它兜底。
+            if let onDevice = try? await prepare(.speechAnalyzer, language: language) { return onDevice }
+        }
         if hasFunCredentials, let cloud = try? await prepare(.funASR) { return cloud }
         if let onDevice = try? await prepare(.speechAnalyzer) { return onDevice }
         if ASRFeatureFlags.fluidRetranscribeEnabled, FluidAudioBootstrap.modelsPreloaded {
@@ -134,8 +146,8 @@ public enum AsrEngineResolver {
     }
 
     @available(iOS 26.0, *)
-    private static func prepare(_ kind: AsrEngineKind) async throws -> any AsrEngine {
-        let engine = AsrEngineFactory.make(kind)
+    private static func prepare(_ kind: AsrEngineKind, language: MeetingLanguage = .zh) async throws -> any AsrEngine {
+        let engine = AsrEngineFactory.make(kind, language: language)
         try await engine.prepare()
         return engine
     }

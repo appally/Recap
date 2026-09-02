@@ -34,7 +34,7 @@ public enum AgentTransportFactory {
             // Pro 托管:Recap 网关签发的阿里临时 token + qwen 兼容端点。
             // 模型名由调用方写入 options(与 BYOK 路径一致);此处只供传输层。
             guard RecapAccountStore.current.tier == .pro else { throw FactoryError.requiresMembership }
-            let cred = try RecapCredentialProvider.shared.current()
+            let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
             return OpenAIToolTransport(
                 id: "recap-cloud",
                 apiKey: cred.token,
@@ -43,7 +43,7 @@ public enum AgentTransportFactory {
             )
         case .freeTrial:
             // 免费档:网关签发的阿里 token;模型名由 modelName() 返 cred.llmModel(网关下发)。
-            let cred = try RecapCredentialProvider.shared.current()
+            let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
             return OpenAIToolTransport(
                 id: "recap-free",
                 apiKey: cred.token,
@@ -60,7 +60,8 @@ public enum AgentTransportFactory {
         guard let key = KeychainStore.get(template.keychainAccount), !key.isEmpty else {
             throw FactoryError.missingAPIKey(account: template.keychainAccount)
         }
-        let baseURL = template.baseURL
+        // custom 模板的 baseURL 是占位符，须读设置页保存的 selectedBaseURL。
+        let baseURL = LLMSelection.selectedBaseURL
         // 模型名由调用方写入 options；此处校验角色可解析。
         _ = modelName(for: template, role: role)
 
@@ -85,7 +86,7 @@ public enum AgentTransportFactory {
     /// 改网关 LLM_MODEL 一处即控制全部;凭证未就绪(冷启动/续签空窗)回落 cloudDefaultModel。
     public static func modelName(for template: LLMProviderTemplate, role: AgentModelRole) -> String {
         if AIServiceMode.current != .byok {
-            return (try? RecapCredentialProvider.shared.current())?.llmModel ?? LLMPresets.cloudDefaultModel
+            return (try? RecapCredentialProvider.shared.current(requiresASRModel: false))?.llmModel ?? LLMPresets.cloudDefaultModel
         }
         if template == .deepseek {
             switch role {

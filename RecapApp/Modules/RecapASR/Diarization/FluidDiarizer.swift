@@ -1,5 +1,6 @@
 import Foundation
 import FluidAudio
+import RecapModels
 
 /// FluidAudio 会后批处理分离封装（`DiarizerManager`：pyannote 分段 + WeSpeaker 声纹）。
 ///
@@ -10,8 +11,9 @@ import FluidAudio
 /// 引擎产出的稳定 `speakerId`（String）作为 `voiceprintId` 透出到 ``SpeakerTimelineSegment``，
 /// 经 ``SpeakerAligner`` 写入 ``Speaker.voiceprintId``；同时仍映射回每会议 `Int` 索引保 `"spk\(Int)"` 约定。
 ///
-/// 镜像蓝本：``SpeakerKitDiarizer``。模型下载走 FluidAudio 的 `ModelHub`，镜像源由
-/// ``FluidAudioBootstrap/configureModelEndpoint()`` 在启动时设为 hf-mirror，本类型零配置。
+/// 镜像蓝本：``SpeakerKitDiarizer``。模型获取 bundle 预置优先（``bundledModelsDirectory()``，
+/// 2026-08-23 起随包分发）；缺目录才回退 FluidAudio `ModelHub` 运行期下载（镜像源由
+/// ``FluidAudioBootstrap/configureModelEndpoint()`` 启动时设置）。
 public actor FluidDiarizer: MeetingDiarizer {
     public static let shared = FluidDiarizer()
 
@@ -37,7 +39,8 @@ public actor FluidDiarizer: MeetingDiarizer {
         _ = try await prepare(progress: nil)
     }
 
-    /// 带下载进度的 prepare（设置页预下载用）。底层 `DiarizerModels.download` 产 `DownloadProgress`。
+    /// 带下载进度的 prepare（设置页预下载用）。bundle 命中时无进度（本地加载）；回退路径
+    /// 底层 `DiarizerModels.download` 产 `DownloadProgress`。
     public func prepare(progress: (@Sendable (Double, String) -> Void)?) async throws {
         _ = try await ensureLoaded(progress: progress)
     }
@@ -57,7 +60,8 @@ public actor FluidDiarizer: MeetingDiarizer {
             }
             // 已被取消（如用户在延迟窗口内开麦）则不启动编译
             guard !Task.isCancelled else { return }
-            _ = try? await DiarizerModels.download()
+            // bundle 预置命中则直接本地加载（预热 ANE 特化编译缓存），否则回退下载。
+            _ = try? await Self.loadModels(progress: nil)
         }
         prefetchLock.unlock()
     }
@@ -106,7 +110,10 @@ public actor FluidDiarizer: MeetingDiarizer {
         // 跨录音声纹身份（路径 C）：仅在用户同意声纹处理时读写画廊（PIPL §28 敏感信息须单独同意）。
         // 未同意时画廊空跑——分离仍产出本会议内有效的身份，但不收集 / 持久化声纹 embedding。
         let consented = VoiceprintConsent.granted
-        if consented {
+        // 身份匹配层（声纹升级方案 Step 2）：开启时旁路 DiarizerManager 内部已知说话人匹配
+        // （聚类纯局部 id），由 IdentityMatcher 用 CAM++ 匹配画廊；关闭时走旧路径（WeSpeaker 内匹配）。
+        let useIdentityMatcher = consented && ASRFeatureFlags.identityMatcherEnabled
+        if consented && !useIdentityMatcher {
             box.manager.initializeKnownSpeakers(VoiceprintGallery.shared.snapshot())
         }
         // 标记推理段：供 unload 等待（cleanup 不可与推理并发）。
@@ -121,6 +128,20 @@ public actor FluidDiarizer: MeetingDiarizer {
                 progressHandler: progress
             )
             return Self.mapTimeline(result.segments)
+        }
+        if useIdentityMatcher {
+            // CAM++ 身份匹配：对聚类 timeline 重写跨会议 voiceprintId，并完成画廊写回
+            // （不写回 getSpeakerList——WeSpeaker 256-d 嵌入会污染 CAM++ 192-d 画廊）。
+            // 容错：匹配失败（模型下载/推理错误）退化为原始 timeline——本场身份仍有效，
+            // 只是不跨会议；REVIEW 不崩、不丢分离结果，下次会议重试。
+            let matcher = IdentityMatcher(provider: CampPlusEmbedderProvider.shared)
+            do {
+                return try await matcher.match(timeline: mapped, samples: samples)
+            } catch {
+                RecapLog.session.error(
+                    "identity-matcher: CAM++ 身份匹配失败，本场回退局部身份：\(error.localizedDescription, privacy: .public)")
+                return mapped
+            }
         }
         // 演化后的说话人（已知 + 新增，含更新后的 embedding）写回画廊，供后续会议复用。
         // 仅在已同意时持久化声纹；未同意时本次分离产生的身份仅本会议内有效、不落盘。
@@ -157,7 +178,8 @@ public actor FluidDiarizer: MeetingDiarizer {
             return box
         }
         let task = Task<ManagerBox, Error> {
-            // ModelRegistry.baseURL 已由 FluidAudioBootstrap 在启动时设为 hf-mirror。
+            // bundle 预置优先（见 loadModels）；回退下载路径的 ModelRegistry.baseURL
+            // 已由 FluidAudioBootstrap 在启动时设为 hf-mirror。
             // 注：曾试 .cpuAndNeuralEngine 降 GPU 驻留，但与 prefetchInBackground(默认 .all) 的
             // compute units 不一致会致 CoreML 编译缓存失效、REVIEW 时重编译 ~12s；且 mach_vm_allocate
             // 主因是并发重负载（Vision OCR 等）抢占 VM 而非 diarizer 驻留，故回退默认 .all，与 prefetch
@@ -198,21 +220,43 @@ public actor FluidDiarizer: MeetingDiarizer {
     }
 
     private static func downloadAndWrap(progress: (@Sendable (Double, String) -> Void)?) async throws -> ManagerBox {
-        let models = try await DiarizerModels.download(progressHandler: { dp in
-            progress?(dp.fractionCompleted, "下载")
-        })
-        // 052 P2-3：内容级校验（LFS 哈希清单，见 FluidAudioBootstrap.lfsSHA256）。
-        // 失配即清除缓存并抛错——损坏/被篡改的权重不构造 manager、不留盘。
-        if !FluidAudioBootstrap.verifyModelIntegrity(repo: .diarizer) {
-            FluidAudioBootstrap.removeDiarizerCache()
-            throw DiarizationError.engineFailed("分离模型校验失败（下载可能损坏），已清除，请重试")
-        }
-        // unload() 可能在下载期间 cancel 本任务（内存告警卸模型）。下载完成后先查取消，
+        let models = try await loadModels(progress: progress)
+        // unload() 可能在下载期间 cancel 本任务（内存告警卸模型）。模型就绪后先查取消，
         // 避免无视取消继续构造模型、再被 awaiter 回填 managerBox（刚卸载又驻留，告警失效）。
         try Task.checkCancellation()
         let manager = DiarizerManager()
         manager.initialize(models: models)
         return ManagerBox(manager: manager)
+    }
+
+    /// Bundle 预置模型目录（照 ``SpeakerKitDiarizer/bundledModelFolder()`` 先例：folder reference
+    /// 整目录进 App bundle）。2026-08-23 起 diarizer 双模型（13.7MB）随包分发——hf-mirror 已对
+    /// /resolve/ 全站 308 回源 huggingface.co（国内直连不可达），运行期下载在无代理环境必失败。
+    static func bundledModelsDirectory() -> URL? {
+        Bundle.main.url(forResource: "speaker-diarization-coreml", withExtension: nil)
+    }
+
+    /// 模型获取：bundle 预置优先（零网络；App Store 签名即完整性，跳过 sha256 对账），
+    /// 缺目录（资源被剥离/未来重构）才回退运行期下载 + 内容级校验。
+    private static func loadModels(progress: (@Sendable (Double, String) -> Void)?) async throws -> DiarizerModels {
+        if let bundled = bundledModelsDirectory() {
+            return try DiarizerModels.load(
+                localSegmentationModel: bundled.appendingPathComponent(
+                    ModelNames.Diarizer.segmentationFile, isDirectory: true),
+                localEmbeddingModel: bundled.appendingPathComponent(
+                    ModelNames.Diarizer.embeddingFile, isDirectory: true))
+        }
+        let models = try await DiarizerModels.download(progressHandler: { dp in
+            progress?(dp.fractionCompleted, "下载")
+        })
+        // 052 P2-3：内容级校验（LFS 哈希清单，见 FluidAudioBootstrap.lfsSHA256）——仅运行期
+        // 下载路径需要：第三方镜像之上的比特级复验；bundle 路径由代码签名保证。
+        // 失配即清除缓存并抛错——损坏/被篡改的权重不构造 manager、不留盘。
+        if !FluidAudioBootstrap.verifyModelIntegrity(repo: .diarizer) {
+            FluidAudioBootstrap.removeDiarizerCache()
+            throw DiarizationError.engineFailed("分离模型校验失败（下载可能损坏），已清除，请重试")
+        }
+        return models
     }
 
     /// 启发式判定失败是否为内存 / VM 耗尽（`mach_vm_allocate` / OOM / malloc）。

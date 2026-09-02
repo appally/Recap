@@ -47,8 +47,9 @@ if (!token) {
 }
 console.log(`   token: ${token.slice(0, 12)}…  网关下发 asr_model=${issue.asr_model}\n`);
 
-/** 用 token 对指定 model 跑一次 ASR 会话(喂 0.3s 静音),只验鉴权/协议。 */
-function probe(model) {
+/** 用 token 对指定 model 跑一次 ASR 会话(喂 0.3s 静音),只验鉴权/协议。
+ *  vocabularyId 非空时 payload 顶层携带(与 app 的 run-task 同形状,验词表放通)。 */
+function probe(model, vocabularyId) {
   return new Promise((resolve) => {
     const taskId = randomBytes(16).toString('hex');
     const r = { model, taskStarted: false, failed: null };
@@ -70,9 +71,11 @@ function probe(model) {
     ws.on('unexpected-response', (_q, res) => finish({ failed: `握手被拒 HTTP ${res.statusCode}` }));
     ws.on('error', (e) => finish({ failed: `ws-error: ${e.message}` }));
     ws.on('open', () => {
+      const payload = { task_group: 'audio', task: 'asr', function: 'recognition', model, parameters: { format: 'pcm', sample_rate: 16000 }, input: {} };
+      if (vocabularyId) payload.vocabulary_id = vocabularyId;
       ws.send(JSON.stringify({
         header: { action: 'run-task', task_id: taskId, streaming: 'duplex' },
-        payload: { task_group: 'audio', task: 'asr', function: 'recognition', model, parameters: { format: 'pcm', sample_rate: 16000 }, input: {} },
+        payload,
       }));
     });
     ws.on('message', (data) => {
@@ -108,6 +111,15 @@ for (const m of MODELS) {
   console.log(`   • ${m.padEnd(24)} ${ok ? '✅ 放通' : '❌ ' + (r.failed || '未启动')}`);
 }
 
+console.log('\n②.5 热词词表探针(payload.vocabulary_id) …');
+if (issue.asr_vocabulary_id) {
+  const r = await probe(issue.asr_model || 'paraformer-realtime-v2', issue.asr_vocabulary_id);
+  const ok = r.taskStarted && !r.failed;
+  console.log(`   • ${String(issue.asr_model).padEnd(24)} + vocab ${issue.asr_vocabulary_id}  ${ok ? '✅ 词表放通' : '❌ ' + (r.failed || '未启动')}`);
+} else {
+  console.log('   • issue 响应未带 asr_vocabulary_id(ASR_VOCABULARY_ID 未配置或为空)——托管档热词未启用,跳过');
+}
+
 console.log('\n③ 负向探针:同一 ASR token 调 LLM chat 接口应被拒 …');
 const llmProbe = await fetch(
   'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
@@ -125,7 +137,12 @@ console.log(`   • ASR token → qwen-plus chat: HTTP ${llmStatus} ${
 console.log('\n──────── 判定 ────────');
 console.log('若 paraformer-realtime-v2 标 ❌:百炼控制台给该 key 的白名单加 paraformer-realtime-v2,');
 console.log('   再 deploy wrangler.jsonc(ASR_MODEL 已切 paraformer)。否则 deploy 后 ASR 会 st-token 403。');
+console.log('英文托管会议(ASR_MODEL_EN)与 zh 同走 fun-asr-realtime(多语言自动检测)——');
+console.log('   百炼无英文专用实时模型(paraformer-realtime-en-v1 不存在,2026-08-23 双确认),');
+console.log('   故 fun-asr-realtime ✅ 即英文链路放通;若未来切 qwen-audio 等英文模型,先加白名单+本探针。');
 console.log('若 ✅:可安全 deploy 切 paraformer(¥0.864/h,比 fun-asr 省 27% + 18 方言)。');
 console.log('负向探针若 ❌(放通):立即在百炼控制台收紧该 key 模型白名单,或配置 DASHSCOPE_ASR_API_KEY');
 console.log('   双子账号隔离(见 wrangler.jsonc Secrets 注释),否则免费用户可持 ASR 桶 token 刷 LLM。');
+console.log('热词词表若 ❌(task-failed 含 vocabulary/invalid):词表 target_model 与 ASR_MODEL 不一致——');
+console.log('   在百炼控制台改绑/重建词表后再 deploy。客户端有清词重试兜底,但热词会静默失效。');
 console.log('');

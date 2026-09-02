@@ -16,18 +16,29 @@ public struct RecapIssuedCredential: Sendable, Equatable {
     public let asrModel: String
     /// 服务端统一下发的 LLM 模型(网关 LLM_MODEL,现 qwen-plus);缺省回落 LLMPresets.cloudDefaultModel。
     public let llmModel: String
+    /// token 本身的过期时刻（≠ remainingSeconds——那是网关配额桶剩余，非 token 寿命）。
+    /// FunASREngine 的 LIVE 会话滚动续签据此排期（token 到期前主动换会话）。
+    public let tokenExpiresAt: Date
+    /// 全局共享热词表 id（网关 ASR_VOCABULARY_ID 下发；未配置为 nil）。
+    /// paraformer 不支持 input.context，托管档热词走 run-task payload.vocabulary_id。
+    public let asrVocabularyId: String?
 }
 
 public enum RecapCredentialError: Error, LocalizedError, Sendable {
     case notReady
     case notPro
     case issueFailed(status: Int, body: String)
+    /// 本地存的 Apple 交易 ID 是合成/占位值（如 "0"）——典型来源：Xcode scheme 挂了
+    /// Recap.storekit 配置时「购买」走本地 StoreKit 模拟，其交易在苹果服务器（含沙盒）不存在，
+    /// 云端验证必然 403。提前拦截并给出准确文案，避免误导性的「请确认订阅有效」。
+    case invalidLocalTransactionID(String)
 
     public var errorDescription: String? {
         switch self {
         case .notReady: return "云凭证尚未就绪（正在准备…）"
         case .notPro: return "当前非 Pro，会员模式不可用"
         case .issueFailed(let s, _): return "云凭证签发失败（HTTP \(s)）"
+        case .invalidLocalTransactionID(let txn): return "Pro 交易凭证无效（本地测试数据 \(txn)）"
         }
     }
 
@@ -41,6 +52,8 @@ public enum RecapCredentialError: Error, LocalizedError, Sendable {
             return "云凭证尚未就绪，请稍后重试。"
         case .notPro:
             return "当前非 Pro，会员模式不可用。"
+        case .invalidLocalTransactionID:
+            return "Pro 交易凭证无效（来自 Xcode 本地 StoreKit 测试）。请改用本地网关联调，或在未挂 StoreKit 配置的 build 中用沙盒账号重新购买。"
         case let .issueFailed(status, body):
             guard status == 403 else {
                 return "凭证准备失败，请检查网络后重试。"
@@ -73,7 +86,8 @@ public enum IssueUsage: String, Sendable {
 public final class RecapCredentialProvider: @unchecked Sendable {
     public static let shared = RecapCredentialProvider()
 
-    private struct Cached {
+    /// internal 供测试注入 fetchIssueFactory 构造成功凭证（生产仅由 fetchIssue 产出）。
+    struct Cached {
         let token: String
         let asrWSS: String
         let llmBase: String
@@ -81,11 +95,15 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         let asrModel: String
         let llmModel: String
         let expiresAt: Date
+        let asrVocabularyId: String?
+        /// 签发时的语言（网关按 X-Recap-Lang 下发对应 asr_model）。缓存命中需语言一致——
+        /// 英文会议的重转必须拿到英文模型 token，不能复用中文 token。
+        let lang: MeetingLanguage
     }
 
     private let lock = NSLock()
     private var cached: Cached?
-    private var ongoingFetch: Task<Cached, Error>?
+    private var ongoingFetch: Ongoing?
     private var refreshTask: Task<Void, Never>?
     /// Sign-in-with-Apple 注入的 identityToken,下次 issue 随请求带上网关验签升级(验后即清)。
     private var pendingIdentityToken: String?
@@ -97,6 +115,29 @@ public final class RecapCredentialProvider: @unchecked Sendable {
     /// 续签失败退避:15s 起、指数翻倍、封顶 5min(断网时避免每 15s 唤醒耗电);成功即重置。
     private var retryBackoff: TimeInterval = 15
     private static let retryBackoffMax: TimeInterval = 300
+
+    /// quota_exceeded 403 否定缓存条目：TTL 内对同 usage 直接重放拒绝（不发请求）。
+    /// 消灭同一场会话内 LIVE 开场 → endLive 重转 → startProcessing 强刷的三连重复
+    /// /v1/issue（每场白耗 1-2 次往返，最坏 15s/次的超时窗口），并保证文案稳定——
+    /// 额度耗尽的状态不会因后续请求赶上网络抖动被改写成「请检查网络」。
+    /// tier/mode 快照参与命中判定：购买升级（free→pro）/模式切换自失效，无需显式清除钩子。
+    private struct NegativeEntry {
+        let until: Date
+        let status: Int
+        let body: String
+        let tier: MembershipTier
+        let mode: AIServiceMode
+    }
+
+    /// 否定缓存按 usage 分桶（免费档 ASR/LLM 是两个独立月度桶，一侧耗尽不代表另一侧），
+    /// usage 内不分语言（配额桶不分语言，zh 耗尽 en 必然同拒）。
+    private var negativeEntries: [IssueUsage: NegativeEntry] = [:]
+    /// 否定缓存 TTL：额度按月重置、购买即 tier 变更，5min 足够覆盖一场会话的三连问。
+    private var negativeCacheTTLSeconds: TimeInterval = 300
+    /// fetchIssue 工厂：默认直连网络；测试注入避免触网（锁内读写）。
+    /// （存储属性默认值不能引用协变 Self，故显式写类名。）
+    private var fetchIssueFactory: (_ identityToken: String?, _ usage: IssueUsage, _ lang: MeetingLanguage) async throws -> Cached =
+        { try await RecapCredentialProvider.fetchIssue(identityToken: $0, usage: $1, lang: $2) }
 
     public init() {}
 
@@ -118,23 +159,34 @@ public final class RecapCredentialProvider: @unchecked Sendable {
     // MARK: - 读取 / 换取
 
     /// 同步读缓存(LLMProviderFactory / FunASREngine.prepare 等同步路径用)。
-    /// 缓存有效返回;否则抛 notReady(调用方应在启动入口先 ensureFresh)。
-    public func current() throws -> RecapIssuedCredential {
+    /// - Parameter lang: 请求的转写语言。ASR 消费方（`requiresASRModel: true`，默认）须语言
+    ///   匹配才返回——asr_model 随语言变，英文重转不能误用 zh token。LLM 消费方传 false：
+    ///   token/llm_model 与语言无关，复用本场已签的（任一语言）token 即可——单槽缓存按
+    ///   lang 互逐，若 LLM 也校验语言，英文会议的纪要/润色会多签一次（免费档白扣 120s）。
+    ///   不匹配或过期抛 notReady(调用方应在启动入口先 ensureFresh)。
+    public func current(lang: MeetingLanguage = .zh, requiresASRModel: Bool = true) throws -> RecapIssuedCredential {
         guard isActiveCloud else { throw RecapCredentialError.notPro }
-        guard let c = readCache(), c.expiresAt.timeIntervalSinceNow > minValidSeconds else {
+        let hit = requiresASRModel ? readCache(lang: lang) : readCacheAny()
+        guard let c = hit, c.expiresAt.timeIntervalSinceNow > minValidSeconds else {
             throw RecapCredentialError.notReady
         }
-        return RecapIssuedCredential(token: c.token, asrWSS: c.asrWSS, llmBase: c.llmBase, remainingSeconds: c.remainingSeconds, asrModel: c.asrModel, llmModel: c.llmModel)
+        return RecapIssuedCredential(token: c.token, asrWSS: c.asrWSS, llmBase: c.llmBase, remainingSeconds: c.remainingSeconds, asrModel: c.asrModel, llmModel: c.llmModel, tokenExpiresAt: c.expiresAt, asrVocabularyId: c.asrVocabularyId)
     }
 
     /// 异步换 token(启动 / 兜底续签)。并发去重,缓存够新则跳过。
-    public func ensureFresh(force: Bool = false, usage: IssueUsage = .llm) async throws {
+    /// quota_exceeded 否定缓存命中时直接重放 403（force 也不豁免——强刷为恢复瞬态,
+    /// 额度耗尽是持久拒绝，重放省一次往返且文案与首次拒绝一致）。
+    /// - Parameter lang: 请求的转写语言；网关据此签发对应 asr_model（zh=en 之外按 zh）。
+    public func ensureFresh(force: Bool = false, usage: IssueUsage = .llm, lang: MeetingLanguage = .zh) async throws {
         guard isActiveCloud else { throw RecapCredentialError.notPro }
-        if !force, let c = readCache(), c.expiresAt.timeIntervalSinceNow > refreshLeadSeconds { return }
+        if !force, let c = readCache(lang: lang), c.expiresAt.timeIntervalSinceNow > refreshLeadSeconds { return }
+        if let replayed = takeNegativeEntryIfValid(usage: usage) {
+            throw replayed
+        }
         // 并发去重(原子占坑):单次锁内「检查进行中请求,否则占坑新建」,
         // 杜绝两个调用者同时通过 nil 检查各自发 /v1/issue(重复签发 + 配额误计 + defer 互抹)。
         let task: Task<Cached, Error>
-        switch claimOngoingFetch(usage: usage) {
+        switch claimOngoingFetch(usage: usage, lang: lang) {
         case .reuse(let ongoing):
             _ = try await ongoing.value
             return
@@ -142,8 +194,26 @@ public final class RecapCredentialProvider: @unchecked Sendable {
             task = created
         }
         defer { setOngoingFetch(nil) }
-        let fetched = try await task.value
-        writeCache(fetched)
+        do {
+            let fetched = try await task.value
+            writeCache(fetched)
+        } catch {
+            // 仅缓存 quota_exceeded：requires_membership 可能是网关/Apple 验签的瞬时故障，
+            // 5min 内把 Pro 用户锁死在「订阅无效」文案得不偿失；额度耗尽则是确定性持久态。
+            if case let RecapCredentialError.issueFailed(status, body) = error,
+               status == 403, body.contains("quota_exceeded") {
+                writeNegativeEntry(
+                    NegativeEntry(
+                        until: Date().addingTimeInterval(negativeTTL()),
+                        status: status,
+                        body: body,
+                        tier: RecapAccountStore.current.tier,
+                        mode: AIServiceMode.current
+                    ),
+                    usage: usage)
+            }
+            throw error
+        }
     }
 
     /// 启动后台滚动续签(recapCloud + Pro 时在 app 启动调用)。
@@ -185,12 +255,14 @@ public final class RecapCredentialProvider: @unchecked Sendable {
 
     // MARK: - 网络
 
-    private static func fetchIssue(identityToken: String?, usage: IssueUsage = .llm) async throws -> Cached {
+    private static func fetchIssue(identityToken: String?, usage: IssueUsage = .llm, lang: MeetingLanguage = .zh) async throws -> Cached {
         var req = URLRequest(url: endpoint.appendingPathComponent("v1/issue"))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         // 用途分桶:服务端据此把免费档 ASR 扣进独立月度桶(与 LLM 隔离)。
         req.setValue(usage.rawValue, forHTTPHeaderField: "X-Recap-Usage")
+        // 语言:服务端据此下发对应 asr_model(zh / en),英文会议重转必须匹配。
+        req.setValue(lang.rawValue, forHTTPHeaderField: "X-Recap-Lang")
         req.timeoutInterval = 15
         // 身份头(三档互斥):Pro=交易id / 免费档=设备ID(+签名升级时附 identityToken)。
         // 深层防御:tier=Pro 但 mode 漂移到 freeTrial(双键独立持久化,见 MembershipStore.refreshEntitlements),
@@ -202,6 +274,11 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         switch effectiveMode {
         case .recapCloud:
             if let txn = RecapAccountStore.appleTransactionID {
+                // 卫生拦截：合成/占位交易 ID（本地 StoreKit 测试产物，如 "0"）发给网关只会
+                // 换回误导性的「请确认订阅有效」。真 Apple 交易 ID 为 ≥10 位数字。
+                guard txn.count >= 8, txn.allSatisfy(\.isNumber) else {
+                    throw RecapCredentialError.invalidLocalTransactionID(txn)
+                }
                 req.setValue(txn, forHTTPHeaderField: "X-Apple-Transaction-Id")
             }
         case .freeTrial:
@@ -216,7 +293,7 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         let data: Data
         let resp: URLResponse
         do {
-            (data, resp) = try await URLSession.shared.data(for: req)
+            (data, resp) = try await Self.loadDataWithTransientRetry(req)
         } catch {
             throw RecapCredentialError.issueFailed(status: -1, body: error.localizedDescription)
         }
@@ -235,8 +312,46 @@ public final class RecapCredentialProvider: @unchecked Sendable {
             remainingSeconds: decoded.remaining_seconds,
             asrModel: decoded.asr_model ?? ASRPresets.funRealtimeModel,
             llmModel: decoded.llm_model ?? LLMPresets.cloudDefaultModel,
-            expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in))
+            expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in)),
+            asrVocabularyId: decoded.asr_vocabulary_id,
+            lang: lang
         )
+    }
+
+    /// 瞬时网络错误（本地代理/VPN 链路抖动，快速失败 <1s）短暂等待后重试一次。
+    /// 签发是纪要/录音的关键路径，一次廉价重试可救回代理瞬断（2026-09-02 日志实测
+    /// 127.0.0.1 代理 503/-1005 一抖即废整场纪要）。代价权衡：若首发的响应在网关已
+    /// 签发后丢失，重试会多计一次免费档 LLM 桶（120s）——远小于纪要整体失败。
+    /// `load` 参数仅测试注入。
+    static func loadDataWithTransientRetry(
+        _ req: URLRequest,
+        load: (_ req: URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) }
+    ) async throws -> (Data, URLResponse) {
+        do {
+            return try await load(req)
+        } catch {
+            guard isFastTransientNetworkError(error) else { throw error }
+        }
+        // 短间隔；期间被取消则第二发会立即以 cancelled 失败，不拖泥带水。
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        return try await load(req)
+    }
+
+    /// 「快速失败的瞬时网络错误」指纹。刻意排除：
+    /// - timedOut：15s 超时慢失败已卡满关键路径，重试再翻倍不可接受；
+    /// - notConnectedToInternet：持久离线，重试无意义；
+    /// - cancelled：调用方主动放弃。
+    static func isFastTransientNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .networkConnectionLost,   // -1005：连接中断（bad MAC/代理断流）
+             .cannotConnectToHost,  // -1004
+             .cannotFindHost,          // -1003：代理 DNS 规则抖动
+             .dnsLookupFailed:         // -1006
+            return true
+        default:
+            return false
+        }
     }
 
     /// 账号删除（App Store 5.1.1(v)）：identityToken 验签后由网关清空
@@ -278,11 +393,22 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         let remaining_seconds: Int?
         let asr_model: String?
         let llm_model: String?
+        /// 网关配置了 ASR_VOCABULARY_ID 才有此键（未配置/空串不带，双向兼容）。
+        let asr_vocabulary_id: String?
     }
 
     // MARK: - 锁保护的缓存 / 任务读写
 
-    private func readCache() -> Cached? { lock.lock(); defer { lock.unlock() }; return cached }
+    private func readCache(lang: MeetingLanguage = .zh) -> Cached? {
+        lock.lock(); defer { lock.unlock() }
+        guard let cached, cached.lang == lang else { return nil }
+        return cached
+    }
+    /// 不校验语言的缓存读取（LLM 消费方：token/llm_model 与语言无关）。
+    private func readCacheAny() -> Cached? {
+        lock.lock(); defer { lock.unlock() }
+        return cached
+    }
     private func writeCache(_ c: Cached) {
         lock.lock(); defer { lock.unlock() }
         cached = c
@@ -292,23 +418,68 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         }
     }
     /// 原子「检查进行中请求,否则占坑新建」。单次锁内完成,杜绝并发重复签发。
+    /// 语言不一致的进行中请求不复用（zh 请求不应吞掉 en 请求的去重占坑）。
     private enum OngoingClaim {
         case reuse(Task<Cached, Error>)
         case claimed(Task<Cached, Error>)
     }
-    private func claimOngoingFetch(usage: IssueUsage) -> OngoingClaim {
+    private struct Ongoing {
+        let lang: MeetingLanguage
+        let task: Task<Cached, Error>
+    }
+    private func claimOngoingFetch(usage: IssueUsage, lang: MeetingLanguage) -> OngoingClaim {
         lock.lock(); defer { lock.unlock() }
-        if let ongoing = ongoingFetch { return .reuse(ongoing) }
+        if let ongoing = ongoingFetch, ongoing.lang == lang { return .reuse(ongoing.task) }
         // 占坑:取走 pendingIdentityToken(验签升级用,验后即清),建 Task 并登记
         let elevationToken = pendingIdentityToken
         pendingIdentityToken = nil
-        let task = Task { try await Self.fetchIssue(identityToken: elevationToken, usage: usage) }
-        ongoingFetch = task
+        let factory = fetchIssueFactory
+        let task = Task { try await factory(elevationToken, usage, lang) }
+        ongoingFetch = Ongoing(lang: lang, task: task)
         return .claimed(task)
     }
-    private func setOngoingFetch(_ t: Task<Cached, Error>?) { lock.lock(); defer { lock.unlock() }; ongoingFetch = t }
+    private func setOngoingFetch(_ t: Ongoing?) { lock.lock(); defer { lock.unlock() }; ongoingFetch = t }
     private func takeRefreshTask() -> Task<Void, Never>? { lock.lock(); defer { lock.unlock() }; let t = refreshTask; refreshTask = nil; return t }
     private func setRefreshTask(_ t: Task<Void, Never>?) { lock.lock(); defer { lock.unlock() }; refreshTask = t }
+
+    // MARK: - quota_exceeded 否定缓存（锁保护）
+
+    /// 命中且未过期（tier/mode 快照与当前一致）→ 返回重放错误；过期/失配顺带清除返回 nil。
+    private func takeNegativeEntryIfValid(usage: IssueUsage) -> RecapCredentialError? {
+        let tier = RecapAccountStore.current.tier
+        let mode = AIServiceMode.current
+        lock.lock(); defer { lock.unlock() }
+        guard let e = negativeEntries[usage] else { return nil }
+        guard e.tier == tier, e.mode == mode, Date() < e.until else {
+            negativeEntries[usage] = nil
+            return nil
+        }
+        return RecapCredentialError.issueFailed(status: e.status, body: e.body)
+    }
+
+    private func writeNegativeEntry(_ e: NegativeEntry, usage: IssueUsage) {
+        lock.lock(); defer { lock.unlock() }
+        negativeEntries[usage] = e
+    }
+
+    private func negativeTTL() -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return negativeCacheTTLSeconds
+    }
+
+    // MARK: - 测试支持（@testable；生产勿用）
+
+    /// 替换 /v1/issue 实现（避免测试触网）。锁内写，claimOngoingFetch 锁内读。
+    func setFetchIssueFactoryForTesting(_ factory: @escaping (_ identityToken: String?, _ usage: IssueUsage, _ lang: MeetingLanguage) async throws -> Cached) {
+        lock.lock(); defer { lock.unlock() }
+        fetchIssueFactory = factory
+    }
+
+    /// 覆盖否定缓存 TTL（默认 300s），测过期/失效路径。
+    func setNegativeCacheTTLForTesting(_ ttl: TimeInterval) {
+        lock.lock(); defer { lock.unlock() }
+        negativeCacheTTLSeconds = ttl
+    }
 
     /// Sign-in-with-Apple 后注入 identityToken,下次 issue 随请求带上网关验签升级(验后即清)。
     public func setIdentityTokenForElevation(_ jwt: String) {

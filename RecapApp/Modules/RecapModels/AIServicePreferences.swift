@@ -362,6 +362,23 @@ public enum LLMSelection {
         set { UserDefaults.standard.set(newValue, forKey: modelKey) }
     }
 
+    private static let customBaseURLKey = "llm.custom.baseURL"
+
+    /// 自定义端点的 Base URL（设置页保存；SwiftData config 仅驱动设置页回显，运行时不读）。
+    public static var customBaseURL: String {
+        get { UserDefaults.standard.string(forKey: customBaseURLKey) ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: customBaseURLKey) }
+    }
+
+    /// 运行时 BYOK 实际请求的端点：custom 用用户填写的地址，其余用模板预置。
+    /// 修复：工厂链路此前读 `template.baseURL`，而 `.custom` 恒为占位符 "https://"，
+    /// 自定义 provider 在两条链路（纪要/Agent）均请求非法地址、从不可用。
+    public static var selectedBaseURL: String {
+        guard selectedTemplate == .custom else { return selectedTemplate.baseURL }
+        let url = customBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.isEmpty ? selectedTemplate.baseURL : url
+    }
+
     public static var selectedTemplate: LLMProviderTemplate {
         LLMProviderTemplate.allCases.first { $0.keychainAccount == selectedKeychainAccount }
             ?? .deepseek

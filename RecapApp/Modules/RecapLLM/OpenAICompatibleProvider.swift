@@ -164,43 +164,65 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         firstTokenBudget: Double
     ) async -> (produced: Bool, error: Error?) {
         let attempt = StreamAttempt(continuation: continuation)
-        let budget = firstTokenBudget
+        return await Self.raceFirstToken(budget: firstTokenBudget, attempt: attempt) {
+            do {
+                for try await chunk in self.client.chatsStream(query: query) {
+                    if Task.isCancelled { break }
+                    if let t = chunk.choices.first?.delta.content, !t.isEmpty {
+                        await attempt.yieldContent(t)
+                    }
+                }
+            } catch is CancellationError {
+                // 超时取消 / 外层取消：静默，结论由 outcome 表达。
+            } catch {
+                await attempt.recordConsumeError(error)
+            }
+        }
+    }
 
-        return await withTaskGroup(of: Void.self) { group in
+    /// 首 token 竞速核心（提为静态纯结构，供回归测试）。
+    ///
+    /// 看门狗任务在「已产出首 token」后必须**解除武装**——挂起直至被取消，绝不自行完成：
+    /// `group.next()` 会被任一子任务的完成唤醒并随即 `cancelAll()`。旧实现看门狗睡满预算
+    /// 即完成，仍在健康产出的长流（摘要普遍超过首 token 预算的 20s）被掐断后按
+    /// 「自然结束」finish——下游拿到静默截断的纪要。合法的完成只有两种：
+    /// 真超时（预算内无首 token，需要 cancelAll 掐断消费）与被取消。
+    static func raceFirstToken(
+        budget: Double,
+        attempt: StreamAttempt,
+        consume: @escaping @Sendable () async -> Void
+    ) async -> (produced: Bool, error: Error?) {
+        await withTaskGroup(of: Void.self) { group in
             // 消费任务：持续 yield delta；随父 Task 取消而取消（结构化并发）。
             group.addTask {
-                do {
-                    for try await chunk in self.client.chatsStream(query: query) {
-                        if Task.isCancelled { break }
-                        if let t = chunk.choices.first?.delta.content, !t.isEmpty {
-                            await attempt.yieldContent(t)
-                        }
-                    }
-                } catch is CancellationError {
-                    // 超时取消 / 外层取消：静默，结论由 outcome 表达。
-                } catch {
-                    await attempt.recordConsumeError(error)
-                }
+                await consume()
             }
-            // 首 token 超时任务：预算内未产出则判超时；被提前取消（未到时间）则不标记。
+            // 看门狗：预算内未产出 → 判真超时（完成唤醒竞速，cancelAll 掐断消费）；
+            // 已产出 → 解除武装挂起（消费先结束时由 cancelAll 唤醒收尾）。
             group.addTask {
                 do {
                     try await Task.sleep(for: .seconds(budget))
                 } catch {
+                    return   // 消费先结束（或外层取消）提前唤醒：静默退出，无需动作
+                }
+                guard await attempt.resolveWatchdog(seconds: budget) else {
+                    // 已产出：本任务不得完成（完成即唤醒竞速 → cancelAll 掐断健康流）。
+                    // 挂到次日仅表「永不主动完成」——消费结束的 cancelAll 会立刻唤醒本任务。
+                    try? await Task.sleep(for: .seconds(86_400))
                     return
                 }
-                await attempt.markTimeout(seconds: budget)
             }
 
-            _ = await group.next()        // 任一子任务先完成
-            group.cancelAll()             // 取消另一个（超时则中断消费；提前完成则取消计时）
+            _ = await group.next()        // 消费完成 或 真超时，二者必居其一
+            group.cancelAll()             // 超时则中断消费；消费先完成则解除看门狗
             await group.waitForAll()      // 等收尾，避免泄漏
-            return await attempt.outcome()
         }
+        return await attempt.outcome()
     }
 
     /// 单次流式尝试的可变状态。actor 串行化，消除「首 chunk 与超时」的竞态。
-    private actor StreamAttempt {
+    /// internal 供 ``raceFirstToken`` 回归测试直接构造。
+    actor StreamAttempt {
         private let continuation: AsyncThrowingStream<String, Error>.Continuation
         private var produced = false
         private var timedOut = false
@@ -222,11 +244,13 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
             if consumeError == nil { consumeError = error }
         }
 
-        /// 标记首 token 超时；已产出则压制（首 chunk 与超时竞争时 produced 优先）。
-        func markTimeout(seconds: Double) {
-            guard !produced else { return }
+        /// 看门狗醒来后的决断：真超时（仍未产出）标记并返回 true；已产出返回 false（解除武装）。
+        /// 首 chunk 与超时几乎同时到达时 produced 优先，避免误判导致重试。
+        func resolveWatchdog(seconds: Double) -> Bool {
+            guard !produced else { return false }
             timedOut = true
             timeoutSeconds = seconds
+            return true
         }
 
         func outcome() -> (produced: Bool, error: Error?) {
@@ -274,6 +298,9 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         var body: [String: Any] = [
             "model": model,
             "temperature": 0,
+            // P1：显式输出上限——厂商默认 max_tokens 偏小时，长会几十条待办的 arguments
+            // 会被截断成坏 JSON（此前整场待办静默消失）。8192 对全部 OpenAI 兼容端点安全。
+            "max_tokens": 8192,
             "messages": [
                 ["role": "system", "content": system],
                 ["role": "user", "content": user],
@@ -325,7 +352,9 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         guard let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
               let choices = root["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any] else {
-            return nil
+            // P1 修复：响应结构畸形不再静默 nil——调用方对 nil 按「成功、零待办」处理，
+            // 整场行动项会无声消失；抛错走调用方既有 catch（.failed / 段失败计数，可见）。
+            throw ExtractError.badResponse
         }
 
         if let toolCalls = message["tool_calls"] as? [[String: Any]] {
@@ -356,7 +385,9 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
                 return decoded
             }
         }
-        return nil
+        // P1 修复：tool_calls 参数与 content 兜底都解不出（常见：arguments 被服务端输出
+        // 上限截断成坏 JSON）——同上，抛错让调用方可见，不静默「零待办」。
+        throw ExtractError.badResponse
     }
 
     /// 执行 tool-call HTTP 请求，瞬态错误重试（URLError `.timedOut`/`.networkConnectionLost`/

@@ -36,6 +36,26 @@ public enum ASRFeatureFlags {
         set { UserDefaults.standard.set(newValue, forKey: fluidDiarizerKey) }
     }
 
+    private static let identityMatcherKey = "asr.identityMatcherEnabled"
+
+    /// 跨会议身份匹配层（CAM++ 192-d，声纹升级方案 Step 2）：开启时旁路 DiarizerManager 内部
+    /// 的已知说话人匹配（聚类纯局部），由 Recap 自建 IdentityMatcher 用 CAM++ 匹配画廊。
+    /// 默认按构建区分：DEBUG 开（真机 POC 双跑）、Release 关（旧路径兜底）。
+    /// 仅在用户同意声纹处理（`VoiceprintConsent.granted`）时生效。
+    public static var identityMatcherEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: identityMatcherKey) == nil {
+                #if DEBUG
+                return true
+                #else
+                return false
+                #endif
+            }
+            return UserDefaults.standard.bool(forKey: identityMatcherKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: identityMatcherKey) }
+    }
+
     private static let dialectThresholdKey = "asr.dialectConfidenceThreshold"
 
     /// 方言自动重转的端侧 confidence 均值阈值：低于此值判定方言，触发云端 Fun-ASR 重转。

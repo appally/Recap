@@ -101,6 +101,7 @@ public actor AudioRecorder {
         handleCount = 0
         yieldCount = 0
         wasInterrupted = false
+        aaFilter = nil   // 新会话：抗混叠滤波器状态清零（首个 tap 按实际比率重建）
         closeFileHandle()
 
         if let fileURL {
@@ -115,6 +116,7 @@ public actor AudioRecorder {
         // installTap 必须用硬件格式（48k），不能用 16k（否则 format mismatch 崩溃）
         let inFormat = engine.inputNode.outputFormat(forBus: 0)
         inSampleRate = inFormat.sampleRate
+        resamplePhase = 0   // 新会话/新输入格式：重采样读指针归零
         guard inFormat.channelCount >= 1, inFormat.sampleRate > 0 else {
             closeFileHandle()
             throw RecorderError.invalidInputFormat
@@ -239,8 +241,16 @@ public actor AudioRecorder {
         let format = engine.inputNode.outputFormat(forBus: 0)
         guard !engine.isRunning || format.sampleRate != inSampleRate else { return }
         do {
+            // 路由瞬态（拔蓝牙/输入节点重建）可能给出 0ch/0Hz——installTap 会抛 Obj-C
+            // 异常直接崩溃（Swift do-catch 接不住 NSException）。与 start() 的防御对称：
+            // 非法格式按恢复失败处理，保持中断态等下一次路由/中断事件。
+            guard format.channelCount >= 1, format.sampleRate > 0 else {
+                throw RecorderError.invalidInputFormat
+            }
             try AVAudioSession.sharedInstance().setActive(true)
             inSampleRate = format.sampleRate
+            resamplePhase = 0   // 输入格式已变：读指针按新比率重来
+            aaFilter = nil     // 滤波器随新比率在下个 tap 重建（旧状态属旧采样率，不可续用）
             installTap(format: format)
             if !engine.isRunning {
                 try engine.start()
@@ -259,6 +269,10 @@ public actor AudioRecorder {
             try AVAudioSession.sharedInstance().setActive(true)
             if !engine.isRunning {
                 let format = engine.inputNode.outputFormat(forBus: 0)
+                // 同 handleEngineConfigurationChange：非法格式不 installTap（防 Obj-C 异常）。
+                guard format.channelCount >= 1, format.sampleRate > 0 else {
+                    throw RecorderError.invalidInputFormat
+                }
                 inSampleRate = format.sampleRate
                 installTap(format: format)
                 try engine.start()
@@ -420,21 +434,42 @@ public actor AudioRecorder {
         return current + (target - current) * min(1, dt * rate)
     }
 
-    /// 线性插值重采样（任意比率，无状态）。
+    /// 重采样跨 tap 的分数读指针（0..<ratio）：消除每 tap `Int(count/ratio)` 截断 +
+    /// 相位归零造成的累计时间轴缩短（48k→16k 约 0.9s/小时——墙钟 elapsed 与 PCM/segment
+    /// 音频轴在长会后期漂移 1~2s，durationSeconds 与回放时长不一致）。
+    private var resamplePhase: Double = 0
+
+    /// 抗混叠低通（跨 tap 保状态）。48k→16k 线性插值降采样会把 8~24kHz 能量折叠进
+    /// 0~8kHz 语音带——擦音（/s/ /f/ /θ/，能量集中在高频）受损，英文辅音区分比中文更依赖
+    /// 擦音对比。两级级联 biquad 在插值前施加（详见 AntiAliasFilter 文档注释）。
+    private var aaFilter: AntiAliasFilter?
+
+    /// 线性插值重采样（任意比率；相位跨 tap 连续，无累计误差）。
     private func resample(_ samples: [Float], from inRate: Double, to outRate: Double) -> [Float] {
         guard !samples.isEmpty, inRate > 0, outRate > 0 else { return [] }
         if abs(inRate - outRate) < 1 { return samples }
-        let ratio = inRate / outRate
-        let outCount = Int(Double(samples.count) / ratio)
-        guard outCount > 0 else { return [] }
-        var out = [Float](); out.reserveCapacity(outCount)
-        for i in 0..<outCount {
-            let pos = Double(i) * ratio
-            let lo = Int(pos)
-            let hi = min(lo + 1, samples.count - 1)
-            let frac = Float(pos - Double(lo))
-            out.append(samples[lo] * (1 - frac) + samples[hi] * frac)
+        // 显著降采样（>1.5×）才需要抗混叠；比率变更时重建（make 内含截止频率，重算即换参）。
+        if aaFilter == nil || aaFilter?.matches(inRate: inRate, outRate: outRate) != true {
+            aaFilter = AntiAliasFilter.make(inRate: inRate, outRate: outRate)
         }
+        let src: [Float]
+        if var f = aaFilter {
+            src = f.process(samples)
+            aaFilter = f
+        } else {
+            src = samples
+        }
+        let ratio = inRate / outRate
+        var out = [Float]()
+        out.reserveCapacity(Int(Double(src.count) / ratio) + 1)
+        var pos = resamplePhase
+        while pos < Double(src.count - 1) {
+            let lo = Int(pos)
+            let frac = Float(pos - Double(lo))
+            out.append(src[lo] * (1 - frac) + src[lo + 1] * frac)
+            pos += ratio
+        }
+        resamplePhase = pos - Double(src.count)   // 结转余数（0..<ratio）
         return out
     }
 
@@ -464,5 +499,75 @@ public actor AudioRecorder {
         try? fileHandle?.synchronize()
         try? fileHandle?.close()
         fileHandle = nil
+    }
+}
+
+/// 抗混叠低通：两级级联二阶 Butterworth（RBJ cookbook 公式，每级 Q=1/√2），降采样前施加。
+/// 纯值类型：跨 tap 由 `AudioRecorder` 持有并写回各级状态。
+/// 截止 = 0.40×目标率（48k→16k 时 6.4kHz），两级合计 −24dB/oct：
+/// - 12kHz 折叠分量（不滤会假信号成 4kHz 砸进语音带）≈ −22dB；
+/// - 18kHz 深阻带 ≈ −36dB；3kHz 通带 −0.4dB、直流无损。
+/// （单级二阶在 12kHz 仅 −9dB——实测不足；6.4~8kHz 过渡带 −3~−6dB 的轻微牺牲优于混叠。）
+struct AntiAliasFilter {
+    /// 单级直接 I 型 biquad（系数归一化，x/y 各两级历史）。
+    private struct Stage {
+        let b0: Float, b1: Float, b2: Float, a1: Float, a2: Float
+        var x1: Float = 0, x2: Float = 0, y1: Float = 0, y2: Float = 0
+
+        init(cutoff: Double, inRate: Double) {
+            let w0 = 2 * .pi * cutoff / inRate
+            let cosw0 = cos(w0)
+            let alpha = sin(w0) / (2 * (1 / Double(2).squareRoot()))   // Q = 1/√2（最平坦）
+            let a0 = 1 + alpha
+            b0 = Float((1 - cosw0) / 2 / a0)
+            b1 = Float((1 - cosw0) / a0)
+            b2 = Float((1 - cosw0) / 2 / a0)
+            a1 = Float(-2 * cosw0 / a0)
+            a2 = Float((1 - alpha) / a0)
+        }
+
+        mutating func process(_ samples: [Float]) -> [Float] {
+            var out = [Float](repeating: 0, count: samples.count)
+            var x1 = self.x1, x2 = self.x2, y1 = self.y1, y2 = self.y2
+            let (b0, b1, b2, a1, a2) = (self.b0, self.b1, self.b2, self.a1, self.a2)
+            for i in samples.indices {
+                let x0 = samples[i]
+                let y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+                out[i] = y0
+                x2 = x1; x1 = x0
+                y2 = y1; y1 = y0
+            }
+            self.x1 = x1; self.x2 = x2; self.y1 = y1; self.y2 = y2
+            return out
+        }
+    }
+
+    private var stages: [Stage]
+    private let inRate: Double, outRate: Double
+
+    /// 显著降采样（>1.5×）才建滤波器；同率/上采样返回 nil（无混叠风险）。
+    static func make(inRate: Double, outRate: Double) -> AntiAliasFilter? {
+        guard inRate > outRate * 1.5, inRate > 0, outRate > 0 else { return nil }
+        let cutoff = min(0.40 * outRate, 0.40 * inRate)
+        return AntiAliasFilter(
+            stages: [Stage(cutoff: cutoff, inRate: inRate),
+                     Stage(cutoff: cutoff, inRate: inRate)],
+            inRate: inRate, outRate: outRate
+        )
+    }
+
+    /// 当前滤波器是否对应这对采样率（比率变更时由调用方重建）。
+    func matches(inRate newIn: Double, outRate newOut: Double) -> Bool {
+        inRate == newIn && outRate == newOut
+    }
+
+    /// 逐级串联滤波；各级状态跨调用保留（tap 边界无毛刺）。
+    mutating func process(_ samples: [Float]) -> [Float] {
+        guard !samples.isEmpty else { return samples }
+        var current = samples
+        for i in stages.indices {
+            current = stages[i].process(current)
+        }
+        return current
     }
 }

@@ -18,10 +18,10 @@ packages:
   ArgmaxOSS:
     url: https://github.com/argmaxinc/argmax-oss-swift.git
     exactVersion: 1.0.0
-  # FluidAudio（端侧 SenseVoice/Paraformer + Silero VAD）；exact pin 规避 #723 版本解析问题
+  # FluidAudio（端侧 SenseVoice/Paraformer + Silero VAD + CAM++ 声纹）；exact pin 规避 #723 版本解析问题
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio.git
-    exactVersion: 0.15.5
+    exactVersion: 0.15.6
 
 settings:
   base:
@@ -169,10 +169,21 @@ targets:
           - "Recap.storekit"
           # 作为独立 folder reference 纳入（见下），避免被 App 扫描拆成单文件。
           - "speakerkit-coreml"
+          - "speaker-diarization-coreml"
+          - "campplus-coreml"
       # 说话人分离模型：蓝色 folder reference 整目录进 bundle，保持 .mlmodelc 目录原子性
       #（group/扫描模式会把 .mlmodelc 拆成散文件、破坏 CoreML bundle 结构）。
       # 首次冷启动命中 bundle、零网络零损坏；详见 SpeakerKitDiarizer.bundledModelFolder。
       - path: App/speakerkit-coreml
+        type: folder
+      # FluidDiarizer 双模型（pyannote+WeSpeaker，13.7MB，sha256 与 lfsSHA256 清单对账）：
+      # 2026-08-23 hf-mirror 全站 /resolve/ 308 回源后国内运行期下载不可达，照 SpeakerKit
+      # 先例随包分发；详见 FluidDiarizer.bundledModelsDirectory。
+      - path: App/speaker-diarization-coreml
+        type: folder
+      # CAM++ 声纹双模型（CamPlusPreprocessor+CamPlusPlus，15.8MB，六项 LFS sha256 对账）：
+      # 同上断源先例随包分发（声纹录入/身份匹配引擎）；详见 CampPlusEmbedderProvider.loadEmbedder。
+      - path: App/campplus-coreml
         type: folder
     info:
       path: App/Info.plist

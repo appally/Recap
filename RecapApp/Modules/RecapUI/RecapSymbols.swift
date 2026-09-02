@@ -25,7 +25,6 @@ public enum RecapSymbol {
     public static let more = "ellipsis"
     public static let close = "xmark"
     public static let back = "chevron.left"
-    public static let dismissDown = "chevron.down"
     public static let chevron = "chevron.right"
     public static let delete = "trash"
     public static let check = "checkmark"

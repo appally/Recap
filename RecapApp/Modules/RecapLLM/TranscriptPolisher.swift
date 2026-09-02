@@ -26,16 +26,20 @@ public struct TranscriptPolisher: Sendable {
     /// 润色一组分段，返回保段的润色分段（id/时间戳/说话人不变，text 已润色）。
     /// - Parameter hints: 本场专名提示（底稿实体/说话人名/用户常用词，plan 050 Wave B）。
     ///   注入 user 侧编号文本前缀（caching 安全——system 保持静态）。
+    /// - Parameter language: 转写语言；英文会议走英文润色 prompt（中文提示词会把英文
+    ///   错字修正成中文语义，越修越错）。
     public func polish(_ segments: [TranscriptSegment],
-                       hints: [String] = []) async throws -> [TranscriptSegment] {
+                       hints: [String] = [],
+                       language: MeetingLanguage = .zh) async throws -> [TranscriptSegment] {
         guard !segments.isEmpty else { return [] }
         let hintBlock = Self.hintBlock(hints)
+        let system = language == .en ? Self.systemPromptEn : Self.systemPrompt
         // 全局 1-based 编号，跨批唯一，便于解析后映射回 index。
         var polishedByNum: [Int: String] = [:]
         for batch in Self.batches(of: segments, maxChars: batchMaxChars) {
             let numbered = batch.map { "⟦\($0.0 + 1)⟧\($0.1.text)" }.joined(separator: "\n")
             var output = ""
-            for try await delta in self.stream(Self.systemPrompt, hintBlock + numbered) {
+            for try await delta in self.stream(system, hintBlock + numbered) {
                 if Task.isCancelled { break }
                 output += delta
             }
@@ -123,4 +127,20 @@ public struct TranscriptPolisher: Sendable {
         let words = cleaned.prefix(60).joined(separator: "、")
         return "【专名提示】\(words)\n（仅当原文中专有名词与上表明显冲突时才按表纠正，其余一律保持原样。）\n\n"
     }
+
+    /// 英文转写润色 prompt（与中文版同铁律：保段、纠错不增删、编号对应）。
+    /// 静态常量，缓存契约同 systemPrompt。
+    public static let systemPromptEn = """
+    You are an English meeting transcript polishing assistant. The input is numbered transcript segments in the format "⟦N⟧original text". Polish each segment, only allowing:
+    1. Adding missing punctuation (periods, commas, question marks, etc.);
+    2. Fixing obvious homophone/speech-recognition errors (only when context makes the intended word clear);
+    3. Minimal cleanup of spoken repetitions or slips of the tongue (e.g. dropping one duplicate "the the").
+
+    Hard rules:
+    - Never change meaning, never add or remove information, never merge or split segments.
+    - Keep proper nouns (names, companies, products, terms) and numbers exactly as they are. Exception: if the input carries a 【专名提示】glossary, only correct tokens that clearly conflict with it; everything outside the glossary stays untouched.
+    - Keep segment numbering strictly aligned; output must be "⟦N⟧polished" lines, same numbering as the input.
+    - If a segment needs no change, output it verbatim.
+    - Output only the numbered segments, with no preamble, explanation, headings, or summary.
+    """
 }

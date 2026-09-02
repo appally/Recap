@@ -8,6 +8,19 @@ export interface ProvedUser {
   tier: ProveTier;
 }
 
+/** ALLOW_STUB 认可的开发主机:localhost 族 + 私网 IPv4(RFC1918/127)。
+ *  私网放行让真机能连 Mac 局网 IP 上的 `wrangler dev` 做本地联调(模拟器走 127.0.0.1 本就放行);
+ *  生产域名(recap.manymind.chat)不可能是私网 IP,硬护栏语义不变。纯函数供 vitest。 */
+export function isDevHostName(host: string): boolean {
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.test') || host.endsWith('.local')) {
+    return true;
+  }
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const a = Number(m[1]), b = Number(m[2]);
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+}
+
 /**
  * 验证请求方身份,返回 tier + userId(配额 DO key)。分流:
  *   - X-Apple-Transaction-Id → verifyProApple(App Store Server API)→ pro / none
@@ -33,10 +46,10 @@ export async function verifyPro(req: Request, env: Env): Promise<ProvedUser> {
   if (device) return { userId: 'device:' + device, tier: 'free' };
 
   // 3. stub(仅 dev)
-  // 硬护栏:生产域名(hostname 非 localhost)拒绝 ALLOW_STUB=1,防误以 secret 注入导致付费绕过。
+  // 硬护栏:生产域名(hostname 非 localhost/私网)拒绝 ALLOW_STUB=1,防误以 secret 注入导致付费绕过。
   if (env.ALLOW_STUB === '1') {
     const host = new URL(req.url).hostname;
-    const isDevHost = host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost') || host.endsWith('.test') || host.endsWith('.local');
+    const isDevHost = isDevHostName(host);
     if (!isDevHost) {
       console.error('[prove] REFUSED ALLOW_STUB=1 on non-dev host:', host);
       return { userId: '', tier: 'none' };

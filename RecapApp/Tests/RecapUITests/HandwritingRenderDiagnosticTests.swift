@@ -50,7 +50,7 @@ final class HandwritingRenderDiagnosticTests: XCTestCase {
         try dumpPNG(recImg, name: "hw_B_recolored_black")
 
         // C. 完整 ocrImage（重染色 + 白底合成）——真实管线输出
-        let ocrImg = HandwritingRecognitionService.ocrImage(for: drawing)
+        let ocrImg = ocrImageFullPipeline(drawing)
         XCTAssertNotNil(ocrImg, "ocrImage 返回 nil")
         let ocrInk = ocrImg.map(countInkPixels) ?? -1
         try dumpPNG(ocrImg!, name: "hw_C_ocr_full")
@@ -99,7 +99,7 @@ final class HandwritingRenderDiagnosticTests: XCTestCase {
         let drawing = PKDrawing(strokes: [
             PKStroke(ink: PKInk(.fountainPen, color: .label), path: path, transform: .identity, mask: nil)
         ])
-        let img = try XCTUnwrap(HandwritingRecognitionService.ocrImage(for: drawing))
+        let img = try XCTUnwrap(ocrImageFullPipeline(drawing))
         let pxW = Int(img.size.width * img.scale)
         let pxH = Int(img.size.height * img.scale)
         let ink = countInkPixels(img)
@@ -127,6 +127,18 @@ final class HandwritingRenderDiagnosticTests: XCTestCase {
     }
 
     // MARK: - helpers
+
+    /// 与 HandwritingRecognitionService.recognize 的单张路径同口径（bounds+32 padding、
+    /// 长边 ≤4000px 反算 scale）调 `ocrImage`——诊断的是真实管线。
+    private func ocrImageFullPipeline(_ drawing: PKDrawing) -> UIImage? {
+        let contentBounds = drawing.bounds.isEmpty
+            ? CGRect(x: 0, y: 0, width: 1, height: 1)
+            : drawing.bounds
+        let canvasRect = contentBounds.insetBy(dx: -32, dy: -32)
+        let naturalSide = max(canvasRect.width, canvasRect.height)
+        let scale: CGFloat = naturalSide > 0 ? min(3, 4000 / naturalSide) : 3
+        return HandwritingRecognitionService.ocrImage(for: drawing, canvasRect: canvasRect, scale: scale)
+    }
 
     private func dumpPNG(_ image: UIImage, name: String) throws {
         guard let data = image.pngData() else { return }

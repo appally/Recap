@@ -100,7 +100,35 @@ async function handleAccountDelete(req: Request, env: Env): Promise<Response> {
  * 免费档身份锚定:Sign-in 验过后设备配额迁移到 apple:<sub> 共享桶(跨设备/重装统一,防刷),
  * 未登录设备走一次性匿名小桶。用途由 X-Recap-Usage 头(asr|llm)区分,决定免费档扣哪个桶。 */
 async function handleIssue(req: Request, env: Env): Promise<Response> {
-  const user = await verifyPro(req, env);
+  let user = await verifyPro(req, env);
+  const txnHeader = req.headers.get('X-Apple-Transaction-Id');
+
+  // 付费体验优先于风控严谨(可控敞口内):Apple 验证链路故障(Apple/网络/host 问题)不锁付费
+  // 用户——该交易近 3 天内成功验证过 → 宽限期内照常按 Pro 签发,计量照走 Pro 桶。
+  // 敞口 = 仅限「曾验证成功」的交易(伪造者首验即被拒,无打点可蹭);上限 3 天。
+  if (user.tier === 'none' && txnHeader && /^\d{10,}$/.test(txnHeader)) {
+    const graceStub = env.QUOTA.get(env.QUOTA.idFromName(`txn:${txnHeader}`));
+    const grace = (await graceStub.fetch('https://quota/grace').then((r) => r.json())) as {
+      active: boolean;
+      userId: string | null;
+    };
+    if (grace.active) {
+      console.log('[prove] grace issued (txn verified recently, Apple verify failing now)');
+      // 计量桶复用打点记下的真实 userId(= originalTransactionId 口径):宽限签发若用
+      // `txn:` 前缀当桶名,同一付费用户在 Apple 故障期间被切到全新空桶,已用量不带
+      // 过来、首签按满额扣——故障窗口内配额上限实际翻倍。旧打点无 userId 时回退。
+      user = { userId: grace.userId ?? `txn:${txnHeader}`, tier: 'pro' };
+    }
+  } else if (user.tier === 'pro' && txnHeader && /^\d{10,}$/.test(txnHeader)) {
+    // 验证成功 → 打点(供宽限期判定;userId 供宽限签发路由回本来的计量桶;
+    // await 保证打点先于本次返回)。
+    const graceStub = env.QUOTA.get(env.QUOTA.idFromName(`txn:${txnHeader}`));
+    await graceStub.fetch('https://quota/grace', {
+      method: 'POST',
+      body: JSON.stringify({ userId: user.userId }),
+    });
+  }
+
   if (user.tier === 'none') {
     return Response.json({ error: 'requires_membership' }, { status: 403 });
   }
@@ -172,15 +200,55 @@ async function handleIssue(req: Request, env: Env): Promise<Response> {
     return Response.json({ error: 'issue_failed', detail: String(e) }, { status: 502 });
   }
 
-  return Response.json({
-    dashscope_token: token,
+  return Response.json(
+    buildIssueResponse({
+      token,
+      tier: user.tier,
+      remainingSeconds: quota.remainingSeconds,
+      signedIn: quota.signedIn ?? false,
+      env,
+      // 语言感知模型下发:英文会议请求英文模型(X-Recap-Lang: en),其余走 ASR_MODEL 原逻辑。
+      lang: (req.headers.get('X-Recap-Lang') ?? 'zh').toLowerCase() === 'en' ? 'en' : 'zh',
+    }),
+  );
+}
+
+/** 语言 → 下发模型：en 用 ASR_MODEL_EN（缺省 fun-asr-realtime，多语言自动检测——百炼无英文
+ * 专用实时模型，paraformer-realtime-en-v1 不存在，2026-08-23 探针 ModelNotFound/官方文档双确认）；
+ * 其余沿用 ASR_MODEL 原语义。 */
+export function resolveAsrModel(env: Pick<Env, 'ASR_MODEL' | 'ASR_MODEL_EN'>, lang: 'zh' | 'en'): string | undefined {
+  if (lang === 'en') return env.ASR_MODEL_EN ?? 'fun-asr-realtime';
+  return env.ASR_MODEL;
+}
+
+/** /v1/issue 响应组装(纯函数,供 vitest 断言形状)。跨 usage 形状稳定:LLM 签发也带 asr_* 字段(无害,
+ *  客户端按需消费)。asr_vocabulary_id 仅在配置了全局热词表时携带——未配置/空串不带键,新旧客户端双向兼容。 */
+export function buildIssueResponse(args: {
+  token: string;
+  tier: string;
+  remainingSeconds: number;
+  signedIn: boolean;
+  env: Pick<Env, 'ASR_WSS' | 'LLM_BASE' | 'ASR_MODEL' | 'ASR_MODEL_EN' | 'LLM_MODEL' | 'ASR_VOCABULARY_ID'>;
+  lang?: 'zh' | 'en';
+}): Record<string, unknown> {
+  const asrModel = resolveAsrModel(args.env, args.lang ?? 'zh');
+  const body: Record<string, unknown> = {
+    dashscope_token: args.token,
     expires_in: DEFAULT_EXPIRE_SECONDS,
-    asr_wss: env.ASR_WSS,
-    llm_base: env.LLM_BASE,
-    remaining_seconds: quota.remainingSeconds,
-    tier: user.tier,
-    signed_in: quota.signedIn ?? false,
-    asr_model: env.ASR_MODEL,
-    llm_model: env.LLM_MODEL,
-  });
+    asr_wss: args.env.ASR_WSS,
+    llm_base: args.env.LLM_BASE,
+    remaining_seconds: args.remainingSeconds,
+    tier: args.tier,
+    signed_in: args.signedIn,
+    llm_model: args.env.LLM_MODEL,
+  };
+  if (asrModel) {
+    body.asr_model = asrModel;
+  }
+  if (args.env.ASR_VOCABULARY_ID && (args.lang ?? 'zh') === 'zh') {
+    // 词表 target_model 绑 zh 的 ASR_MODEL——en 会话携带必 task-failed(词表与模型不匹配),
+    // 客户端虽有清词重试兜底,但热词静默失效且多一轮失败握手。en 不带词表。
+    body.asr_vocabulary_id = args.env.ASR_VOCABULARY_ID;
+  }
+  return body;
 }

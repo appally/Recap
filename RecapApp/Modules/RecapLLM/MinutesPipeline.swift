@@ -25,7 +25,9 @@ public struct MinutesPipeline: Sendable {
 
     /// 跑完整管线。
     /// - Parameter briefSummary: 会前底稿稳定摘要；空则行为与无底稿一致。
-    public func run(transcript: String, briefSummary: String? = nil, momentsSummary: String? = nil, handwritingSummary: String? = nil, scenario: TemplateScenario = .general) -> AsyncThrowingStream<MinutesEvent, Error> {
+    /// - Parameter language: 会议转写语言（endLive 自动判定）。英文会议在 user 侧注入
+    ///   「用英文输出」提示（zh 注入恒 nil，字节不变保缓存）。
+    public func run(transcript: String, briefSummary: String? = nil, momentsSummary: String? = nil, handwritingSummary: String? = nil, scenario: TemplateScenario = .general, language: MeetingLanguage = .zh) -> AsyncThrowingStream<MinutesEvent, Error> {
         AsyncThrowingStream { c in
             let task = Task {
                 let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,6 +53,7 @@ public struct MinutesPipeline: Sendable {
                         momentsSummary: momentsSummary,
                         handwritingSummary: handwritingSummary,
                         scenario: scenario,
+                        language: language,
                         yield: { c.yield($0) }
                     )
                 } else {
@@ -61,6 +64,7 @@ public struct MinutesPipeline: Sendable {
                         momentsSummary: momentsSummary,
                         handwritingSummary: handwritingSummary,
                         scenario: scenario,
+                        language: language,
                         yield: { c.yield($0) }
                     )
                 }
@@ -78,9 +82,10 @@ public struct MinutesPipeline: Sendable {
         momentsSummary: String?,
         handwritingSummary: String?,
         scenario: TemplateScenario,
+        language: MeetingLanguage,
         yield: (MinutesEvent) -> Void
     ) async {
-        let userPayload = Self.composeUserPayload(briefSummary: briefSummary, transcript: transcript, momentsSummary: momentsSummary, handwritingSummary: handwritingSummary)
+        let userPayload = Self.applyLanguageHint(language, to: Self.composeUserPayload(briefSummary: briefSummary, transcript: transcript, momentsSummary: momentsSummary, handwritingSummary: handwritingSummary))
         let hasBrief = !(briefSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // 轻度场景化：场景提示仅注入 summary 的 user 消息（四段式结构不变），todo 用原 payload。
         let summaryUser = Self.applyScenarioHint(scenario, to: userPayload)
@@ -159,6 +164,7 @@ public struct MinutesPipeline: Sendable {
         momentsSummary: String?,
         handwritingSummary: String?,
         scenario: TemplateScenario,
+        language: MeetingLanguage,
         yield: (MinutesEvent) -> Void
     ) async {
         let chunks = TranscriptChunker.chunk(transcript)
@@ -173,7 +179,14 @@ public struct MinutesPipeline: Sendable {
             // P1-C：分段失败不再静默吞掉——上报 .coverage 让用户感知残缺，避免长会零提示拿到缺段纪要。
             do {
                 let note = try await mapChunkSummary(chunk, index: idx + 1, total: chunks.count)
-                if !note.isEmpty { mappedNotes.append(note) }
+                if note.isEmpty {
+                    // P1：空串同样计失败——模型拒答/内容审查返回空文本时不提示，
+                    // mappedNotes 可能为空却零信号走到 reduce。
+                    failedSteps += 1
+                    yield(.coverage("段 \(idx + 1) 摘要为空，已跳过"))
+                } else {
+                    mappedNotes.append(note)
+                }
             } catch {
                 if Task.isCancelled { return }
                 failedSteps += 1
@@ -194,7 +207,16 @@ public struct MinutesPipeline: Sendable {
 
         if Task.isCancelled { return }
 
-        let reducedInput = Self.composeUserPayload(
+        // P1 守卫：分段摘要全部失败/为空时，reduce 的输入不含任何转写内容——模型会基于
+        // brief/moments/手写编造一份结构完整的纪要并 .summaryReady 落库 + 计费。
+        // 直接失败可见，不烧 reduce 调用。
+        if mappedNotes.isEmpty {
+            yield(.failed("分段摘要全部失败，未能生成纪要，请稍后重试"))
+            yield(.finished)
+            return
+        }
+
+        let reducedInput = Self.applyLanguageHint(language, to: Self.composeUserPayload(
             briefSummary: briefSummary,
             transcript: """
             以下是各分段抽取结果，请合并为最终纪要（去重、保留 citation 线索）：
@@ -203,7 +225,7 @@ public struct MinutesPipeline: Sendable {
             """,
             momentsSummary: momentsSummary,
             handwritingSummary: handwritingSummary
-        )
+        ))
         let hasBrief = !(briefSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
         var summaryText = ""
@@ -239,7 +261,7 @@ public struct MinutesPipeline: Sendable {
         """
         var text = ""
         for try await delta in provider.streamText(
-            system: "你是会议分段摘录助手。只依据本段，不编造。输出精简中文。",
+            system: "你是会议分段摘录助手。只依据本段，不编造。输出语言与转写一致。",
             user: user,
             model: provider.defaultModel,
             temperature: 0.1
@@ -359,6 +381,7 @@ public struct MinutesPipeline: Sendable {
     - 禁止开场白、旁白、「以下是纪要」、气氛/过程描写
     - 丢掉空泛句；决策要具体（谁/做什么/什么标准）
     - 全文约 450–700 字；短会可更短，禁止灌水
+    - 若转写为英文，标题与正文一律用英文输出
     """
 
     public static let summarySystemWithBrief = """
@@ -383,7 +406,8 @@ public struct MinutesPipeline: Sendable {
     ## 遗留问题
     - 含：底稿待闭环中仍开放的项 + 本场新产生的未决；没有则写「无」
 
-    质量要求：只依据转写；口误书面化；全文约 450–700 字；禁止开场白。
+    质量要求：只依据转写；口误书面化；全文约 450–700 字；禁止开场白；
+    - 若转写为英文，标题与正文一律用英文输出
     """
 
     public static let todoSystem = """
@@ -398,6 +422,7 @@ public struct MinutesPipeline: Sendable {
     5. due_text 照搬转写中的相对日期表达（如"下周三""月底""本周五""3号"），不要换算成绝对日期；未提及为 null；
     6. evidence_quote 必填原文逐字（禁止改写）；引文与 task 不符则不抽该条；
     7. 转写每行以 [mm:ss] 时间戳开头（相对会议开始的分:秒）；证据句所在行的时间戳换算成秒填 start_seconds（如 [5:30] -> 330）；无法判断则 null，禁止猜测。
+    8. 转写为英文时，owner / evidence_quote / due_text 用英文原样输出。
     通过 extract_action_items 工具输出。
     """
 
@@ -416,8 +441,16 @@ public struct MinutesPipeline: Sendable {
     5. due_text 照搬转写中的相对日期表达（如"下周三""月底""本周五""3号"），不要换算成绝对日期；未提及为 null；
     6. evidence_quote 必填原文逐字；无转写证据则不抽；
     7. 转写每行以 [mm:ss] 时间戳开头；证据句所在行时间戳换算成秒填 start_seconds（如 [5:30] -> 330）；无法判断则 null。
+    8. 转写为英文时，owner / evidence_quote / due_text 用英文原样输出。
     通过 extract_action_items 工具输出。
     """
+
+    /// 语言提示注入（英文会议用）：prepend 到 user payload。zh/mixed 恒返回原样
+    /// （字节不变，prompt caching 契约不受影响）；仅 .en 改变前缀。
+    static func applyLanguageHint(_ language: MeetingLanguage, to payload: String) -> String {
+        guard language == .en else { return payload }
+        return "【语言】本场为英文会议：短标题、摘要、议题、决策与遗留问题一律用英文输出（转写原文与引文保持原样）。\n\n" + payload
+    }
 
     /// 轻度场景化：四段式结构不变，仅按场景微调核心摘要侧重点。注入 user 消息（system 前缀缓存不受影响）；
     /// `.general` 不加提示（保持默认行为与缓存字节一致）。

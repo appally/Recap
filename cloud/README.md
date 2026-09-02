@@ -52,10 +52,9 @@ node scripts/verify-gateway-e2e.mjs   # 免费档 /v1/issue → 消费 → 配�
 
 # 3) Pro 真实验证(TestFlight 沙盒):
 #    a. wrangler secret put APPLE_PRIVATE_KEY/APPLE_KEY_ID/APPLE_ISSUER_ID/APPLE_BUNDLE_ID
-#    b. 沙盒期:APPLE_STOREKIT_HOST=https://api.storekit-sandbox.it.com(TestFlight 交易只在沙盒 API 可查;
-#       生产 host 查沙盒交易 → 404 → isPro=false)
+#    b. 无需设 APPLE_STOREKIT_HOST:验证默认「生产优先 → 404 回落沙盒」双环境自动覆盖,
+#       TestFlight/提审(沙盒交易)与正式上架(生产交易)都通,不用手动切 host。
 #    c. 真机 TestFlight 装包 → 购买订阅 → 走纪要管线 → 确认网关日志 verify 命中 + 配额 DO 扣减
-#    d. 正式提审前切回生产 host(wrangler secret put / env 移除覆盖)并再验一次真机购买
 
 # 4) 可观测性:Cloudflare 控制台 → Workers → recap-cloud → Logs(observability 已开启,保留 3 天)
 #    prove/issue/quota 路径的 console.log 在此可查;上线后每周扫一次 403/502 分布。

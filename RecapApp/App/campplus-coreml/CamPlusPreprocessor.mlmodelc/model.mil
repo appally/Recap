@@ -1,0 +1,64 @@
+program(1.0)
+[buildInfo = dict<tensor<string, []>, tensor<string, []>>({{"coremlc-component-MIL", "3520.4.1"}, {"coremlc-version", "3520.5.1"}, {"coremltools-component-torch", "2.5.1"}, {"coremltools-source-dialect", "TorchScript"}, {"coremltools-version", "8.3.0"}})]
+{
+    func main<ios17>(tensor<fp32, [1, ?]> waveform) [FlexibleShapeInformation = tuple<tuple<tensor<string, []>, dict<tensor<string, []>, tensor<int32, [?]>>>, tuple<tensor<string, []>, dict<tensor<string, []>, list<tensor<int32, [2]>, ?>>>>((("DefaultShapes", {{"waveform", [1, 64000]}}), ("RangeDims", {{"waveform", [[1, 1], [8000, 1600000]]}})))] {
+            tensor<fp32, [400]> window = const()[name = tensor<string, []>("window"), val = tensor<fp32, [400]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(64)))];
+            tensor<fp32, [400, 1, 400]> frame_kernel = const()[name = tensor<string, []>("frame_kernel"), val = tensor<fp32, [400, 1, 400]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(1728)))];
+            tensor<int32, [1]> var_8_axes_0 = const()[name = tensor<string, []>("op_8_axes_0"), val = tensor<int32, [1]>([1])];
+            tensor<fp32, [1, 1, ?]> var_8 = expand_dims(axes = var_8_axes_0, x = waveform)[name = tensor<string, []>("op_8")];
+            tensor<string, []> var_24_pad_type_0 = const()[name = tensor<string, []>("op_24_pad_type_0"), val = tensor<string, []>("valid")];
+            tensor<int32, [1]> var_24_strides_0 = const()[name = tensor<string, []>("op_24_strides_0"), val = tensor<int32, [1]>([160])];
+            tensor<int32, [2]> var_24_pad_0 = const()[name = tensor<string, []>("op_24_pad_0"), val = tensor<int32, [2]>([0, 0])];
+            tensor<int32, [1]> var_24_dilations_0 = const()[name = tensor<string, []>("op_24_dilations_0"), val = tensor<int32, [1]>([1])];
+            tensor<int32, []> var_24_groups_0 = const()[name = tensor<string, []>("op_24_groups_0"), val = tensor<int32, []>(1)];
+            tensor<fp32, [1, 400, ?]> var_24 = conv(dilations = var_24_dilations_0, groups = var_24_groups_0, pad = var_24_pad_0, pad_type = var_24_pad_type_0, strides = var_24_strides_0, weight = frame_kernel, x = var_8)[name = tensor<string, []>("op_24")];
+            tensor<int32, [3]> var_27_begin_0 = const()[name = tensor<string, []>("op_27_begin_0"), val = tensor<int32, [3]>([0, 0, 0])];
+            tensor<int32, [3]> var_27_end_0 = const()[name = tensor<string, []>("op_27_end_0"), val = tensor<int32, [3]>([1, 400, 0])];
+            tensor<bool, [3]> var_27_end_mask_0 = const()[name = tensor<string, []>("op_27_end_mask_0"), val = tensor<bool, [3]>([false, true, true])];
+            tensor<bool, [3]> var_27_squeeze_mask_0 = const()[name = tensor<string, []>("op_27_squeeze_mask_0"), val = tensor<bool, [3]>([true, false, false])];
+            tensor<fp32, [400, ?]> var_27 = slice_by_index(begin = var_27_begin_0, end = var_27_end_0, end_mask = var_27_end_mask_0, squeeze_mask = var_27_squeeze_mask_0, x = var_24)[name = tensor<string, []>("op_27")];
+            tensor<int32, [2]> frames_1_perm_0 = const()[name = tensor<string, []>("frames_1_perm_0"), val = tensor<int32, [2]>([1, 0])];
+            tensor<int32, [1]> var_33_axes_0 = const()[name = tensor<string, []>("op_33_axes_0"), val = tensor<int32, [1]>([1])];
+            tensor<bool, []> var_33_keep_dims_0 = const()[name = tensor<string, []>("op_33_keep_dims_0"), val = tensor<bool, []>(true)];
+            tensor<fp32, [?, 400]> frames_1 = transpose(perm = frames_1_perm_0, x = var_27)[name = tensor<string, []>("transpose_3")];
+            tensor<fp32, [?, 1]> var_33 = reduce_mean(axes = var_33_axes_0, keep_dims = var_33_keep_dims_0, x = frames_1)[name = tensor<string, []>("op_33")];
+            tensor<fp32, [?, 400]> frames_3 = sub(x = frames_1, y = var_33)[name = tensor<string, []>("frames_3")];
+            tensor<int32, [2]> var_45_begin_0 = const()[name = tensor<string, []>("op_45_begin_0"), val = tensor<int32, [2]>([0, 0])];
+            tensor<int32, [2]> var_45_end_0 = const()[name = tensor<string, []>("op_45_end_0"), val = tensor<int32, [2]>([0, 1])];
+            tensor<bool, [2]> var_45_end_mask_0 = const()[name = tensor<string, []>("op_45_end_mask_0"), val = tensor<bool, [2]>([true, false])];
+            tensor<fp32, [?, 1]> var_45 = slice_by_index(begin = var_45_begin_0, end = var_45_end_0, end_mask = var_45_end_mask_0, x = frames_3)[name = tensor<string, []>("op_45")];
+            tensor<int32, [2]> var_55_begin_0 = const()[name = tensor<string, []>("op_55_begin_0"), val = tensor<int32, [2]>([0, 0])];
+            tensor<int32, [2]> var_55_end_0 = const()[name = tensor<string, []>("op_55_end_0"), val = tensor<int32, [2]>([0, 399])];
+            tensor<bool, [2]> var_55_end_mask_0 = const()[name = tensor<string, []>("op_55_end_mask_0"), val = tensor<bool, [2]>([true, false])];
+            tensor<fp32, [?, 399]> var_55 = slice_by_index(begin = var_55_begin_0, end = var_55_end_0, end_mask = var_55_end_mask_0, x = frames_3)[name = tensor<string, []>("op_55")];
+            tensor<int32, []> var_57 = const()[name = tensor<string, []>("op_57"), val = tensor<int32, []>(1)];
+            tensor<bool, []> shifted_interleave_0 = const()[name = tensor<string, []>("shifted_interleave_0"), val = tensor<bool, []>(false)];
+            tensor<fp32, [?, 400]> shifted = concat(axis = var_57, interleave = shifted_interleave_0, values = (var_45, var_55))[name = tensor<string, []>("shifted")];
+            tensor<fp32, []> var_59 = const()[name = tensor<string, []>("op_59"), val = tensor<fp32, []>(0x1.f0a3d8p-1)];
+            tensor<fp32, [?, 400]> var_60 = mul(x = shifted, y = var_59)[name = tensor<string, []>("op_60")];
+            tensor<fp32, [?, 400]> frames_5 = sub(x = frames_3, y = var_60)[name = tensor<string, []>("frames_5")];
+            tensor<fp32, [?, 400]> input = mul(x = frames_5, y = window)[name = tensor<string, []>("input")];
+            tensor<fp32, []> const_0 = const()[name = tensor<string, []>("const_0"), val = tensor<fp32, []>(0x0p+0)];
+            tensor<int32, [4]> frames_pad_0 = const()[name = tensor<string, []>("frames_pad_0"), val = tensor<int32, [4]>([0, 0, 0, 112])];
+            tensor<string, []> frames_mode_0 = const()[name = tensor<string, []>("frames_mode_0"), val = tensor<string, []>("constant")];
+            tensor<fp32, [?, 512]> frames = pad(constant_val = const_0, mode = frames_mode_0, pad = frames_pad_0, x = input)[name = tensor<string, []>("frames")];
+            tensor<fp32, [257, 512]> transpose_0 = const()[name = tensor<string, []>("transpose_0"), val = tensor<fp32, [257, 512]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(641792)))];
+            tensor<fp32, [257]> re_bias_0 = const()[name = tensor<string, []>("re_bias_0"), val = tensor<fp32, [257]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(1168192)))];
+            tensor<fp32, [?, 257]> re = linear(bias = re_bias_0, weight = transpose_0, x = frames)[name = tensor<string, []>("re")];
+            tensor<fp32, [257, 512]> transpose_1 = const()[name = tensor<string, []>("transpose_1"), val = tensor<fp32, [257, 512]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(1169344)))];
+            tensor<fp32, [?, 257]> im = linear(bias = re_bias_0, weight = transpose_1, x = frames)[name = tensor<string, []>("im")];
+            tensor<fp32, [?, 257]> var_72 = mul(x = re, y = re)[name = tensor<string, []>("op_72")];
+            tensor<fp32, [?, 257]> var_73 = mul(x = im, y = im)[name = tensor<string, []>("op_73")];
+            tensor<fp32, [?, 257]> var_75 = add(x = var_72, y = var_73)[name = tensor<string, []>("op_75")];
+            tensor<fp32, []> var_76 = const()[name = tensor<string, []>("op_76"), val = tensor<fp32, []>(0x1p-23)];
+            tensor<fp32, []> const_1 = const()[name = tensor<string, []>("const_1"), val = tensor<fp32, []>(0x1.fffffep+127)];
+            tensor<fp32, [?, 257]> clip_0 = clip(alpha = var_76, beta = const_1, x = var_75)[name = tensor<string, []>("clip_0")];
+            tensor<fp32, [80, 257]> transpose_2 = const()[name = tensor<string, []>("transpose_2"), val = tensor<fp32, [80, 257]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(1695744)))];
+            tensor<fp32, [80]> var_79_bias_0 = const()[name = tensor<string, []>("op_79_bias_0"), val = tensor<fp32, [80]>(BLOBFILE(path = tensor<string, []>("@model_path/weights/weight.bin"), offset = tensor<uint64, []>(1778048)))];
+            tensor<fp32, [?, 80]> var_79 = linear(bias = var_79_bias_0, weight = transpose_2, x = clip_0)[name = tensor<string, []>("op_79")];
+            tensor<fp32, []> fbank_epsilon_0 = const()[name = tensor<string, []>("fbank_epsilon_0"), val = tensor<fp32, []>(0x1p-149)];
+            tensor<fp32, [?, 80]> fbank = log(epsilon = fbank_epsilon_0, x = var_79)[name = tensor<string, []>("fbank")];
+            tensor<int32, [1]> var_82_axes_0 = const()[name = tensor<string, []>("op_82_axes_0"), val = tensor<int32, [1]>([0])];
+            tensor<fp32, [1, ?, 80]> features = expand_dims(axes = var_82_axes_0, x = fbank)[name = tensor<string, []>("op_82")];
+        } -> (features);
+}

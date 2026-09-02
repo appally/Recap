@@ -61,6 +61,11 @@ public enum ASRPresets {
     // 阿里百炼 Fun-ASR（主云端）
     public static let funApiKeyAccount = "asr.fun.apikey"
     public static let funRealtimeModel = "fun-asr-realtime"
+    /// 英文会议的云端模型：fun-asr-realtime 本身即多语言（自动语种检测，带句级时间戳、
+    /// 支持热词），与 zh 同模型——百炼无英文专用实时模型（官方清单只有 v2/v1/8k 系列
+    /// Paraformer + fun-asr + qwen3-asr[无时间戳]；线上实测 paraformer-realtime-en-v1
+    /// 为 ModelNotFound，2026-08-23 探针/文档双确认）。保留独立常量以区分语言意图。
+    public static let funRealtimeEnModel = "fun-asr-realtime"
     /// 旧域名仍可用，用户只需 API Key，无需 WorkspaceId。
     public static let funRealtimeWSURL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference/"
 }

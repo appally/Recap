@@ -59,13 +59,34 @@ public enum PipelineStage: Equatable {
 public enum RetranscribeCause: Equatable {
     case dialect    // 端侧置信度低判定方言 → 云端 Fun-ASR 精转
     case onDevice   // 实验开关 → SenseVoice 本机高保真重转
+    /// Pro 质量承诺：LIVE 落到端侧（云端回落/方言）或云端中途降级 → 会后云端补精转，
+    /// 兑现「纪要质量不打折」。干净的云端 LIVE 直出（精转增益≈0，却把纪要延迟一整个
+    /// 精转时长——延迟也是体验）。显式选端侧的 Pro 不触发（隐私选择，音频不上云）。
+    case pro
+    /// 免费档云端体验：首 3 场会后云端精转（每场截前 10min 音频，3×10min=30min 恰为
+    /// 免费 ASR 月桶额度）——付费前先尝到云端质量。
+    case freeTrial
+    /// 语言精修：分类为英文但 LIVE 引擎无英文能力（中文模型/未装 en 模块）→
+    /// 会后自动换英文模型重转。零用户操作：不新增设置，靠转写统计自动判定。
+    case language
 
     var stageTitle: String {
         switch self {
-        case .dialect:  return "检测到方言口音，云端精转中…"
-        case .onDevice: return "本机高保真精转中…"
+        case .dialect:    return "检测到方言口音，云端精转中…"
+        case .onDevice:   return "本机高保真精转中…"
+        case .pro:        return "云端高保真精转中…"
+        case .freeTrial:  return "云端高保真精转中…（免费体验）"
+        case .language:   return "检测到英文会议，云端英文精转中…"
         }
     }
+}
+
+/// 会后自动云端重转的触发原因（决策纯函数的输出，供单测）。
+public enum AutoCloudRetranscribeReason: String, Equatable {
+    case dialect
+    case pro
+    case freeTrial
+    case language
 }
 
 /// 会话状态机（LIVE → PROCESS → REVIEW）。
@@ -103,6 +124,10 @@ public final class MeetingSession: ObservableObject {
     @Published public var todoCount: Int = 0
     @Published public var summary: MeetingSummary
     @Published public var statusMessage: String = ""
+    /// 自动云端精转未兑现的一次性说明（守卫拒绝/无字幕/超时/失败/额度尽）：LIVE 预告与
+    /// processing 舞台都承诺过「云端精转」，保留原稿时须让用户知道（「永不静默也不打扰」
+    /// 的不静默半边）。随纪要完成的 statusMessage 组装展示，手动重转成功即清除。
+    @Published public private(set) var autoRetranscribeFallbackNote: String?
     @Published public var isUsingMockAudio = false
     /// LIVE 收音频段（低/中/高 + 整体电平，0.0~1.0），驱动顶栏声波频谱分层。
     /// 独立总线而非本类 @Published：mic tap ~12Hz 的频段数据若挂在 MeetingSession 上，
@@ -166,6 +191,23 @@ public final class MeetingSession: ObservableObject {
     /// 当前 LIVE 解析出的转写引擎；仅 LIVE 中有意义，未开麦为 nil（方言判定用）。
     public var liveEngineKind: AsrEngineKind? { recording?.engineKind }
 
+    /// 降级可见性（产品原则：永不静默也不打扰）：LIVE 落在端侧且会后**确定**会云端精转时为
+    /// true——顶部常驻 CloudUpgradeHintBar（「本机转写中·结束后自动升级云端高保真」）。
+    /// 方言条优先（其文案已含会后精转语义）。Pro 显式选端侧（非回落）不显示——音频不会
+    /// 上云，不能做此预告（与 autoCloudRetranscribeReason 的隐私边界同口径）。
+    public var showsCloudUpgradeHint: Bool {
+        guard liveEngineKind == .speechAnalyzer, !liveDialectSuspected else { return false }
+        if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
+            return recording?.engineResolvedFromFallback ?? false
+        }
+        if AIServiceMode.current == .freeTrial {
+            // 熔断暂停期不做「会后自动升级」预告——预告即承诺，不能对确定不会发生的事预告。
+            return Self.cloudTrialMeetingsUsed < Self.cloudTrialMaxMeetings
+                && !Self.isFreeTrialAutoPaused()
+        }
+        return false
+    }
+
     /// 是否已开过麦并录到实质内容（有时长/字幕）；用于区分启动台与暂停决策台，
     /// 也用于离场/冷启动的空壳清理判定。≥3s 或任意字幕才算「录过」——
     /// 开麦 1-2 秒即走的空壳（duration=1、无字幕）不应留下草稿会议。
@@ -216,14 +258,14 @@ public final class MeetingSession: ObservableObject {
         liveSessionsByMeeting[meetingID] = boxes
     }
 
-    /// 删除会议前调用：取消该会议 session 在飞的会后计算（分离/润色/重转）。
+    /// 删除会议前调用：取消该会议 session 在飞的会后计算（分离/润色/重转，含 processing 主链）。
     /// CoreML 推理不响应取消，任务在当前推理块结束后退出——真正的崩溃防线是各
     /// perform* 写回前的 `meetingIsWritable` 守卫；取消只是省 CPU/云端配额。
     static func cancelPostMeetingCompute(for meetingID: UUID) {
         let boxes = (liveSessionsByMeeting[meetingID] ?? []).filter { $0.session != nil }
         liveSessionsByMeeting[meetingID] = boxes
         for box in boxes {
-            box.session?.cancelPostMeetingCompute()
+            box.session?.cancelAllPostMeetingCompute()
         }
     }
 
@@ -363,6 +405,8 @@ public final class MeetingSession: ObservableObject {
         isRetranscribing = true
         retranscribeTask = Task { [weak self] in
             guard let self else { return }
+            // 首转前语言未知（默认 zh）——记录初始值，供下方「语言自愈」判定。
+            let wasEnglish = self.meeting.language == .en
             // ① 首转 = 云端重转（不联动下游，编排方接管）
             let ok = await self.performRetranscribe(intent: .cloudFirst, chainPostProcess: false)
             if Task.isCancelled { return }
@@ -370,6 +414,18 @@ public final class MeetingSession: ObservableObject {
                 self.statusMessage = "转写失败，可稍后在会议页手动重试"
                 self.finishReviewWithoutMock()
                 return
+            }
+            // ①.5 语言自愈：导入的英文音频首转走了中文模型（首转时语言未知）→ 乱码；
+            // 转写完成已重算语言，若判定为英文且此前未知，立即用英文模型再精转一次。
+            // 零用户操作：导入即自动正确，与 LIVE 场次的会后语言精修同语义。
+            if !wasEnglish, self.meeting.language == .en, !Task.isCancelled {
+                RecapLog.session.info("processImportedAudio: 检测到英文导入音频，英文模型精转…")
+                let repaired = await self.performRetranscribe(intent: .cloudFirst, chainPostProcess: false)
+                guard repaired, !self.blocks.isEmpty else {
+                    self.statusMessage = "转写失败，可稍后在会议页手动重试"
+                    self.finishReviewWithoutMock()
+                    return
+                }
             }
             // ② 幂等补润色：确保纪要管线吃到干净文本（同 regenerateWithRetranscribe ②）
             if self.meeting.polishedSegmentsData == nil {
@@ -456,6 +512,8 @@ public final class MeetingSession: ObservableObject {
         persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
         persistSummary: @escaping (MeetingSummary, String) -> Void
     ) {
+        // 等待的旧管线被删除取消后，await 返回会继续走到这里——已删会议不再写 phase/落盘。
+        guard meetingIsWritable else { return }
         if let existing = meeting.latestSummary {
             let clean = MinutesMarkdownParser.sanitizedSummary(existing)
             if !clean.tldr.isEmpty || !clean.decisions.isEmpty || !clean.topics.isEmpty {
@@ -611,22 +669,15 @@ public final class MeetingSession: ObservableObject {
         startLive()
     }
 
-    /// App 切后台：LIVE 中先落 checkpoint 再停麦——进程在后台被杀（划掉/系统回收）时
-    /// 自上次 checkpoint 以来的字幕与时长不再丢失；回前台自动续录。
-    /// 手动暂停后切后台不自动恢复（用户已显式停麦）。
-    public func pauseForBackgroundIfLive() {
+    /// App 切后台：立即落一次字幕检查点（防极端情况进程被回收丢字幕），但**不停麦**——
+    /// Info.plist 已声明 UIBackgroundModes=audio，AVAudioSession(.playAndRecord) 活跃期间
+    /// 进程不会被挂起，锁屏/切 App 持续录音（对齐权限文案承诺的「锁屏后台持续录制」）。
+    /// 来电等中断由 AudioRecorder 的 interruption/routeChange/engineConfig 三路自愈负责，
+    /// 不经此路径；手动暂停后切后台维持暂停态（用户已显式停麦，不越权重启）。
+    public func checkpointForBackgroundIfLive() {
         guard phase == .live || meeting.phase == .live else { return }
-        backgroundedWhileLive = recording?.isRunning == true || !isLivePaused
-        pauseLive()
-    }
-
-    /// App 回前台：切后台时正在录音则自动续录（等同来电中断恢复语义）。
-    /// 若 AudioRecorder 恢复失败（isRunning=false 且引擎未在飞），由 startLive 失败路径给出可操作提示。
-    public func resumeFromForegroundIfLive() {
-        let shouldResume = backgroundedWhileLive
-        backgroundedWhileLive = false
-        guard shouldResume, phase == .live, isLivePaused else { return }
-        resumeLive()
+        persistLiveCheckpoint()
+        checkpointSaver?()
     }
 
     private func startLive() {
@@ -728,14 +779,18 @@ public final class MeetingSession: ObservableObject {
                 self?.checkpointSaver?()
             }
 
-            try await session.start(audioFileURL: audioURL, contextualHints: liveContextualHints)
+            try await session.start(audioFileURL: audioURL, contextualHints: liveContextualHints,
+                                    language: meeting.language.engineLanguage)
             // 录音母带已落盘：排除 iCloud 备份（230MB/小时级，见 BackupExclusion）。
             BackupExclusion.excludeMeetingAudio(meetingId: meeting.id)
-            // 启动期间被暂停/结束/离场：epoch 已变，丢弃迟到的 start 成功回调——
-            // 旧实现仅查 isLivePaused，pause 发生在 guard 之后会错误复位暂停态并续接旧引擎。
-            guard epoch == liveEpoch, !self.isLivePaused else {
+            // 启动期间被暂停/结束/离场/新启动重入：epoch 已变或 session 已非当前会话，
+            // 丢弃迟到的 start 成功回调——旧实现仅查 isLivePaused，pause 发生在 guard 之后
+            // 会错误复位暂停态并续接旧引擎；重入场景（准备期锁屏→回前台自动 startLive）
+            // 旧任务迟到返回时 recording 已指向新会话，无条件置 nil 会砸掉新会话的
+            // 最后强引用（引擎随 dealloc 静默死亡，UI 正常但麦克风停采）。
+            guard epoch == liveEpoch, !self.isLivePaused, self.recording === session else {
                 _ = try? await session.stop()
-                self.recording = nil
+                if self.recording === session { self.recording = nil }
                 return
             }
             powerCancellable = session.$currentAudioBands
@@ -752,6 +807,11 @@ public final class MeetingSession: ObservableObject {
             statusMessage = ""
             setIdleTimerDisabled(true)
         } catch {
+            // 竞态防护（P1）：迟到失败不得动新会话的 recording/UI——无条件置 nil 同样砸引用。
+            guard self.recording === session else {
+                RecapLog.session.error("startLive 迟到失败（已被新启动接管，不影响当前会话）: \(error.localizedDescription, privacy: .public)")
+                return
+            }
             recording = nil
             isUsingMockAudio = false
             liveStartFailed = true
@@ -770,6 +830,12 @@ public final class MeetingSession: ObservableObject {
                     statusMessage = "此设备不支持端侧转写（需 Apple Intelligence 机型），请在设置中改用云端引擎或稍后重试。"
                 } else if let saeErr = error as? SpeechAnalyzerEngineError,
                           let detail = saeErr.errorDescription, !detail.isEmpty {
+                    statusMessage = detail
+                } else if let funErr = error as? FunASRError,
+                          let detail = funErr.errorDescription, !detail.isEmpty {
+                    // wss 层失败（task-failed 含 403/quota、task-start 超时等）文案已是
+                    // 中文可读——凭证签发层的透传已修，这里是引擎层的最后一环，
+                    // 兜底文案会把付费/配额问题误导成「检查麦克风权限」。
                     statusMessage = detail
                 } else {
                     statusMessage = "录音启动失败，请检查麦克风权限或稍后重试"
@@ -803,7 +869,10 @@ public final class MeetingSession: ObservableObject {
             return blockChars >= meetingChars ? fromBlocks : fromMeeting
         }()
         guard !source.isEmpty else {
-            statusMessage = "没有可标注的转写分段"
+            // 空源不写 statusMessage：该分支会被导入首转失败 / 空转写 / regenerate 失败等
+            // 场景连带调度到——「没有可标注的转写分段」会覆盖「转写失败，可稍后重试」
+            // 等更重要的提示。静默返回，日志留痕。
+            RecapLog.session.info("diarizeFromDisk: 无转写分段，跳过自动分离（不覆盖既有提示）")
             return
         }
 
@@ -892,11 +961,12 @@ public final class MeetingSession: ObservableObject {
 
     /// 托管档重转前确保 ASR token 就绪：缓存有效则复用（同今）；缓存空则强刷=触发网关 ASR 桶扣减/403。
     /// BYOK 跳过（自备 key，不经网关）。返回 nil=就绪；非 nil=面向用户的失败文案（额度耗尽/网络）。
-    private func ensureASRTokenForRetranscribe() async -> String? {
+    /// - Parameter lang: 英文会议请求英文模型 token（网关按 X-Recap-Lang 下发 asr_model）。
+    private func ensureASRTokenForRetranscribe(lang: MeetingLanguage = .zh) async -> String? {
         guard RecapCredentialProvider.shared.isActiveCloud else { return nil }
-        if (try? RecapCredentialProvider.shared.current()) != nil { return nil }
+        if (try? RecapCredentialProvider.shared.current(lang: lang)) != nil { return nil }
         do {
-            try await RecapCredentialProvider.shared.ensureFresh(force: true, usage: .asr)
+            try await RecapCredentialProvider.shared.ensureFresh(force: true, usage: .asr, lang: lang)
             return nil
         } catch {
             return Self.quotaFailureMessage(error)
@@ -974,6 +1044,24 @@ public final class MeetingSession: ObservableObject {
         return newChars * 10 < oldChars * 6
     }
 
+    /// freeTrial 精转结果的拼接：云端稿（只转前 capSeconds）+ LIVE 中 ≥capSeconds 的尾段。
+    /// 时间轴天然有序（new 全在 0..<cap，tail 全在 ≥cap）。internal 供 RecapUITests 回归。
+    nonisolated static func splicedFreeTrialSegments(
+        new: [TranscriptSegment], old: [TranscriptSegment], capSeconds: Double
+    ) -> [TranscriptSegment] {
+        new + old.filter { $0.startSeconds >= capSeconds }
+    }
+
+    /// 重转拒收的量化诊断串：拒绝只有带上字数/时长/比值，才能事后定性「网络残稿」
+    /// 「临界误杀」还是「原稿虚胖」。internal 供 RecapUITests 回归。
+    nonisolated static func retranscribeRejectMetrics(new: [TranscriptSegment], old: [TranscriptSegment]) -> String {
+        func chars(_ segs: [TranscriptSegment]) -> Int { segs.reduce(0) { $0 + $1.text.count } }
+        func spanSeconds(_ segs: [TranscriptSegment]) -> Int { segs.last.map { Int($0.endSeconds.rounded()) } ?? 0 }
+        let oldChars = chars(old), newChars = chars(new)
+        let ratio = oldChars > 0 ? Int((Double(newChars) / Double(oldChars) * 100).rounded()) : 0
+        return "old=\(oldChars)c/\(spanSeconds(old))s new=\(newChars)c/\(spanSeconds(new))s ratio=\(ratio)%"
+    }
+
     private func performRetranscribe(intent: RetranscribeIntent,
                                      chainPostProcess: Bool = true) async -> Bool {
         // flag 由调用方同步置位；此处兜底清零（含 thermal/无录音/取消/超时/失败所有路径）。
@@ -989,7 +1077,9 @@ public final class MeetingSession: ObservableObject {
             return false
         }
         // 托管档配额闸门：缓存空则强刷 ASR token（触发网关 ASR 桶扣减/403）；BYOK 跳过。
-        if let msg = await ensureASRTokenForRetranscribe() {
+        // 英文会议按语言请求英文模型 token + 引擎。
+        let language = meeting.language
+        if let msg = await ensureASRTokenForRetranscribe(lang: language.engineLanguage) {
             statusMessage = msg
             return false
         }
@@ -1018,8 +1108,8 @@ public final class MeetingSession: ObservableObject {
             }
             let engine: any AsrEngine
             switch intent {
-            case .auto:           engine = try await AsrEngineResolver.resolve()
-            case .cloudFirst:     engine = try await AsrEngineResolver.resolveCloudFirst()
+            case .auto:           engine = try await AsrEngineResolver.resolve(language: language.engineLanguage)
+            case .cloudFirst:     engine = try await AsrEngineResolver.resolveCloudFirst(language: language)
             }
             preparedEngine = engine
             let hints = liveContextualHints
@@ -1043,6 +1133,7 @@ public final class MeetingSession: ObservableObject {
             // 拒收「部分成功」：云端分块重试耗尽后的段被静默跳过，返回的残缺结果若直接
             // 整表覆盖，会把原本更完整的转写抹掉且不可恢复。显著更短（<60% 字数）即保留旧稿。
             if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
+                RecapLog.session.info("manual-retranscribe: 重转结果显著少于原转写，保留原稿 [\(Self.retranscribeRejectMetrics(new: result.segments, old: self.meeting.segments), privacy: .public) audio=\(Int(audioDuration), privacy: .public)s]")
                 statusMessage = "重转结果不完整（网络波动），已保留原转写，可稍后重试"
                 return false
             }
@@ -1051,10 +1142,13 @@ public final class MeetingSession: ObservableObject {
             // 重转产生新 raw，旧 polished 不再对应：清空，稍后联动重新润色
             meeting.polishedSegmentsData = nil
             meeting.polishedModelId = nil
+            // 重转改写文本 → 重算语言（云端英文/端侧双模块直出可能改变分类）。
+            meeting.language = TranscriptLanguageClassifier.classify(result.segments)
             if meeting.speakers.isEmpty {
                 meeting.speakers = speakers
             }
             adoptSegmentsAsBlocks(result.segments)
+            autoRetranscribeFallbackNote = nil   // 手动重转已兑现新稿，此前的未兑现说明作废
             checkpointSaver?()
             // 有字幕的「重转完成」静默：转写内容已刷新；仅异常（无字幕）出面
             if result.segments.isEmpty { statusMessage = "重转完成（无字幕）" }
@@ -1084,33 +1178,200 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
-    /// 用户显式选择演示字幕（DEBUG / 验收）；禁止在 ASR 失败路径自动调用。
-    /// 会后方言自动重转：端侧产出且判定方言时，用云端 Fun-ASR 重转 PCM 替换原转写。
-    /// 纪要随后用新文本生成（无需重跑）。失败/非方言/无凭证均降级放行，不阻断纪要。
-    private func maybeDialectRetranscribe(engineKind: AsrEngineKind?) async -> Bool {
-        let verdict = DialectDetector.verdict(engineKind: engineKind, segments: meeting.segments)
-        guard verdict == .retranscribe else { return false }
+    /// 会中英文检测的会后复核（纯函数，供单测）。返回 true = 双信号齐备，可把语言抬到
+    /// .en 触发 `.language` 精修（P0-3：检测本身只有文本证据——方言乱稿罗马化可误触，
+    /// 必须有第二信号佐证才允许放大）：
+    /// - 切换成功过（switchElapsed 非 nil）→ 切换后文本由 fun-asr 逐句自动检测产出、
+    ///   可信：判 .en 才佐证；切后样本不足（<120 有效字符）信会中两连窗口检测。
+    /// - 切换被拦（switchElapsed == nil）→ 用最近 tailSeconds 尾巴文本复核——尾巴正是
+    ///   命中检测的英文窗口，头部 CJK 乱稿不再误导全文分类；无有效样本不佐证
+    ///   （宁可漏放行——方言/常规路径兜底，也不误放大成整场英文）。
+    nonisolated static func liveEnglishCorroborated(liveDetectedEnglish: Bool,
+                                                    switchElapsed: Double?,
+                                                    segments: [TranscriptSegment],
+                                                    tailSeconds: Double = 180) -> Bool {
+        guard liveDetectedEnglish else { return false }
+        func classifiedLanguage(of segs: [TranscriptSegment]) -> MeetingLanguage? {
+            let joined = segs.map(\.text).joined()
+            let filtered = joined.filter { !$0.isWhitespace && !$0.isPunctuation }
+            guard filtered.count >= 120 else { return nil }
+            return TranscriptLanguageClassifier.classify(text: joined)
+        }
+        if let switchElapsed {
+            let post = segments.filter { $0.startSeconds >= switchElapsed - 1 }
+            if let lang = classifiedLanguage(of: post) { return lang == .en }
+            return true   // 切后样本不足：切换本身已是强证据，信两连窗口
+        }
+        guard let maxEnd = segments.map(\.endSeconds).max() else { return false }
+        let tail = segments.filter { $0.endSeconds >= maxEnd - tailSeconds }
+        return classifiedLanguage(of: tail) == .en
+    }
+
+    /// 会后自动云端重转决策（纯函数，供单测）。原则：纪要产物质量不打折，但延迟也是体验——
+    /// 凡有质量缺口必补，干净场次不重复烧时间：
+    /// - Pro：LIVE 落到端侧且属**回落**（auto 偏好，云端准备失败）→ `.pro` 无条件精转
+    ///   （方言判定对 Pro 不再是闸门）；LIVE 云端但中途降级（断连/滞后/中断）→ `.pro` 补精转；
+    ///   干净云端 LIVE → nil（直出纪要零延迟）；**显式选端侧** → 不触发（隐私选择，音频不上云，
+    ///   除非方言判定命中走 `.dialect` 既有语义）。
+    /// - 免费档首 3 场（freeTrial 模式且计数未用完）→ `.freeTrial`（每场截前 10min）。
+    /// - 语言精修：会中检测英文且会后复核通过（liveEnglishCorroborated——切换后文本/
+    ///   尾巴文本第二信号佐证；头部旧稿可能是 CJK 乱码会误导整场文本分类，不能依赖
+    ///   `language == .en` 闸门）；或分类为英文且 LIVE 引擎无英文能力。
+    /// - 混说精修：中英混说 + 托管云端中文模型（paraformer 官方明示「中英混说除外」）→
+    ///   `.language` 用 fun-asr-realtime 重转（多语言混说正是其长项）。BYOK 本就是 fun-asr，不烧。
+    /// - 其余：方言判定照旧（免费/BYOK 语义不变）。
+    nonisolated static func autoCloudRetranscribeReason(
+        engineKind: AsrEngineKind?,
+        fellBackFromCloud: Bool,
+        liveDegraded: Bool,
+        proHosted: Bool,
+        freeTrialEligible: Bool,
+        dialectVerdict: DialectDetector.Verdict,
+        language: MeetingLanguage = .zh,
+        liveEnglishCapable: Bool = false,
+        liveDetectedEnglish: Bool = false
+    ) -> AutoCloudRetranscribeReason? {
+        if proHosted {
+            if fellBackFromCloud, engineKind == .speechAnalyzer { return .pro }
+            if liveDegraded, engineKind == .funASR { return .pro }
+        } else if freeTrialEligible {
+            return .freeTrial
+        }
+        if liveDetectedEnglish {
+            return .language
+        }
+        if language == .en, !liveEnglishCapable {
+            return .language
+        }
+        if language == .mixed, engineKind == .funASR, proHosted {
+            return .language
+        }
+        if dialectVerdict == .retranscribe {
+            return .dialect
+        }
+        return nil
+    }
+
+    /// 免费档云端体验已用场次（设备本地计数；仅成功完成精转才计数，失败不烧体验机会）。
+    private static let cloudTrialUsedKey = "recap.cloudTrial.meetingsUsed"
+    private static var cloudTrialMeetingsUsed: Int {
+        get { UserDefaults.standard.integer(forKey: cloudTrialUsedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: cloudTrialUsedKey) }
+    }
+    /// 免费档云端体验总场次上限（每场截前 10min，3×10min=30min 恰为免费 ASR 月桶）。
+    private static let cloudTrialMaxMeetings = 3
+    /// 免费档单场体验的精转音频上限（秒）。
+    private static let cloudTrialAudioCapSeconds: Double = 600
+
+    /// 自动云端精转未兑现的用户文案（进 review 后随 statusMessage 一次性展示）。
+    static let cloudRetranscribeFallbackText = "云端精转未完成，本场已用本机转写"
+
+    /// 免费档自动云端精转熔断：服务端按实耗扣月桶（30min），本地「成功才计数」防不住
+    /// 网络劣化期的重复白烧（每场 ~19MB 裸 PCM 上行 + 实耗秒数，最坏零展示烧穿整桶）。
+    /// 连续 2 次未兑现 → 暂停自动尝试 7 天（成功即复位）；手动重转不受限。
+    private static let cloudTrialRejectCountKey = "recap.cloudTrial.consecutiveRejects"
+    private static let cloudTrialAutoPauseUntilKey = "recap.cloudTrial.autoPauseUntil"
+    private static let cloudTrialRejectFuse = 2
+    private static let cloudTrialPauseDays: Double = 7
+
+    /// 自动尝试是否处于熔断暂停期。internal 供 RecapUITests 回归（注入 defaults/now）。
+    /// MainActor 静态（读 UserDefaults 即时值）：调用点（hint 预告/endLive 判定/测试）全在主 actor。
+    static func isFreeTrialAutoPaused(now: Date = Date(), defaults: UserDefaults = .standard) -> Bool {
+        guard let until = defaults.object(forKey: cloudTrialAutoPauseUntilKey) as? TimeInterval else { return false }
+        return now < Date(timeIntervalSince1970: until)
+    }
+
+    /// 记一次自动精转未兑现（守卫拒绝/无字幕/超时/失败——真正烧了实耗的路径；token
+    /// 不可用与 403 不计：前者未起转写，后者服务端已在封顶）。达到阈值进入熔断。
+    static func recordFreeTrialRetranscribeMiss(defaults: UserDefaults = .standard) {
+        let count = defaults.integer(forKey: cloudTrialRejectCountKey) + 1
+        defaults.set(count, forKey: cloudTrialRejectCountKey)
+        if count >= cloudTrialRejectFuse {
+            let until = Date().addingTimeInterval(cloudTrialPauseDays * 86_400).timeIntervalSince1970
+            defaults.set(until, forKey: cloudTrialAutoPauseUntilKey)
+        }
+    }
+
+    /// 成功兑现即复位熔断计数与暂停期。
+    static func resetFreeTrialRetranscribeMisses(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: cloudTrialRejectCountKey)
+        defaults.removeObject(forKey: cloudTrialAutoPauseUntilKey)
+    }
+
+    /// 会后自动云端重转（endLive 专属：方言 / Pro 质量承诺 / 免费体验 / 语言精修四合一）：
+    /// 判定命中即用云端引擎重转 PCM 替换原转写，纪要随后用新文本生成（无需重跑）。
+    /// 英文会议按语言选择英文模型与凭证（网关 X-Recap-Lang 下发对应 asr_model）。
+    /// 失败/不命中/无凭证均降级放行，不阻断纪要。
+    private func maybeAutoCloudRetranscribe(engineKind: AsrEngineKind?,
+                                            fellBackFromCloud: Bool,
+                                            liveDegraded: Bool,
+                                            liveEnglishCapable: Bool,
+                                            liveDetectedEnglish: Bool = false) async -> Bool {
+        let proHosted = AIServiceMode.current == .recapCloud && RecapAccountStore.current.tier == .pro
+        let freeTrialEligible = AIServiceMode.current == .freeTrial
+            && Self.cloudTrialMeetingsUsed < Self.cloudTrialMaxMeetings
+            && !Self.isFreeTrialAutoPaused()
+        // 会中英文检测的会后复核（P0-3）：见 liveEnglishCorroborated 注释。复核不过，
+        // 方言判定等常规路径照常参与——误判不再无条件压过 .dialect。
+        let corroboratedEn = Self.liveEnglishCorroborated(
+            liveDetectedEnglish: liveDetectedEnglish,
+            switchElapsed: liveEnglishSwitchElapsed,
+            segments: meeting.segments
+        )
+        let detectedLanguage: MeetingLanguage = (corroboratedEn && meeting.language != .en) ? .en : meeting.language
+        let reason = Self.autoCloudRetranscribeReason(
+            engineKind: engineKind,
+            fellBackFromCloud: fellBackFromCloud,
+            liveDegraded: liveDegraded,
+            proHosted: proHosted,
+            freeTrialEligible: freeTrialEligible,
+            dialectVerdict: DialectDetector.verdict(engineKind: engineKind, segments: meeting.segments),
+            language: detectedLanguage,
+            liveEnglishCapable: liveEnglishCapable,
+            liveDetectedEnglish: corroboratedEn
+        )
+        guard let reason else { return false }
 
         guard let path = meeting.audioPath,
               MeetingAudioStore.fileExists(storedPath: path) else {
-            RecapLog.session.info("dialect-retranscribe: 无本地录音，跳过")
+            RecapLog.session.info("auto-cloud-retranscribe: 无本地录音，跳过")
             return false
         }
-        // Pro 托管凭证 warmup（BYOK 由 prepare 读 Keychain，无 key 则 resolve 失败 -> 降级）
-        if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
-            try? await RecapCredentialProvider.shared.ensureFresh()
+        // 配额闸门（修旧 bug：此前 warmup `ensureFresh()` 无参 → 默认 usage=.llm，误扣免费档
+        // LLM 桶）：缓存 token 剩余 >60s 复用不触发网关不扣额；空/失效才签发（扣 ASR 桶）。
+        // 403（额度尽）静默保留原稿（自动路径不打扰）。
+        // 英文会议请求英文模型 token（网关按 X-Recap-Lang 下发 asr_model）。
+        let language = detectedLanguage
+        if let msg = await ensureASRTokenForRetranscribe(lang: language.engineLanguage) {
+            RecapLog.session.info("auto-cloud-retranscribe(\(reason.rawValue, privacy: .public)): ASR token 不可用，保留原稿（\(msg, privacy: .public)）")
+            autoRetranscribeFallbackNote = Self.cloudRetranscribeFallbackText   // 预告已做出，未兑现须可见
+            return false
         }
 
-        pipelineStage = .retranscribing(.dialect)
+        pipelineStage = .retranscribing(reason == .dialect ? .dialect
+                                        : (reason == .freeTrial ? .freeTrial
+                                            : (reason == .language ? .language : .pro)))
         markPipelineStarted()
         var preparedEngine: (any AsrEngine)?
         defer { if let e = preparedEngine { Task { await e.release() } } }
         do {
             if Task.isCancelled { return false }
-            let audioData = try MeetingAudioStore.loadMappedData(storedPath: path)
+            let loaded = try MeetingAudioStore.loadMappedData(storedPath: path)
+            // 免费体验：截前 10min（3 场合计 ≤30min = 免费 ASR 月桶，服务端零改动）。
+            let audioData: Data
+            if reason == .freeTrial {
+                let capBytes = Int(Self.cloudTrialAudioCapSeconds * MeetingAudioStore.sampleRate)
+                    * MemoryLayout<Float>.size
+                // 下标切片共享 mmap 映射（subdata 会物化 38.4MB 副本，违背 D5/D6 零拷贝意图）；
+                // 切片起点为 0，下游样本索引→字节区间的换算不偏移。
+                audioData = loaded.count > capBytes ? loaded[0..<capBytes] : loaded
+            } else {
+                audioData = loaded
+            }
             let sampleCount = audioData.count / MemoryLayout<Float>.size
             guard sampleCount > 0 else { return false }
-            let engine = try await AsrEngineResolver.resolve(kind: .funASR)
+            // 英文会议换英文模型重转（funASREn）；其余维持原引擎。
+            let engine = try await AsrEngineResolver.resolve(kind: language.engineLanguage == .en ? .funASREn : .funASR)
             preparedEngine = engine
             let hints = liveContextualHints
             if !hints.isEmpty { await engine.setContextualHints(hints) }
@@ -1125,36 +1386,71 @@ public final class MeetingSession: ObservableObject {
             }
             await engine.release()
             preparedEngine = nil
-            // 删除竞态：方言重转期间会议可能已删除——不可再读/写 meeting
+            // 删除竞态：重转期间会议可能已删除——不可再读/写 meeting
             guard meetingIsWritable else { return false }
             guard !result.segments.isEmpty else {
-                RecapLog.session.info("dialect-retranscribe: 重转无字幕，保留原转写")
+                RecapLog.session.info("auto-cloud-retranscribe(\(reason.rawValue, privacy: .public)): 重转无字幕，保留原转写")
+                autoRetranscribeFallbackNote = Self.cloudRetranscribeFallbackText
+                if reason == .freeTrial { Self.recordFreeTrialRetranscribeMiss() }
                 return false
             }
-            // 同 performRetranscribe：拒收部分成功的残缺结果，保住原本完整的 LIVE 转写。
-            if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
-                RecapLog.session.info("dialect-retranscribe: 重转结果显著少于原转写，保留原稿")
+            // 拒收部分成功的残缺结果，保住原本完整的 LIVE 转写。
+            // freeTrial 只转前 10min：与旧稿【前 10min 切片】比对——与整场比必然 <60%，
+            // >17min 会议每场白烧 10min 云端转写且体验计数永不前进（直到月桶耗尽）。
+            let oldForComparison: [TranscriptSegment]
+            if reason == .freeTrial {
+                oldForComparison = meeting.segments.filter { $0.startSeconds < Self.cloudTrialAudioCapSeconds }
+            } else {
+                oldForComparison = meeting.segments
+            }
+            if Self.shouldRejectRetranscribe(new: result.segments, old: oldForComparison) {
+                let capNote = reason == .freeTrial ? "前\(Int(Self.cloudTrialAudioCapSeconds))s切片比对" : "全场比对"
+                RecapLog.session.info("auto-cloud-retranscribe(\(reason.rawValue, privacy: .public)): 重转结果显著少于原转写，保留原稿 [\(Self.retranscribeRejectMetrics(new: result.segments, old: oldForComparison), privacy: .public) audio=\(Int(audioDuration), privacy: .public)s \(capNote, privacy: .public)]")
+                autoRetranscribeFallbackNote = Self.cloudRetranscribeFallbackText
+                if reason == .freeTrial { Self.recordFreeTrialRetranscribeMiss() }
                 return false
             }
-            meeting.segments = result.segments
+            // 采用：freeTrial 拼接——云端稿替换前 10min，LIVE 尾段保留（整表覆盖会把
+            // 10~17min 会议的尾部静默删掉，纪要因此只覆盖前 10 分钟）；其余 reason 整表替换。
+            if reason == .freeTrial {
+                meeting.segments = Self.splicedFreeTrialSegments(
+                    new: result.segments, old: meeting.segments,
+                    capSeconds: Self.cloudTrialAudioCapSeconds)
+                RecapLog.session.info("auto-cloud-retranscribe(freeTrial): 精转覆盖前 10min，LIVE 尾段保留")
+            } else {
+                meeting.segments = result.segments
+            }
             meeting.polishedSegmentsData = nil
             meeting.polishedModelId = nil
+            // 重转改写文本 → 重算语言（云端英文模型直出可能改变分类）。
+            meeting.language = TranscriptLanguageClassifier.classify(result.segments)
             adoptSegmentsAsBlocks(result.segments)
             persistTranscriptCheckpoint()
             checkpointSaver?()
-            RecapLog.session.info("dialect-retranscribe: 方言重转完成 segments=\(result.segments.count)")
+            if reason == .freeTrial {
+                Self.cloudTrialMeetingsUsed += 1   // 成功才计数
+                Self.resetFreeTrialRetranscribeMisses()   // 兑现即复位熔断
+            }
+            let finalLang = meeting.language.rawValue
+            RecapLog.session.info("auto-cloud-retranscribe(\(reason.rawValue, privacy: .public)): 完成 segments=\(result.segments.count) lang=\(finalLang, privacy: .public)")
             // 不触发 polish/diarize：纪要尚未生成，由 commitAISummary/finishReviewWithoutMock 统一调度
             return true
         } catch is CancellationError {
             // 取消静默
         } catch InferenceTimeoutError.exceeded {
-            statusMessage = "方言重转过慢/超时，已用原转写"
+            // 原 statusMessage 写法是死文案：processing 态不渲染且随即被「云端整理中…」覆盖——
+            // 未兑现说明改挂 fallbackNote，随纪要完成进 review 一次性可见。
+            autoRetranscribeFallbackNote = Self.cloudRetranscribeFallbackText
+            if reason == .freeTrial { Self.recordFreeTrialRetranscribeMiss() }
         } catch RecapCredentialError.issueFailed(let status, _) where status == 403 {
-            // 自动路径：免费 ASR 额度耗尽，静默保留原转写，不打扰用户
-            RecapLog.session.info("dialect-retranscribe: 免费额度耗尽，保留原转写")
+            // 自动路径：ASR 额度耗尽，保留原转写。预告已做出，未兑现须可见；
+            // 额度尽不进熔断计数（服务端已在封顶）。
+            RecapLog.session.info("auto-cloud-retranscribe(\(reason.rawValue, privacy: .public)): ASR 额度耗尽，保留原转写")
+            autoRetranscribeFallbackNote = Self.cloudRetranscribeFallbackText
         } catch {
-            RecapLog.session.error("dialect-retranscribe 失败，已用原转写: \(error.localizedDescription, privacy: .public)")
-            statusMessage = "方言重转失败，已用原转写"
+            RecapLog.session.error("auto-cloud-retranscribe(\(reason.rawValue, privacy: .public)) 失败，已用原转写: \(error.localizedDescription, privacy: .public)")
+            autoRetranscribeFallbackNote = Self.cloudRetranscribeFallbackText
+            if reason == .freeTrial { Self.recordFreeTrialRetranscribeMiss() }
         }
         return false
     }
@@ -1216,7 +1512,7 @@ public final class MeetingSession: ObservableObject {
             // 同 performRetranscribe/方言路径：拒收显著变短的残缺结果——SenseVoice 大面积丢字时
             // 直接整表覆盖会毁掉更完整的 LIVE 稿（三条重转路径此前唯独这里缺这道守卫）。
             if Self.shouldRejectRetranscribe(new: result.segments, old: meeting.segments) {
-                RecapLog.session.info("on-device-upgrade: 重转结果显著少于原转写，保留原稿")
+                RecapLog.session.info("on-device-upgrade: 重转结果显著少于原转写，保留原稿 [\(Self.retranscribeRejectMetrics(new: result.segments, old: self.meeting.segments), privacy: .public) audio=\(Int(audioDuration), privacy: .public)s]")
                 return
             }
             meeting.segments = result.segments
@@ -1271,6 +1567,10 @@ public final class MeetingSession: ObservableObject {
                 self.elapsed += 1
                 if self.elapsed % 15 == 0 {
                     self.checkpointIfNeeded(force: false)
+                }
+                // 会中语言检测（英文会议 → 切英文引擎）：低频轮询挂现有时钟，不新增任务生命周期
+                if self.elapsed % 45 == 0 {
+                    self.evaluateLiveLanguage()
                 }
             }
         }
@@ -1350,13 +1650,159 @@ public final class MeetingSession: ObservableObject {
     /// LIVE 增量方言判定：复用 DialectDetector.verdict（同款窗口/阈值/端侧门控）。
     /// 每来一个 final segment 重算前 90s 窗口；方言 → 置位 liveDialectSuspected（一场会一次）。
     /// 云端引擎 verdict 直接 .keep，不会误触发；pause/resume 不复位，避免反复闪烁。
+    /// 性能：窗口只取前 90s 覆盖——一旦有段越过窗口末端，前缀内容封冻、结果恒定，
+    /// 评估一次定终身（此前每个 final 都全量构造 + 全量排序，2h 会议累计秒级主线程开销）。
+    private var liveDialectPrefixFrozen = false
+
     private func evaluateLiveDialectHint() {
-        guard !liveDialectSuspected else { return }
-        if DialectDetector.verdict(engineKind: liveEngineKind,
-                                   segments: Self.segments(from: blocks)) == .retranscribe {
+        guard !liveDialectSuspected, !liveDialectPrefixFrozen else { return }
+        let segs = Self.segments(from: blocks)
+        if let maxEnd = segs.map(\.endSeconds).max(), maxEnd > 100 {
+            // 100s > 窗口 90s+余量：本次是最后一次评估，之后窗口内容不可能再变。
+            liveDialectPrefixFrozen = true
+        }
+        if DialectDetector.verdict(engineKind: liveEngineKind, segments: segs) == .retranscribe {
             liveDialectSuspected = true
         }
     }
+
+    // MARK: - 会中语言检测（英文会议 → 切英文引擎续流）
+
+    /// 英文连续命中计数（连续两次 45s 窗口 ≥85% Latin 才切，防短句/夹词抖动）。
+    private var liveEnglishDetections = 0
+    /// 会中检测到英文（粘性：一场一次；即便切换被门槛拦下，检测结论仍成立——
+    /// endLive 经 liveEnglishCorroborated 复核通过后才强制 `.language` 精修：
+    /// 头部乱稿不会误导整场语言分类，方言乱稿误判也不会再无条件放大）。
+    @Published public private(set) var liveEnglishDetected = false
+    /// 回头路（P0-2）：热切换后连续中文命中计数——新引擎不锁语种，中文音频会回流
+    /// CJK 定稿；两连命中即切回原引擎。
+    private var liveChineseDetections = 0
+    /// 热切换前的引擎 kind（回头路切回目标）。nil = 本场尚无成功切换（含被门槛拦下）。
+    private var livePreEnglishEngineKind: AsrEngineKind?
+    /// 热切换成功时的会议时间轴位置（endLive 复核「切换后文本」的切点；nil = 切换被拦）。
+    private var liveEnglishSwitchElapsed: Double?
+    /// 一个来回后停机：zh/en 判定反复振荡说明信号自相矛盾——维持当前引擎到散会，
+    /// 交由会后重转收口（防来回切引擎反复断流 + 烧 token）。
+    private var liveEnglishRoundTripDone = false
+
+    /// 每 45s 由 LIVE 时钟驱动：窗口=最近 3 分钟定稿行、≥120 有效字符才判。
+    /// 命中两连 → 切 funASREn（paraformer 对纯英文/混说都是盲区，端侧 zh-only 同理）。
+    /// 已切换后转为回头路监测（新引擎不锁语种，中文回流两连 → 切回原引擎）。
+    private func evaluateLiveLanguage() {
+        guard let recording, recording.isRunning else { return }
+        if liveEnglishDetected {
+            evaluateLiveChineseReturn(recording)
+            return
+        }
+        guard !liveEnglishRoundTripDone, !recording.englishCapable else { return }
+        let windowStart = Double(elapsed) - 180
+        let text = merger.rows
+            .filter { $0.isFinal && $0.endSeconds >= windowStart }
+            .map(\.text)
+            .joined()
+        let filtered = text.filter { !$0.isWhitespace && !$0.isPunctuation }
+        guard filtered.count >= 120 else { return }
+        guard TranscriptLanguageClassifier.classify(text: text) == .en else {
+            liveEnglishDetections = 0
+            return
+        }
+        liveEnglishDetections += 1
+        RecapLog.session.info("LIVE 语言检测 en 命中 \(self.liveEnglishDetections)/2（chars=\(filtered.count, privacy: .public)）")
+        guard liveEnglishDetections >= 2 else { return }
+        liveEnglishDetected = true
+        Task { await switchLiveEngineToEnglish() }
+    }
+
+    /// 引擎热切换（检测两连命中后调用一次）。门槛：
+    /// - 显式选端侧 = 隐私选择，不上云（与 endLive 兜底重转同红线）；
+    /// - 免费档端侧在跑时不上云（成本红线：会后 10min 精转已够体验）；但 LIVE 本就在云端
+    ///   （国行兜底 paraformer）时切 en 是零边际成本的质量修正，放行。
+    private func switchLiveEngineToEnglish() async {
+        guard let recording, recording.isRunning else { return }
+        // BYOK zh 跑在 fun-asr 多语言模型上：自动检测已覆盖英文，切换 = 同模型重启
+        // 白断流数秒——跳过（检测结论保留，会后复核通过仍可走 en 批量精转收口）。
+        if recording.autoCoversEnglish {
+            RecapLog.session.info("LIVE 语言切换跳过：当前引擎自动检测已覆盖英文（fun-asr 多语言）")
+            return
+        }
+        guard ASRPreference.current != .speechAnalyzer else {
+            RecapLog.session.info("LIVE 语言切换跳过：显式端侧偏好（隐私选择，音频不上云），会后语言精修兜底")
+            return
+        }
+        guard AIServiceMode.current != .freeTrial || recording.engineKind == .funASR else {
+            RecapLog.session.info("LIVE 语言切换跳过：免费档端侧在跑（不产生云端 LIVE 计费），会后语言精修兜底")
+            return
+        }
+        guard AsrEngineResolver.hasFunCredentials else {
+            RecapLog.session.info("LIVE 语言切换跳过：无云端凭证，会后语言精修兜底")
+            return
+        }
+        let previousKind = recording.engineKind
+        statusMessage = "检测到英文会议，切换英文转写…"
+        let ok = await recording.switchEngine(to: .funASREn) { [weak self] in
+            // 新引擎相对时间从 0 重启：抬高 merger 偏移，把后续 en 段映射到旧内容之后
+            self?.merger.prepareForResume()
+        }
+        if ok {
+            // 语言暂定 en（续录/检测闸门据此走 en 路径）。可撤销：新引擎 LIVE 不锁
+            // 语种，中文回流两连即切回并重分类（evaluateLiveChineseReturn）；会后
+            // 复核（liveEnglishCorroborated）亦以切换后文本为准。
+            livePreEnglishEngineKind = previousKind
+            liveEnglishSwitchElapsed = Double(elapsed)
+            meeting.language = .en
+            checkpointSaver?()
+            RecapLog.session.info("LIVE 已切换英文引擎（LIVE 不锁语种），回头路监测中")
+        }
+        statusMessage = ""
+    }
+
+    /// 回头路（P0-2）：热切换后每 45s 复评——新引擎（fun-asr 自动检测）若持续产出
+    /// 中文定稿（两连窗口判 zh），说明「英文会议」是方言罗马化乱稿误判：切回原引擎
+    /// + 撤销英文粘性 + 语言按全文重分类。一个来回后停机防振荡。注意必须在
+    /// englishCapable 短路之外运行（funASRez 恒 true，短路则中文回流永远无人看）。
+    private func evaluateLiveChineseReturn(_ recording: RecordingSession) {
+        guard !liveEnglishRoundTripDone,
+              livePreEnglishEngineKind != nil,
+              recording.engineKind == .funASREn else { return }
+        let windowStart = Double(elapsed) - 180
+        let text = merger.rows
+            .filter { $0.isFinal && $0.endSeconds >= windowStart }
+            .map(\.text)
+            .joined()
+        let filtered = text.filter { !$0.isWhitespace && !$0.isPunctuation }
+        guard filtered.count >= 120 else { return }
+        guard TranscriptLanguageClassifier.classify(text: text) == .zh else {
+            liveChineseDetections = 0
+            return
+        }
+        liveChineseDetections += 1
+        RecapLog.session.info("LIVE 回头路 zh 命中 \(self.liveChineseDetections)/2（chars=\(filtered.count, privacy: .public)）")
+        guard liveChineseDetections >= 2 else { return }
+        liveEnglishRoundTripDone = true
+        Task { await switchLiveEngineBackToChinese() }
+    }
+
+    /// 切回热切换前的引擎（回头路执行体，中文回流两连后调用一次）。
+    private func switchLiveEngineBackToChinese() async {
+        guard let recording, recording.isRunning,
+              let target = livePreEnglishEngineKind, target != .funASREn else { return }
+        statusMessage = "检测到中文会议，切回中文转写…"
+        let ok = await recording.switchEngine(to: target) { [weak self] in
+            self?.merger.prepareForResume()
+        }
+        if ok {
+            // 英文粘性撤销 + 语言按当前全文重分类（不再沿用切换时的 .en 暂定）。
+            liveEnglishDetected = false
+            liveEnglishDetections = 0
+            liveChineseDetections = 0
+            let finalText = merger.rows.filter(\.isFinal).map(\.text).joined()
+            meeting.language = TranscriptLanguageClassifier.classify(text: finalText)
+            checkpointSaver?()
+            RecapLog.session.info("LIVE 已切回 \(target.rawValue, privacy: .public)，语言重判 lang=\(self.meeting.language.rawValue, privacy: .public)")
+        }
+        statusMessage = ""
+    }
+
 
 #if DEBUG
     private func startMockStream() {
@@ -1413,7 +1859,14 @@ public final class MeetingSession: ObservableObject {
         recording = nil
 
         revealTask?.cancel()
-        revealTask = Task { [weak self] in
+        // C1 第七路径：收尾链（含分钟级自动云端重转）先于管线起跑——管线登记 registry 之前
+        // 的窗口内删除会议，registry 无条目可取消。起跑即登记（token 语义：管线起跑时
+        // 重新 register 覆盖，本链 defer 的旧 token 不会误抹管线条目）。
+        let revealToken = UUID()
+        let meetingID = meeting.id
+        let revealChain = Task { [weak self] in
+            // defer 先于 guard：session 释放也要 unregister，否则 registry 留死条目。
+            defer { MinutesTaskRegistry.shared.unregister(token: revealToken, for: meetingID) }
             guard let self else { return }
             defer { self.endingLive = false }
 
@@ -1467,22 +1920,49 @@ public final class MeetingSession: ObservableObject {
             }
             self.finalizeAll()
 
+            // C1 第七路径：收尾期间（stop 数秒 + 自动重转分钟级）会议可能已删除——
+            // 此后 checkpoint/language/重转/管线全部写库，统一在此早退（资源收尾已完成）。
+            guard self.meetingIsWritable else { return }
+
             // endLive 已切到 processing，不能再用 live 守卫的 checkpoint
             self.persistTranscriptCheckpoint()
             self.checkpointSaver?()
             // LIVE 方言提示随结束收起（phase 已切 processing，UI 门控本就不显示；此处复位保险）
             self.liveDialectSuspected = false
 
-            // 方言自动重转（端侧产出且判定方言 -> 云端 Fun-ASR 重转；失败/非方言降级放行）
-            // 串联次序：方言云端重转优先，成功即跳过端侧；未成功（.keep/失败/额度尽）才落
+            // 语言自动判定（零用户操作）：统计转写 CJK/Latin 占比 → 驱动语言精修与 LLM 输出语言。
+            let classified = TranscriptLanguageClassifier.classify(self.meeting.segments)
+            if self.meeting.language != classified {
+                self.meeting.language = classified
+                self.checkpointSaver?()
+            }
+            RecapLog.session.info("endLive 语言判定 lang=\(self.meeting.language.rawValue, privacy: .public)")
+
+            // 自动云端重转（四合一：方言 / Pro 质量承诺 / 免费体验 / 语言精修；失败/不命中降级放行）
+            // 串联次序：云端重转优先，成功即跳过端侧；未成功（不命中/失败/额度尽）才落
             // SenseVoice 端侧升级——后者是前者的二道兜底，两者不会都跑。
-            let dialectRetranscribed = await self.maybeDialectRetranscribe(engineKind: recordingToStop?.engineKind)
-            if !dialectRetranscribed {
+            let cloudRetranscribed = await self.maybeAutoCloudRetranscribe(
+                engineKind: recordingToStop?.engineKind,
+                fellBackFromCloud: recordingToStop?.engineResolvedFromFallback ?? false,
+                liveDegraded: recordingToStop?.lastError != nil,
+                liveEnglishCapable: recordingToStop?.englishCapable ?? false,
+                liveDetectedEnglish: self.liveEnglishDetected
+            )
+            if !cloudRetranscribed {
                 await self.maybeOnDeviceUpgrade(engineKind: recordingToStop?.engineKind)
             }
+            // 会中语言检测状态复位（下一场/演示不携带）
+            self.liveEnglishDetected = false
+            self.liveEnglishDetections = 0
+            self.liveChineseDetections = 0
+            self.livePreEnglishEngineKind = nil
+            self.liveEnglishSwitchElapsed = nil
+            self.liveEnglishRoundTripDone = false
 
             self.startProcessing(persistTodos: persistTodos, persistSummary: persistSummary)
         }
+        MinutesTaskRegistry.shared.register(revealChain, token: revealToken, for: meetingID)
+        revealTask = revealChain
     }
 
     // MARK: PROCESS
@@ -1508,21 +1988,31 @@ public final class MeetingSession: ObservableObject {
     }
 
     /// 解析当前草稿文本 -> 更新 @Published summary + 推进 revealStep（由流式节流调用）。
-    private func applySummaryDraft(_ text: String) {
+    /// 单事务收束：summary + 多级 revealStep 旧码各起一个 withAnimation 事务，首个含
+    /// tldr/topics/decisions 的草稿帧同 tick 最多 5 次发布 4 个事务——流式期间每 120ms
+    /// 一次，让在屏 glassEffect 视图一帧多更（"tried to update multiple times per frame"）。
+    /// 阶梯语义不变（revealStep 单调推进），只是共享同一动画事务。首个草稿帧的
+    /// `.generating` 阶段推进也并入（裸赋值与事务同帧双提交是残留的一帧多更源）。
+    private func applySummaryDraft(_ text: String, enteringGenerating: Bool = false) {
         let draft = MinutesMarkdownParser.parse(text).summary
-        self.summary = MeetingSummary(
-            tldr: draft.tldr,
-            topics: draft.topics,
-            decisions: draft.decisions,
-            openQuestions: []
-        )
-        if self.revealStep < 1, !draft.tldr.isEmpty { self.setStep(1) }
-        if self.revealStep < 2, !draft.topics.isEmpty { self.setStep(2) }
-        if self.revealStep < 3, !draft.decisions.isEmpty { self.setStep(3) }
+        withAnimation(.easeOut(duration: 0.24)) {
+            if enteringGenerating { self.pipelineStage = .generating }
+            self.summary = MeetingSummary(
+                tldr: draft.tldr,
+                topics: draft.topics,
+                decisions: draft.decisions,
+                openQuestions: []
+            )
+            if self.revealStep < 1, !draft.tldr.isEmpty { self.revealStep = 1 }
+            if self.revealStep < 2, !draft.topics.isEmpty { self.revealStep = 2 }
+            if self.revealStep < 3, !draft.decisions.isEmpty { self.revealStep = 3 }
+        }
     }
 
     private func startProcessing(persistTodos: @escaping ([TodoListPayload.Item]) -> Void,
                                  persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        // C1 第七路径：endLive 收尾链/凭证强刷重入都可能晚于删除到达——删除后不进任何管线与写回。
+        guard meetingIsWritable else { return }
         // #7：空会议（无转写内容）不进 LLM 纪要管线，直接进 review，避免空跑 processing 态与无效调用
         guard !blocks.isEmpty || !meeting.segments.isEmpty else {
             RecapLog.session.info("startProcessing: 转写为空，跳过纪要管线，直接进 review")
@@ -1623,39 +2113,45 @@ public final class MeetingSession: ObservableObject {
                     briefSummary: briefSummary,
                     momentsSummary: momentsSummary,
                     handwritingSummary: handwritingSummary,
-                    scenario: TemplateScenario.infer(title: self.meeting.title)
+                    scenario: TemplateScenario.infer(title: self.meeting.title),
+                    language: self.meeting.language
                 ) {
                     if Task.isCancelled { return }
                     switch event {
                     case .summaryDelta(let d):
-                        // 首段摘要到达 → 进入「生成纪要」阶段，驱动过渡舞台文案
-                        if self.pipelineStage != .generating { self.pipelineStage = .generating }
+                        // 首段摘要到达 → 进入「生成纪要」阶段：赋值并入下方节流草稿事务
+                        //（首个 delta 恒过节流，阶段推进时机不变；裸赋值与草稿事务同帧
+                        // 双提交会让在屏 glassEffect 视图一帧多更）。
+                        let enteringGenerating = self.pipelineStage != .generating
                         summaryText = Self.mergeStreamText(existing: summaryText, incoming: d)
                         // 节流：逐 delta 全量解析 + 重赋 @Published summary 会随流式长度 O(n²) 重渲。
                         // 限频 ~120ms 出草稿；最终态由 .summaryReady / .finished 的 commitAISummary 全量兜底。
                         let now = Date()
                         if self.lastSummaryDraftAt.map({ now.timeIntervalSince($0) >= Self.summaryDraftThrottle }) ?? true {
                             self.lastSummaryDraftAt = now
-                            self.applySummaryDraft(summaryText)
+                            self.applySummaryDraft(summaryText, enteringGenerating: enteringGenerating)
                         }
                     case .summaryReady(let full):
                         summaryText = full
                         self.commitAISummary(raw: full, persistSummary: persistSummary)
                         didCommitSummary = true
-                        self.statusMessage = warning ?? ""
+                        self.statusMessage = self.composedReviewStatus(warning)
                     case .todos(let items):
                         persistTodos(items)
-                        self.todoCount = items.count
-                        if !items.isEmpty { self.setStep(4) }
+                        // 同 applySummaryDraft：todoCount + revealStep 合一事务，避免同帧多事务。
+                        withAnimation(.easeOut(duration: 0.24)) {
+                            self.todoCount = items.count
+                            if !items.isEmpty, self.revealStep < 4 { self.revealStep = 4 }
+                        }
                     case .coverage(let note):
                         self.statusMessage = note
                     case .finished:
                         if !didCommitSummary {
                             if !summaryText.isEmpty {
                                 self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
-                                self.statusMessage = warning ?? ""
+                                self.statusMessage = self.composedReviewStatus(warning)
                             } else {
-                                self.statusMessage = warning ?? "未生成纪要"
+                                self.statusMessage = self.composedReviewStatus(warning, fallback: "未生成纪要")
                                 self.finishReviewWithoutMock()
                             }
                         } else if self.phase != .review {
@@ -1663,7 +2159,7 @@ public final class MeetingSession: ObservableObject {
                         }
                     case .failed(let msg):
                         warning = msg
-                        self.statusMessage = msg
+                        self.statusMessage = self.composedReviewStatus(msg)
                         if summaryText.isEmpty, !didCommitSummary {
                             self.finishReviewWithoutMock()
                         }
@@ -1675,9 +2171,9 @@ public final class MeetingSession: ObservableObject {
                 RecapLog.session.error("纪要管线异常: \(error.localizedDescription, privacy: .public)")
                 if !didCommitSummary, !summaryText.isEmpty {
                     self.commitAISummary(raw: summaryText, persistSummary: persistSummary)
-                    self.statusMessage = "纪要已生成，部分后续步骤未完成（可重试）"
+                    self.statusMessage = self.composedReviewStatus("纪要已生成，部分后续步骤未完成（可重试）")
                 } else if !didCommitSummary {
-                    self.statusMessage = "纪要生成失败，请检查网络或大模型密钥后重试"
+                    self.statusMessage = self.composedReviewStatus("纪要生成失败，请检查网络或大模型密钥后重试")
                     self.finishReviewWithoutMock()
                 }
             }
@@ -1687,25 +2183,43 @@ public final class MeetingSession: ObservableObject {
         MinutesTaskRegistry.shared.register(pipelineTask, token: registryToken, for: meeting.id)
     }
 
+    /// 纪要收尾的 statusMessage 组装：管线警告（或兜底文案）＋ 自动云端精转未兑现的
+    /// 一次性说明（fallbackNote）。「不静默」半边的唯一出口，避免散落各处再漂移。
+    private func composedReviewStatus(_ warning: String?, fallback: String = "") -> String {
+        var parts: [String] = []
+        if let warning, !warning.isEmpty {
+            parts.append(warning)
+        } else if !fallback.isEmpty {
+            parts.append(fallback)
+        }
+        if let note = autoRetranscribeFallbackNote, !note.isEmpty {
+            parts.append(note)
+        }
+        return parts.joined(separator: "；")
+    }
+
     /// 将模型 Markdown 拆成短标题 / tldr / 议题 / 决议 / 未决，并进入 review。
     private func commitAISummary(raw: String,
                                  persistSummary: @escaping (MeetingSummary, String) -> Void) {
+        // 防御：管线外路径（未来直调）同样受删除守卫约束；管线路径本就不该在删除后到达。
+        guard meetingIsWritable else { return }
         // 写回安全由 startLLMProcessing 的 catch（Task.isCancelled 不写回）+ MinutesTaskRegistry
         // 删除时前置 cancel 保证：管线与删除同在 MainActor 串行，cancel 早于 context.delete。
         let parsed = MinutesMarkdownParser.parse(raw)
-        summary = parsed.summary
         if AIServiceMode.current == .freeTrial { FreeTrialQuota.incrementUsed() }
-        if let title = parsed.title {
-            meeting.adoptGeneratedTitle(title)
-        }
         persistSummary(parsed.summary, raw)
-        if !parsed.summary.topics.isEmpty { setStep(2) }
-        if !parsed.summary.decisions.isEmpty { setStep(3) }
-        if todoCount > 0 || revealStep >= 4 { setStep(4) }
-        setStep(5)
-        if meeting.phase != .review { meeting.phase = .review }
-        if phase != .review {
-            withAnimation(.recapSheet) { phase = .review }
+        // 单事务收束：旧码同 tick 连发 setStep(2/3/4/5)+phase 四五个事务，中间值从未渲染
+        // 却让在屏 glassEffect 视图一帧多更。净效果不变——连续 setStep 的最终值恒为 5
+        //（2/3/4 的条件在覆盖序下不改变结局），revealStep 与 phase 共享 recapSheet 过场。
+        // summary/标题的裸赋值一并并入：事务外赋值与过场同帧双提交是上一轮收束的漏网。
+        withAnimation(.recapSheet) {
+            summary = parsed.summary
+            if let title = parsed.title {
+                meeting.adoptGeneratedTitle(title)
+            }
+            revealStep = 5
+            if meeting.phase != .review { meeting.phase = .review }
+            if phase != .review { phase = .review }
         }
         pipelineStartedAt = nil
         // phase 改 .review 立即落盘：管线可能在用户离屏后跑完（bg task），
@@ -1717,11 +2231,17 @@ public final class MeetingSession: ObservableObject {
 
     /// 有 Key 但管线失败且无任何纪要：进入 review，不注入演示数据。
     private func finishReviewWithoutMock() {
-        if revealStep < 1 { setStep(1) }
-        setStep(5)
+        // C1 第七路径：凭证强刷 catch 分支可能晚于删除到达——已删会议不写 phase/触发会后调度。
+        guard meetingIsWritable else { return }
+        // 单事务收束（同 commitAISummary）：catch 路径的 statusMessage 与本函数的
+        // revealStep/phase 原先分属 2-3 个事务同帧到达，一帧多更。旧码先 setStep(1) 再
+        // setStep(5)，中间值从未渲染，直接一步到位。
+        withAnimation(.recapSheet) {
+            revealStep = 5
+            meeting.phase = .review
+            phase = .review
+        }
         pipelineStartedAt = nil
-        meeting.phase = .review
-        withAnimation(.recapSheet) { phase = .review }
         checkpointSaver?()
         scheduleDiarizationIfNeeded()
         schedulePolishIfNeeded()
@@ -1758,25 +2278,35 @@ public final class MeetingSession: ObservableObject {
 
     /// 真正卸载：双保险——MeetingSession 侧确认无在飞分离，Diarizer actor 侧 `isInferring`
     /// 仍会兜底等待推理完成。idle 路径（默认 150s）分离必已结束，故此处基本直通。
+    /// CAM++ embedder 同批（匹配推理与分离同源闲置）。
     private func performDiarizerIdleUnload() async {
         guard !isDiarizing else { return }
         await DiarizationService.activeDiarizer.unload()
+        await CampPlusEmbedderProvider.shared.unload()
     }
 
-    /// 进 REVIEW 时自动润色逐字稿（有 DeepSeek key 且未润色过）。失败不阻断 REVIEW。
+    /// 进 REVIEW 时自动润色逐字稿（未润色过）。失败不阻断 REVIEW。
     /// 与 diarization 并发：润色走 LLM、分离走 CoreML，互不抢占。
+    /// 闸门与 performPolish 同口径（ensureCanRun 在其内部）：DeepSeek keychain 条件是
+    /// 润色仅支持 BYOK 时代的遗留，会把云档/免费档/非 DeepSeek BYOK 全挡在会后自动
+    /// 润色之外——而导入与「重转+重生成」路径直调 performPolish 反而能润，行为分裂。
     private func schedulePolishIfNeeded() {
         guard !meeting.segments.isEmpty,
-              meeting.polishedSegmentsData == nil,
-              !(KeychainStore.get(LLMPresets.deepSeekKeychainAccount) ?? "").isEmpty
+              meeting.polishedSegmentsData == nil
         else { return }
         polishTranscript()
     }
 
     /// 切后台 / 离开 REVIEW 时取消在跑的会后 CoreML 任务（iOS 27 #738：后台 ANE 可能被系统拒）。
+    /// processing 主链除外：retranscribeTask 在 processing 态承载导入首转 /「重转+重生成」
+    /// 编排——取消后无恢复路径（回前台 reschedule 只覆盖 review），页面永卡「整理中」，
+    /// 重进页面从头重转、按实耗重复烧云端配额。#6a 针对的是 REVIEW 态计算任务；
+    /// processing 主链改由进程级事件兜底（后台冻结回前台续跑；被杀则重进页面恢复）。
     public func cancelPostMeetingCompute() {
-        retranscribeTask?.cancel()
-        retranscribeTask = nil
+        if phase != .processing {
+            retranscribeTask?.cancel()
+            retranscribeTask = nil
+        }
         diarizeTask?.cancel()
         diarizeTask = nil
         polishTask?.cancel()
@@ -1785,7 +2315,29 @@ public final class MeetingSession: ObservableObject {
         // 安全：Diarizer actor 的 isInferring 会先等待在飞推理完成，再 cleanup（#unload-race）。
         diarizerUnloadTask?.cancel()
         diarizerUnloadTask = nil
-        Task { await DiarizationService.activeDiarizer.unload() }
+        Task {
+            await DiarizationService.activeDiarizer.unload()
+            // CAM++ embedder 同批卸载（CoreML 常驻，游离于 diarizer 三件套之外会漏释放）
+            await CampPlusEmbedderProvider.shared.unload()
+        }
+    }
+
+    /// 删除会议前调用（静态按 id 反查入口）：全量取消，包括 processing 主链——写回安全由
+    /// 各写点 meetingIsWritable 守卫保证，此处取消负责不烧后续 CPU/云端配额/LLM 轮次。
+    public func cancelAllPostMeetingCompute() {
+        retranscribeTask?.cancel()
+        retranscribeTask = nil
+        diarizeTask?.cancel()
+        diarizeTask = nil
+        polishTask?.cancel()
+        polishTask = nil
+        diarizerUnloadTask?.cancel()
+        diarizerUnloadTask = nil
+        Task {
+            await DiarizationService.activeDiarizer.unload()
+            // CAM++ embedder 同批卸载（CoreML 常驻，游离于 diarizer 三件套之外会漏释放）
+            await CampPlusEmbedderProvider.shared.unload()
+        }
     }
 
     /// #6a：回前台重排被后台取消的会后任务（幂等：已完成/在跑均跳过）。
@@ -1851,11 +2403,12 @@ public final class MeetingSession: ObservableObject {
             // 会打到 dashscope 端点 400，云端档润色整体不可用）；BYOK DeepSeek 才是 flash。
             let polishModel = AgentTransportFactory.modelName(
                 for: LLMSelection.selectedTemplate, role: .quick)
+            // 润色语言跟随转写语言（英文会议走英文润色 prompt，避免中文提示词强扭英文文本）。
             let polisher = TranscriptPolisher { system, user in
                 provider.streamText(system: system, user: user,
                                      model: polishModel, temperature: 0.1)
             }
-            let polished = try await polisher.polish(source, hints: liveContextualHints)
+            let polished = try await polisher.polish(source, hints: liveContextualHints, language: meeting.language)
             // 删除竞态：润色是分钟级 LLM 流式，期间会议可能已删除——不可再写 meeting
             guard meetingIsWritable else { return }
             meeting.polishedSegmentsData = try? JSONEncoder().encode(polished)
@@ -1985,8 +2538,6 @@ public final class MeetingSession: ObservableObject {
     /// （旧实现仅靠 isLivePaused 守卫，pause 发生在 guard 之后会错误复位 isLivePaused=false
     /// 并续接已被停止的旧引擎 →「假录音」）。
     private var liveEpoch: Int = 0
-    /// 切后台时是否正在 LIVE 录音：回前台据此自动续录（与来电中断恢复语义一致）。
-    private var backgroundedWhileLive = false
 
     /// 真正丢弃会话（会丢未保存数据）；优先用 `pauseOrTeardownForDisappear`。
     public func reset() {

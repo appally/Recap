@@ -65,7 +65,11 @@ struct RecapAppApp: App {
                 )) { _ in
                     // P0-①：系统内存告警 → 卸载 diarizer 模型（pyannote+WeSpeaker，20-40MB wired），
                     // 降低低内存机型(A14 iPad)被 jetsam 强杀概率。下次分离自动 reload（缓存命中 ~100ms）。
-                    Task { await DiarizationService.activeDiarizer.unload() }
+                    Task {
+                        await DiarizationService.activeDiarizer.unload()
+                        // CAM++ embedder 同批卸载（CoreML 常驻；diarizer 三件套外的漏网项）
+                        await CampPlusEmbedderProvider.shared.unload()
+                    }
                     // 顺手丢弃 mermaid 预热 WebView（仅失热缓存，下次按需重建）。
                     MermaidWebViewPool.shared.evictOnMemoryPressure()
                 }

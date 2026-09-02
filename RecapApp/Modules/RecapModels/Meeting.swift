@@ -25,6 +25,16 @@ public final class Meeting {
     /// 音频来源（`MeetingAudioSource.rawValue`）；旧数据缺省 recorded。
     public var audioSourceRaw: String = MeetingAudioSource.recorded.rawValue
 
+    /// 转写语言（`MeetingLanguage.rawValue`）；旧数据缺省 zh。
+    /// 录音结束/重转完成后由 `TranscriptLanguageClassifier` 自动判定，驱动引擎与 LLM 语言适配。
+    public var languageRaw: String = MeetingLanguage.zh.rawValue
+
+    /// 便捷读写（rawValue 损坏时兜底 zh）。
+    public var language: MeetingLanguage {
+        get { MeetingLanguage(rawValue: languageRaw) ?? .zh }
+        set { languageRaw = newValue.rawValue }
+    }
+
     /// 便捷读写（rawValue 损坏时兜底 recorded）。
     public var audioSource: MeetingAudioSource {
         get { MeetingAudioSource(rawValue: audioSourceRaw) ?? .recorded }

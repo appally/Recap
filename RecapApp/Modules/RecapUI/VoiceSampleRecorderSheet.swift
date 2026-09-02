@@ -1,5 +1,7 @@
 import SwiftUI
 import RecapASR
+// 只引 RecapLog 单符号：避免 FluidAudio 声纹 Speaker 与本模块其它类型歧义（同 VoiceprintGallery）。
+import enum RecapModels.RecapLog
 
 /// 主动声纹录入：录一句 → 提取声纹 → 登记为「我」（proactive enrollment，不依赖会议分离）。
 ///
@@ -86,8 +88,27 @@ final class VoiceSampleEnroller: ObservableObject {
             return
         }
         do {
-            let embedding = try await FluidDiarizer.shared.extractEmbedding(from: samples)
-            VoiceprintGallery.shared.enrollAsMe(embedding: embedding)
+            // 优先 CAM++ 提取——与 IdentityMatcher 同引擎（匹配池按 engine 过滤，登记成
+            // wespeaker 会让「我」在身份匹配开启时永不参与匹配、每场被注册成新垃圾条目）。
+            // CAM++ 已随包 bundle（2026-08-24 起，15.8MB），此处不可用只剩资源剥离等残余
+            // 路径；仍降级 WeSpeaker 兜底：画廊有条目，
+            // 旧路径（identityMatcher 关闭）依旧可认出；meId 稳定，日后 CAM++ 可用
+            // 再录入即覆盖登记为同引擎。
+            let embedding: [Float]
+            let engine: String
+            let dim: Int
+            do {
+                try await CampPlusEmbedderProvider.shared.ensureLoaded()
+                embedding = try await CampPlusEmbedderProvider.shared.embed(samples: samples)
+                engine = VoiceprintMeta.engineCampplus
+                dim = CampPlusEmbedderProvider.campPlusEmbeddingDim   // 非隔离静态（免引 FluidAudio）
+            } catch {
+                RecapLog.session.error("CAM++ 录入提取失败，降级 WeSpeaker: \(error.localizedDescription, privacy: .public)")
+                embedding = try await FluidDiarizer.shared.extractEmbedding(from: samples)
+                engine = VoiceprintMeta.engineWespeaker
+                dim = 256
+            }
+            VoiceprintGallery.shared.enrollAsMe(embedding: embedding, engine: engine, dim: dim)
             phase = .succeeded
         } catch {
             phase = .failed("声纹提取失败：\(error.localizedDescription)")

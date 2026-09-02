@@ -62,6 +62,9 @@ public enum ModelContextWindows {
         if m.contains("deepseek-v4") { return 1_000_000 }
         if m.contains("deepseek-v3") { return 128_000 }
         if m.contains("qwen3") || m.contains("qwen-3") { return 1_000_000 }
+        // qwen 商业系列（托管档主力：网关 LLM_MODEL=qwen-plus）——不含 "qwen3" 子串，
+        // 此前漏匹配落 nil → 14k 兜底 → 托管档 >1h 会议全部误走 map-reduce（35 次串行调用）。
+        if m.contains("qwen-plus") || m.contains("qwen-max") || m.contains("qwen-turbo") { return 131_072 }
         if m.contains("sonnet-5") || m.contains("opus-5") || m.contains("fable-5") || m.contains("claude-5") { return 1_000_000 }
         if m.contains("haiku-4") { return 200_000 }
         if m.contains("claude") { return 200_000 }
@@ -70,7 +73,13 @@ public enum ModelContextWindows {
         if m.contains("gemini") { return 1_000_000 }
         if m.contains("glm-5") { return 1_000_000 }
         if m.contains("glm-4") { return 200_000 }
-        if m.contains("doubao") { return 256_000 }
+        if m.contains("doubao") {
+            // 显式上下文后缀优先：未标明的 doubao 模板默认 pro-32k——一律按 256k 会让
+            // 32k 模型直喂溢出（火山 400 input length exceeded 且不可重试）。
+            if m.contains("-256k") { return 256_000 }
+            if m.contains("-128k") { return 131_072 }
+            return 32_000
+        }
         if m.contains("kimi-k3") { return 1_000_000 }
         if m.contains("kimi") { return 256_000 }
         if m.contains("minimax") { return 1_000_000 }

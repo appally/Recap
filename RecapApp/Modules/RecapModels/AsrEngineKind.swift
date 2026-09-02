@@ -6,6 +6,9 @@ import Foundation
 public enum AsrEngineKind: String, CaseIterable, Sendable, Identifiable {
     case speechAnalyzer = "SpeechAnalyzer (iOS26 端侧)"
     case funASR         = "阿里 Fun-ASR (云端)"
+    /// 云端英文模型（fun-asr-realtime 多语言，与 zh 同模型）：语言分类为 en 的会后重转专用，
+    /// 不进 LIVE 解析链（LIVE 以 zh/mixed 引擎起步，会后按语言自动精修）。
+    case funASREn       = "阿里 Fun-ASR EN (云端)"
     case fluidSenseVoice = "FluidAudio · SenseVoice (端侧)"
 
     public var id: String { rawValue }

@@ -375,8 +375,10 @@ struct LLMSettingsView: View {
         if let config = configs.first(where: { $0.keychainAccount == selected.keychainAccount }) {
             modelDraft = config.model
             if selected == .custom {
-                customBaseURL = config.baseURL
+                customBaseURL = config.baseURL.isEmpty ? LLMSelection.customBaseURL : config.baseURL
             }
+        } else if selected == .custom {
+            customBaseURL = LLMSelection.customBaseURL
         }
     }
 
@@ -424,6 +426,9 @@ struct LLMSettingsView: View {
                 status = "请填写有效的 Base URL"
                 return
             }
+            // 运行时（纪要/Agent 两条工厂链路）读 LLMSelection.selectedBaseURL，
+            // SwiftData config 仅驱动本页回显——两处都写，避免再出现"保存了却不生效"。
+            LLMSelection.customBaseURL = url
             upsertConfig(template: selected, baseURL: url, model: model)
         } else {
             upsertConfig(template: selected, baseURL: selected.baseURL, model: model)

@@ -22,9 +22,20 @@ export interface Env {
    *  fun-asr-realtime 作专名强档备选)。改这里 + wrangler deploy,30min 内全网续签生效(缓存凭证 ≤30min 自然灰度)。
    *  ⚠️ 切换前须在百炼控制台给 DASHSCOPE_API_KEY 子账号白名单加该模型,并用 verify-sts-asr.mjs 验通,否则 st-token 403。 */
   ASR_MODEL?: string;
+  /** 英文会议的 ASR 模型(客户端带 X-Recap-Lang: en 时下发;默认 fun-asr-realtime 多语言)。
+   *  ⚠️ 同 ASR_MODEL 约束:切换前须在百炼控制台给 key 白名单加该模型 + 词表绑定 target_model 一致。 */
+  ASR_MODEL_EN?: string;
   /** 服务端统一下发的 LLM 模型(默认 qwen-plus;Pro 想用强模型改此)。 */
   LLM_MODEL?: string;
-  /** App Store Server API 主机。生产默认 https://api.storekit.it.com;TestFlight 沙盒用 https://api.storekit-sandbox.it.com。 */
+  /** 百炼全局共享热词表 id(运营在控制台创建,Paraformer 系 ≤500 词;账号级上限 10 表 → 托管档只能全局共享,无法每用户)。
+   *  随 /v1/issue 下发 asr_vocabulary_id,客户端 run-task payload 顶层携带(paraformer 不支持 input.context)。
+   *  留空/缺省 = 不启用(响应不带该字段,客户端回落无热词)。BYOK 不经网关,继续走 input.context。
+   *  ⚠️ 阿里要求词表 target_model 与 ASR_MODEL 完全一致——切换 ASR_MODEL 必须同步在控制台改绑/重建词表,
+   *  并重跑 scripts/verify-gateway-asr.mjs 的 vocabulary 探针,否则托管档 run-task 直接 task-failed。 */
+  ASR_VOCABULARY_ID?: string;
+  /** App Store Server API 主机(可选覆盖生产默认 https://api.storekit.apple.com)。
+   *  通常无需设置:验证默认「生产优先 → 404 回落沙盒 https://api.storekit-sandbox.apple.com」,
+   *  TestFlight/提审(沙盒交易)与正式上架(生产交易)自动都通。仅在特殊联调时显式钉死单环境。 */
   APPLE_STOREKIT_HOST?: string;
   /** 仅本地 .dev.vars 用:'1' 时回退信任 X-Recap-* 头的 stub(Xcode 本地 StoreKit 测试不经 Apple 服务器)。绝不在生产开启。 */
   ALLOW_STUB?: string;

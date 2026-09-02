@@ -23,8 +23,12 @@ public struct SpeakerBlockView: View {
     public let isCurrent: Bool
     /// 回听高亮：青瓷竖条（与 LIVE 朱砂「当前块」区分）。
     public var isListening: Bool
-    /// LIVE：把收音波形挂在当前字幕行，而不是漂在底栏。
+    /// LIVE：当前正在收音的块（未定稿）。驱动文字浓度；朱砂 ▎游标由未定稿态自带。
     public var showLiveMeter: Bool
+    /// 是否显示行首时间戳：REVIEW 保留（回听锚点）；LIVE 传 false（正在进行的会议
+    /// 时间戳无回看价值，满屏 mono 小字是最密的噪音源）。进度语义由顶栏时长/流末
+    /// footer 的 a11y 承载。
+    public var showsTimestamp: Bool
     /// 该块说话人是否为「我」（跨录音声纹身份匹配，Phase 3）：名字显示为朱砂「我」。
     public var isMe: Bool
     public var onSeek: (() -> Void)?
@@ -38,6 +42,7 @@ public struct SpeakerBlockView: View {
         isCurrent: Bool,
         isListening: Bool = false,
         showLiveMeter: Bool = false,
+        showsTimestamp: Bool = true,
         isMe: Bool = false,
         onSeek: (() -> Void)? = nil,
         onMarkMe: (() -> Void)? = nil,
@@ -47,6 +52,7 @@ public struct SpeakerBlockView: View {
         self.isCurrent = isCurrent
         self.isListening = isListening
         self.showLiveMeter = showLiveMeter
+        self.showsTimestamp = showsTimestamp
         self.isMe = isMe
         self.onSeek = onSeek
         self.onMarkMe = onMarkMe
@@ -80,8 +86,9 @@ public struct SpeakerBlockView: View {
         .animation(.recapSoft, value: showLiveMeter)
     }
 
+    /// 竖条只承担回听高亮（REVIEW 播放器联动）；LIVE 的「正在说话」已收敛为未定稿
+    /// 行尾的朱砂 ▎游标（+未定稿 opacity 差），不再叠朱砂竖条——单语义单指示器。
     private var railColor: Color {
-        if isCurrent || showLiveMeter { return Color.recapCinnabar.opacity(0.85) }
         if isListening { return Color.recapInk.opacity(0.5) }
         return Color.clear
     }
@@ -101,26 +108,28 @@ public struct SpeakerBlockView: View {
         return true
     }
 
+    @ViewBuilder
     private var header: some View {
-        HStack(spacing: 8) {
-            timestampLabel
-            if showLiveMeter {
-                LiveDots()
-                    .accessibilityHidden(true)
-            } else if showsSpeakerIdentity {
-                speakerNameView
-                if block.isOverlapped == true {
-                    // 重叠说话标记（plan 047 Wave C）：极简双人剪影，不加文字噪音
-                    Image(systemName: "person.2")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.recapTea.opacity(0.75))
-                        .accessibilityLabel("此段有两人同时说话")
+        // LIVE（showsTimestamp=false）整行不渲染：时间戳归 REVIEW 回听锚点，「正在收音」
+        // 指示收敛为正文行尾的朱砂 ▎游标——LIVE 字幕行只剩正文，行高更紧凑。
+        if showsTimestamp {
+            HStack(spacing: 8) {
+                timestampLabel
+                if showsSpeakerIdentity {
+                    speakerNameView
+                    if block.isOverlapped == true {
+                        // 重叠说话标记（plan 047 Wave C）：极简双人剪影，不加文字噪音
+                        Image(systemName: "person.2")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.recapTea.opacity(0.75))
+                            .accessibilityLabel("此段有两人同时说话")
+                    }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(headerAccessibilityLabel)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(headerAccessibilityLabel)
     }
 
     /// 说话人名：isMe 时显示朱砂「我」；onMarkMe 提供时（REVIEW）可点按标记；
@@ -169,17 +178,13 @@ public struct SpeakerBlockView: View {
         } else {
             Text(block.timestamp)
                 .font(.recapMono)
-                .foregroundStyle(
-                    showLiveMeter ? Color.recapCinnabar.opacity(0.85) : Color.recapTea.opacity(0.85)
-                )
+                .foregroundStyle(Color.recapTea.opacity(0.85))
         }
     }
 
     private var headerAccessibilityLabel: String {
         var parts = [block.timestamp]
-        if showLiveMeter {
-            parts.append("正在收音")
-        } else if showsSpeakerIdentity {
+        if showsSpeakerIdentity {
             parts.append(isMe ? "我" : block.speaker.name)
         }
         return parts.joined(separator: "，")
@@ -601,6 +606,31 @@ public struct DialectHintBar: View {
                 .font(.recapMeta.weight(.medium))
                 .foregroundStyle(Color.recapOchre)
             Text("实时字幕可能不准，结束后会自动用云端重新精转")
+                .font(.recapCaption)
+                .foregroundStyle(Color.recapTea)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Spacing.sm)
+        .background(Color.recapOchre.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - 云端精转预告（LIVE 顶部常驻：本机转写中 · 会后自动升级）
+
+/// LIVE 落到端侧（Pro 云端回落 / 免费档体验场）且会后确定会云端精转时，顶部常驻安心提示：
+/// 实时字幕是本机质量，结束后自动升级云端高保真。「可见但不打扰」——用户无需理解引擎/凭证
+/// 概念（2026-08-17 产品原则：降级永不静默，但绝不弹错误打断会议）。
+/// 由 `MeetingSession.showsCloudUpgradeHint` 驱动出入，与 DialectHintBar 互斥展示。
+public struct CloudUpgradeHintBar: View {
+    public init() {}
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("本机转写中")
+                .font(.recapMeta.weight(.medium))
+                .foregroundStyle(Color.recapOchre)
+            Text("结束后将自动升级为云端高保真转写")
                 .font(.recapCaption)
                 .foregroundStyle(Color.recapTea)
         }

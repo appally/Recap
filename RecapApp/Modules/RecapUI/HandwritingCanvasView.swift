@@ -23,6 +23,10 @@ final class HandwritingCanvasController: ObservableObject {
 struct HandwritingCanvasView: UIViewRepresentable {
     @Binding var drawing: PKDrawing
     var controller: HandwritingCanvasController? = nil
+    /// 笔迹触及画布约满位置（ink bounds.maxY / contentSize.height ≥ 0.85）时回调。
+    /// 仅提示——不实时调 contentSize（会打断 PencilKit live interaction lock，见下）。
+    /// 带滞回：降到 0.8 以下重置，允许擦除后再提示。
+    var onInkNearFull: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(drawing: $drawing) }
 
@@ -58,6 +62,9 @@ struct HandwritingCanvasView: UIViewRepresentable {
     final class Coordinator: NSObject, PKCanvasViewDelegate {
         let toolPicker: PKToolPicker
         var drawing: Binding<PKDrawing>
+        var onInkNearFull: (() -> Void)?
+        /// 将满提示滞回状态（≥0.85 触发一次，<0.8 重置）。
+        private var nearFullFired = false
 
         init(drawing: Binding<PKDrawing>) {
             self.drawing = drawing
@@ -76,6 +83,7 @@ struct HandwritingCanvasView: UIViewRepresentable {
             if view.drawing != drawing.wrappedValue {
                 drawing.wrappedValue = view.drawing
             }
+            evaluateNearFull(view)
             #if DEBUG
             print("[HW] drawingDidChange: strokes=\(view.drawing.strokes.count) bounds=\(view.drawing.bounds)")
             #endif
@@ -83,6 +91,21 @@ struct HandwritingCanvasView: UIViewRepresentable {
             // 会打断 PKCanvasView 的 live interaction lock（"Did not have live interaction lock
             // at end of stroke"），导致第二笔起写不出 + mach_vm_allocate 失败。
             // 无限滚动需改用非实时方式（外部监听 strokes 变化、延后设 contentSize）重做。
+        }
+
+        /// 将满判定（滞回）：ink bounds 底缘占 contentSize 高度比例。
+        private func evaluateNearFull(_ view: PKCanvasView) {
+            let contentHeight = max(view.contentSize.height, 1)
+            let maxY = view.drawing.bounds.maxY
+            if maxY.isFinite {
+                let fraction = maxY / contentHeight
+                if fraction >= 0.85, !nearFullFired {
+                    nearFullFired = true
+                    onInkNearFull?()
+                } else if fraction < 0.8 {
+                    nearFullFired = false
+                }
+            }
         }
     }
 
@@ -120,6 +143,7 @@ struct HandwritingCanvasView: UIViewRepresentable {
     func updateUIView(_ container: Container, context: Context) {
         let canvas = container.canvas
         context.coordinator.drawing = $drawing
+        context.coordinator.onInkNearFull = onInkNearFull
         // 仅外部值变化时灌入 canvas，避免与 delegate 回写形成回环、污染 undo 栈。
         if canvas.drawing != drawing {
             canvas.drawing = drawing

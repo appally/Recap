@@ -100,4 +100,37 @@ final class LiveTranscriptMergerTests: XCTestCase {
         XCTAssertEqual(merger.rows[2].startSeconds, 63, accuracy: 1e-9,
                        "partial 应直接用绝对 elapsed，不得再叠加 timelineOffset")
     }
+
+    // MARK: - confidence 透传（方言检测主信号链）
+
+    /// 引擎 → merger 的 confidence 不得在 append 分支被擦成 nil
+    /// （DialectDetector 主信号依赖它，透传链断点曾是 publishMergerRows）。
+    func testApplySegmentAppendPreservesConfidence() {
+        var merger = LiveTranscriptMerger()
+        merger.applySegment(TranscriptSegment(startSeconds: 1.0, endSeconds: 2.0,
+                                              text: "你好", confidence: 0.31))
+        XCTAssertEqual(merger.rows.count, 1)
+        XCTAssertEqual(merger.rows[0].confidence ?? -1, 0.31, accuracy: 1e-9)
+    }
+
+    /// 同 start 原地覆盖分支同样要保留（修正后段的）confidence。
+    func testApplySegmentInPlaceUpdatePreservesConfidence() {
+        var merger = LiveTranscriptMerger()
+        merger.applySegment(TranscriptSegment(startSeconds: 1.0, endSeconds: 2.0,
+                                              text: "你好", confidence: 0.5))
+        merger.applySegment(TranscriptSegment(startSeconds: 1.0, endSeconds: 2.5,
+                                              text: "你好世界", confidence: 0.28))
+        XCTAssertEqual(merger.rows.count, 1)
+        XCTAssertEqual(merger.rows[0].confidence ?? -1, 0.28, accuracy: 1e-9)
+    }
+
+    /// 检查点重建（pause/resume）路径的 confidence 保留。
+    func testLoadCheckpointPreservesConfidence() {
+        var merger = LiveTranscriptMerger()
+        merger.loadCheckpoint(segments: [
+            TranscriptSegment(startSeconds: 0, endSeconds: 5, text: "开场", confidence: 0.62)
+        ])
+        XCTAssertEqual(merger.rows.count, 1)
+        XCTAssertEqual(merger.rows[0].confidence ?? -1, 0.62, accuracy: 1e-9)
+    }
 }

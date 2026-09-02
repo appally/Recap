@@ -336,3 +336,70 @@ final class OpenAICompatibleProviderBaseURLTests: XCTestCase {
         XCTAssertEqual(p.basePath, "/v1")
     }
 }
+
+/// 首 token 竞速回归（2026-08-27）：看门狗睡满预算即完成会唤醒 `group.next()` →
+/// `cancelAll()` 掐断仍在健康产出的长流，且按「自然结束」finish——摘要被静默截断。
+/// 修复后看门狗在已产出时解除武装（挂起直至被取消），长流必须跑满全程。
+final class FirstTokenRaceTests: XCTestCase {
+
+    /// @Sendable 消费闭包内的跨线程可变标记（NSLock 盒，与产线代码同惯例）。
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+        func set() { lock.lock(); defer { lock.unlock() }; value = true }
+    }
+
+    /// 健康流总时长超过首 token 预算：消费任务必须跑满全程，不得被看门狗掐断。
+    func testHealthyStreamLongerThanBudgetRunsToCompletion() async {
+        let (_, cont) = AsyncThrowingStream<String, Error>.makeStream()
+        let attempt = OpenAICompatibleProvider.StreamAttempt(continuation: cont)
+        let completed = Flag()
+        let cancelled = Flag()
+        let outcome = await OpenAICompatibleProvider.raceFirstToken(budget: 0.3, attempt: attempt) {
+            for _ in 0..<8 {   // 总 ~0.8s > 预算 0.3s；首 token 于 ~0.1s 产出
+                do { try await Task.sleep(for: .milliseconds(100)) } catch {
+                    cancelled.set()
+                    return
+                }
+                await attempt.yieldContent("x")
+            }
+            completed.set()
+        }
+        cont.finish()
+        XCTAssertTrue(completed.isSet, "消费任务必须跑满全程——被提前取消即静默截断")
+        XCTAssertFalse(cancelled.isSet)
+        XCTAssertTrue(outcome.produced)
+        XCTAssertNil(outcome.error)
+    }
+
+    /// 预算内无任何产出：真超时——消费被取消，outcome 报超时错误。
+    func testSilentStreamTimesOutAndCancelsConsumer() async {
+        let (_, cont) = AsyncThrowingStream<String, Error>.makeStream()
+        let attempt = OpenAICompatibleProvider.StreamAttempt(continuation: cont)
+        let cancelled = Flag()
+        let outcome = await OpenAICompatibleProvider.raceFirstToken(budget: 0.2, attempt: attempt) {
+            do { try await Task.sleep(for: .seconds(5)) } catch { cancelled.set() }
+        }
+        cont.finish()
+        XCTAssertTrue(cancelled.isSet, "真超时必须取消消费任务")
+        XCTAssertFalse(outcome.produced)
+        XCTAssertNotNil(outcome.error)
+    }
+
+    /// 消费先于预算自然结束：看门狗被取消，无超时误报。
+    func testStreamFinishingBeforeBudgetReportsNaturalEnd() async {
+        let (_, cont) = AsyncThrowingStream<String, Error>.makeStream()
+        let attempt = OpenAICompatibleProvider.StreamAttempt(continuation: cont)
+        let completed = Flag()
+        let outcome = await OpenAICompatibleProvider.raceFirstToken(budget: 5, attempt: attempt) {
+            try? await Task.sleep(for: .milliseconds(50))
+            await attempt.yieldContent("x")
+            completed.set()
+        }
+        cont.finish()
+        XCTAssertTrue(completed.isSet)
+        XCTAssertTrue(outcome.produced)
+        XCTAssertNil(outcome.error)
+    }
+}

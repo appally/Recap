@@ -61,16 +61,11 @@ public struct MeetingNoteView: View {
     // 「发言复盘」picker：多人未标注时让用户指认自己（transient 标签驱动；可选持久 enroll）。
     @State private var showSpeakerPicker = false
     @State private var pendingSpeakerPickSkill: AgentSkill?
-    /// 手写画布当前笔画（真相源在父 View，modal 关闭/重开不丢笔画）。
-    @State private var liveDrawing: PKDrawing = PKDrawing()
     /// 会中手写全屏画布（tap 动作坞手写钮打开；PKToolPicker 在其内部浮起，不挡主界面）。
+    /// drawing 真相源已下沉到 LiveHandwritingCover（每笔画不再打穿本 View 巨 body）。
     @State private var showLiveHandwriting = false
-    /// 会后「手写」tab 续写编辑器。
+    /// 会后「手写」tab 续写编辑器（drawing 真相源在 ReviewHandwritingEditorContainer 内）。
     @State private var showHandwritingEditor = false
-    @State private var reviewDrawing: PKDrawing = PKDrawing()
-    /// 手写画布的撤销/重做控制器（canvas.undoManager 经此暴露给 SwiftUI 顶部栏按钮）。
-    @StateObject private var liveHandwritingController = HandwritingCanvasController()
-    @StateObject private var reviewHandwritingController = HandwritingCanvasController()
     /// 全屏图库当前查看的会议时刻。
     @State private var galleryMoment: Moment?
     /// 完成 → 纪要的收束桥：字幕残影 + 控件退场（不入库）。
@@ -80,6 +75,11 @@ public struct MeetingNoteView: View {
     /// LIVE：贴底才自动跟随；上滑回看后停跟，需点「回到最新」。
     @State private var isFollowingLive = true
     @State private var missedLiveBlocks = 0
+    /// LIVE 顶部提示条（方言/云端精转预告）短暂展示后自动收起：
+    /// 预告信息只在其出现时刻告知一次（读两行字约 4s，给 6s 余量），
+    /// 结束确认弹窗的动态文案兜底——「降级可见」不靠常驻色块实现。
+    @State private var liveHintVisible = false
+    @State private var liveHintDismissTask: Task<Void, Never>?
     /// 滚动几何中转存储（仅事件回调读写，不参与 body 渲染）：
     /// 写 @State 会让滚动逐帧打穿整个详情页 body（ProMotion 120Hz）。
     @State private var scrollBox = ScrollStateBox()
@@ -224,12 +224,15 @@ public struct MeetingNoteView: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            content
-            customTopBar
-                .zIndex(1)
-        }
-        .background(Color.recapBg.ignoresSafeArea())
+        content
+            // 顶栏走 safeAreaInset 而非 ZStack 浮层：ScrollView 内容自动避让（首条字幕不再依赖
+            // 手动占位魔法数，Dynamic Type/文案换行天然安全）。滚动内容仍会掠过栏后方——
+            // 由栏底渐变遮罩（topBarScrollFade）羽化，避免字幕与透明提示区叠印。
+            .safeAreaInset(edge: .top, spacing: 0) {
+                customTopBar
+                    .background(topBarScrollFade)
+            }
+            .background(Color.recapBg.ignoresSafeArea())
         // 用 inset 而不是 ZStack 叠层，避免 ScrollView 抢走「结束」点击
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
@@ -243,6 +246,20 @@ public struct MeetingNoteView: View {
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
         .overlay { agentOverlay }
+        .onChange(of: liveHintKey) { oldKey, newKey in
+            guard newKey != oldKey else { return }
+            liveHintDismissTask?.cancel()
+            if newKey == nil {
+                withAnimation(reduceMotion ? nil : .recapNotice) { liveHintVisible = false }
+                return
+            }
+            withAnimation(reduceMotion ? nil : .recapNotice) { liveHintVisible = true }
+            liveHintDismissTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled else { return }
+                withAnimation(reduceMotion ? nil : .recapNotice) { liveHintVisible = false }
+            }
+        }
         .onChange(of: session.blocks.count) { _, _ in
             // LIVE 边录边问：转写增长时把新快照推给已展开的对话窗。
             // 节流 + 后台重拼（见 scheduleAgentTranscriptRefresh）：每句定稿全量重拼
@@ -465,13 +482,12 @@ public struct MeetingNoteView: View {
             case .background:
                 // #6a：后台取消会后 CoreML 重负载（ANE 后台可能被系统拒）；LLM 纪要管线由自身 bg task 保护
                 session.cancelPostMeetingCompute()
-                // LIVE：先落 checkpoint 再停麦，防进程被杀丢字幕/丢时长；回前台自动续录
-                session.pauseForBackgroundIfLive()
+                // LIVE：只落检查点不停麦——UIBackgroundModes=audio 保证切 App/锁屏持续录音；
+                // 来电等中断由 AudioRecorder 自愈。手动暂停态不受影响。
+                session.checkpointForBackgroundIfLive()
             case .active:
                 // #6a：回前台重排被后台取消的会后任务（幂等：已完成/在跑均跳过）
                 session.reschedulePostMeetingCompute()
-                // LIVE：切后台时在录音则自动恢复（等同来电中断恢复）
-                session.resumeFromForegroundIfLive()
             default:
                 break
             }
@@ -491,11 +507,18 @@ public struct MeetingNoteView: View {
     }
 
     /// 仅无可用模型/额度耗尽时给次行引导；正常处理时保持纯净专注，留给阶段动效。
+    /// 按模式分文案：BYOK=真「未配置」；recapCloud 凭证空窗是瞬时态（startProcessing
+    /// 会强刷重试），指引「去设置配置模型」对 Pro 用户是误导。
     private var processHeroSubtitle: String? {
         if AIServiceMode.current == .freeTrial {
             return MinutesPipelineSmoke.canRunMinutesPipeline
                 ? nil
                 : "免费额度已用完，升级 Pro 或解锁自备密钥"
+        }
+        if AIServiceMode.current == .recapCloud {
+            return MinutesPipelineSmoke.canRunMinutesPipeline
+                ? nil
+                : "Pro 凭证准备中，将自动重试…"
         }
         return MinutesPipelineSmoke.canRunMinutesPipeline
             ? nil
@@ -538,6 +561,23 @@ public struct MeetingNoteView: View {
         }
     }
 
+    /// 顶栏滚动渐隐遮罩：滚动内容掠过栏后方时，被纸色渐变从上往下逐渐放行（栏上半全遮、
+    /// 下半渐透、出栏完全显现）。替代「透明区直穿」的叠印——遮罩高度天然等于栏高
+    /// （safeAreaInset 自适应），无手动对齐值。
+    private var topBarScrollFade: some View {
+        LinearGradient(
+            stops: [
+                .init(color: Color.recapBg, location: 0.0),
+                .init(color: Color.recapBg.opacity(0.94), location: 0.62),
+                .init(color: Color.recapBg.opacity(0), location: 1.0)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea(edges: .top)
+        .allowsHitTesting(false)
+    }
+
     private var customTopBar: some View {
         let isLiveInteractive = session.phase == .live && !isSettling
         return VStack(spacing: Spacing.xs) {
@@ -547,9 +587,14 @@ public struct MeetingNoteView: View {
             } else if isLiveInteractive {
                 liveTransportBar
                     .transition(.opacity.combined(with: .move(edge: .top)))
-                // 方言口音提示：端侧误识方言时常驻 Transport Bar 下方，告知「会后自动云端精转」
-                if session.liveDialectSuspected {
+                // 方言口音提示：端侧误识方言时短暂展示（出现时刻告知一次，6s 后自动收起，
+                // 常驻语义由结束确认弹窗的动态文案承接——降级可见但不打扰）。
+                if session.liveDialectSuspected && liveHintVisible {
                     DialectHintBar()
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                } else if session.showsCloudUpgradeHint && liveHintVisible {
+                    // 降级可见性（产品原则：永不静默也不打扰）：LIVE 在本机但会后确定云端精转
+                    CloudUpgradeHintBar()
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
@@ -559,7 +604,8 @@ public struct MeetingNoteView: View {
         .animation(reduceMotion ? nil : .recapSoft, value: reviewHeaderHidden)
         .animation(reduceMotion ? nil : .recapSoft, value: session.phase)
         .animation(reduceMotion ? nil : .recapSoft, value: isSettling)
-        .animation(reduceMotion ? nil : .recapNotice, value: session.liveDialectSuspected)
+        .animation(reduceMotion ? nil : .recapNotice, value: liveHintVisible)
+        .animation(reduceMotion ? nil : .recapNotice, value: liveHintKey)
     }
 
     /// LIVE「Transport Bar」：左·状态胶囊(呼吸点+时长，点按收起) · 右·控制胶囊(暂停+停止)，两颗玻璃胶囊成对；
@@ -590,11 +636,8 @@ public struct MeetingNoteView: View {
             // 全宽声波带：屏内唯一声波，视觉上连接左状态与右控制组。
             // 只让本视图观察频段总线（12Hz 失效面收敛到声波自身，不打穿整页 body）。
             LiveWaveformBandHost(bus: session.liveAudioBandBus, isPaused: session.isLivePaused)
-
-            // 极轻抓手：暗示「下拉 / 点按收起」，替代原左上最小化钮
-            Image(systemName: RecapSymbol.dismissDown)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color.recapInk.opacity(0.22))
+            // 抓手 ↓ 已删（2026-09-01 顶部减负）：纯装饰且独占透明行，字幕回看时穿过后
+            // 与其叠印；收起入口 = 点状态胶囊（a11y 标签「轻点收起」仍在）。
         }
     }
 
@@ -915,49 +958,31 @@ public struct MeetingNoteView: View {
         liveRecordingOrPausedContent
     }
 
-    /// 会中手写全屏画布（PKToolPicker 在其内部浮起；「完成」置于顶部，躲开底部工具箱）。
-    /// drawing 真相源为本 View 的 @State liveDrawing，modal 关闭/重开笔画结构性保留。
+    /// 会中手写全屏画布：drawing 真相源在 LiveHandwritingCover 内部（状态下沉，
+    /// 每笔画只重算 cover 小子树）。打开即续写：有已存手写则载入（保存失败场景画布
+    /// 不关闭，不存在被旧盘覆写的残留态）。
     private var liveHandwritingCover: some View {
-        VStack(spacing: 0) {
-            // 顶部栏：左 返回（存盘+关闭），右 撤销——对齐会后编辑器的 xmark + 撤销 视觉语言。
-            HStack(spacing: Spacing.sm) {
-                Button {
-                    Haptics.impact(.light)
-                    commitLiveHandwriting()
-                    showLiveHandwriting = false
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.recapInk)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-                Spacer(minLength: 0)
-                Button {
-                    Haptics.impact(.light)
-                    liveHandwritingController.undo()
-                } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.recapInk)
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
+        LiveHandwritingCover(
+            initialDrawing: Self.storedHandwritingDrawing(for: meeting),
+            onCommit: { drawing, completion in
+                commitLiveHandwriting(drawing, completion: completion)
             }
-            .padding(.horizontal, Spacing.xl)
-            .padding(.top, Spacing.lg)
-            .padding(.bottom, Spacing.sm)
-
-            HandwritingCanvasView(drawing: $liveDrawing, controller: liveHandwritingController)
-                .background(Color.recapPaper)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.recapPaper)
+        )
     }
 
-    /// 保存当前手写：1:1 upsert——取本场已有 HandwritingNote 或新建，覆盖落盘，存盘后异步重识别，然后清空画布。
-    private func commitLiveHandwriting() {
-        guard !liveDrawing.strokes.isEmpty else { return }
+    /// 会后手写编辑器初始/续写笔迹：有已存手写则载入，否则空白。
+    private static func storedHandwritingDrawing(for meeting: Meeting) -> PKDrawing {
+        if let note = meeting.handwritingNote,
+           let stored = HandwritingStore.load(storedPath: note.drawingRelativePath) {
+            return stored
+        }
+        return PKDrawing()
+    }
+
+    /// 保存当前手写：1:1 upsert——取本场已有 HandwritingNote 或新建，覆盖落盘，存盘后异步重识别。
+    /// completion(true) = 落盘成功（cover 可关闭）；false = 失败（cover 保持打开，笔迹待重试）。
+    private func commitLiveHandwriting(_ drawing: PKDrawing, completion: @escaping (Bool) -> Void) {
+        guard !drawing.strokes.isEmpty else { completion(true); return }
         // 取或建：一场会议仅一条。
         let note: HandwritingNote
         if let existing = meeting.handwritingNote {
@@ -968,19 +993,17 @@ public struct MeetingNoteView: View {
             modelContext.insert(note)
         }
         // 落盘（覆盖写；失败则路径留空，识别仍可走内存 drawing）。编码+写盘移出主线程。
-        // 画布推迟到落盘成功后才清空——旧序「先清空后异步写」在写失败（磁盘满/IO 错）时
-        // 整版笔迹永久丢失且无提示；失败时保留笔迹在画布待重试。
-        let drawingSnapshot = liveDrawing
         note.recognizedText = nil
         note.title = nil
-        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: drawingSnapshot)
+        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: drawing)
         Task { @MainActor in
             do {
                 note.drawingRelativePath = try await HandwritingStore.saveOffMain(
-                    drawingSnapshot, meetingId: meeting.id)
-                liveDrawing = PKDrawing()   // 成功后才清空；下次打开从磁盘 load 续写
+                    drawing, meetingId: meeting.id)
+                completion(true)
             } catch {
                 session.statusMessage = "手写保存失败：存储空间不足或写入失败，笔迹已保留在画布，请重试"
+                completion(false)
             }
             try? modelContext.save()
         }
@@ -989,11 +1012,15 @@ public struct MeetingNoteView: View {
     private var liveRecordingOrPausedContent: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
+                // defaultScrollAnchor(.bottom)：初始锚底 + 内容增长时系统保持贴底（用户上滑
+                // 脱离底部后不强拉）。替代「每块 scrollTo 流末锚点」作为自动跟随的主机制——
+                // scrollTo 对被 LazyVStack 回收的视口外尾部项会无声失败，长会议断链停摆。
+                // scrollTo 仅保留给「回到最新」按钮与初始定位（锚点在视口内时有效）。
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        // 顶部避让：Transport Bar 浮在 ZStack 顶层（非 safeAreaInset），ScrollView 内容不会自动下移，
-                        // 首条字幕需手动留出栏高，否则被玻璃胶囊压住（与 liveBottomInset 同源）。
-                        Color.clear.frame(height: liveTopInset)
+                        // 顶部避让已由 safeAreaInset(edge: .top) 承担（原 Color.clear 手动占位删除，
+                        // 不再需要与栏高同步的魔法数）；这里只留首条内容的呼吸间距（随内容滚走）。
+                        Color.clear.frame(height: Spacing.md)
 
                         // 仅暂停后且真有待办时提示；启动台 / 录音中不出现
                         if session.isLivePaused && session.hasStartedRecording && session.todoCount > 0 {
@@ -1011,7 +1038,10 @@ public struct MeetingNoteView: View {
                             SpeakerBlockView(
                                 block: block,
                                 isCurrent: isLast && !block.isFinal,
-                                showLiveMeter: liveShowsListeningIndicator && isLast
+                                showLiveMeter: liveShowsListeningIndicator && isLast,
+                                // LIVE 减噪：时间戳归 REVIEW 回听锚点；「正在说话」由未定稿
+                                // 行尾的朱砂 ▎游标 + opacity 差单一承载。
+                                showsTimestamp: false
                             )
                             .id(block.id)
                             .padding(.horizontal, Spacing.xl)
@@ -1021,14 +1051,13 @@ public struct MeetingNoteView: View {
                             .padding(.leading, Spacing.xl + 2 + Spacing.md) // 与字幕文字栏对齐（竖条 + 间距）
                             .padding(.trailing, Spacing.xl)
                             .padding(.top, session.blocks.isEmpty ? Spacing.sm : 0)
-                            .padding(.bottom, Spacing.xxl)
-                            .id("live-stream-end")
 
-                        // 底部避让留白：滚到底时让最后一条字幕与悬浮底栏（主控/完成/问 Recap）
-                        // 拉开呼吸间距，避免被遮挡；同时作为自动跟随 scrollTo 的锚点。
+                        // 流末恒定锚点：「回到最新」按钮 scrollTo 的目标（不能把 id 挂在 footer
+                        // 上——statusMessage 为空时 footer 是 EmptyView，id 随之消失）。恒定
+                        // Color.clear + 呼吸高度；避让本体由 safeAreaInset(edge: .bottom) 承担。
                         Color.clear
-                            .frame(height: liveBottomInset)
-                            .id("live-bottom-inset")
+                            .frame(height: Spacing.xxl)
+                            .id("live-stream-end")
 
                         if session.liveStartFailed {
                             liveFailureActions
@@ -1038,6 +1067,7 @@ public struct MeetingNoteView: View {
                     }
                 }
                 .scrollContentBackground(.hidden)
+                .defaultScrollAnchor(.bottom)
                 .onScrollGeometryChange(for: CGFloat.self) { geo in
                     max(0, geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height)
                 } action: { _, distance in
@@ -1053,7 +1083,16 @@ public struct MeetingNoteView: View {
                     if isFollowingLive {
                         scrollLiveToLatest(proxy: proxy)
                     } else if newCount > oldCount {
-                        missedLiveBlocks += newCount - oldCount
+                        // 贴底自愈：onScrollGeometryChange 只在计算值变化时回调，scrollTo
+                        // 抑制窗口内的贴底事实可能漏跑跟随判定（distance 恒 0 不再触发）——
+                        // 「回到最新」浮钮与 missed 计数会在已贴底时残留。scrollBox 里的
+                        // distance 由每次几何回调先行写入（guard 之前），此处兜底恢复。
+                        if scrollBox.liveDistanceFromBottom < 48 {
+                            isFollowingLive = true
+                            missedLiveBlocks = 0
+                        } else {
+                            missedLiveBlocks += newCount - oldCount
+                        }
                     }
                 }
                 .onAppear {
@@ -1071,9 +1110,7 @@ public struct MeetingNoteView: View {
             // 而非 recapPhaseBar——后者契约是「仅 opacity 无位移」。
             .animation(.recapNotice, value: isFollowingLive)
             .animation(reduceMotion ? nil : .recapSonicMorph, value: session.blocks.isEmpty)
-            // 方言提示出现/消失：顶部占位高度变化，字幕随之平滑下推/回弹
-            .animation(reduceMotion ? nil : .recapNotice, value: session.liveDialectSuspected)
-            // 待办在场条出现/消失：随暂停/恢复滑入淡出（顶部占位高度同步变化）
+            // 待办在场条出现/消失：随暂停/恢复滑入淡出（行内流布局）
             .animation(reduceMotion ? nil : .recapNotice, value: session.isLivePaused)
         }
     }
@@ -1090,40 +1127,16 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// LIVE 字幕流底部避让高度。此视图的 safeAreaInset 未把悬浮底栏（动作坞：glass 钮 52pt
-    /// + padding 28pt ≈ 80pt）计入 ScrollView 内容避让 —— 与 reviewContent 的
-    /// `.padding(.bottom, 130)` 同源（那里也是靠硬编码补偿）。LIVE 底栏较矮：
-    /// 遮挡区 = 动作坞(80) + 底部安全区(34) ≈ 114pt，扣减 footer 自身约 40pt 留白后取 104，
-    /// 使最后一条字幕落在底栏上方约 30pt。若仍被遮挡则调大、若字幕偏高则调小。
-    private var liveBottomInset: CGFloat { 104 }
-
-    /// LIVE 字幕流顶部避让高度。Transport Bar 浮在 ZStack 顶层（非 safeAreaInset），ScrollView 内容不会自动下移，
-    /// 首条字幕需手动留出栏高，否则被玻璃胶囊压住（与 liveBottomInset 同源）。
-    /// 栏高 ≈ 状态胶囊36 + 声波 isCompact 高18（旧注 34 失真，isCompact 细带非大波形）+ 抓手行 + padding，
-    /// 取 120 含呼吸余量。首块自带 12 顶 padding，落地后与玻璃栏底沿留约 20pt。若重叠则调大、若偏高则调小。
-    /// 方言提示条出现时（liveDialectSuspected），需额外让出提示条高度，否则首条字幕被浮层提示条压住。
-    private var liveTopInset: CGFloat {
-        120 + (session.liveDialectSuspected ? Self.dialectHintReservedHeight : 0)
-    }
-    /// 方言提示条预留高度（主行+次行约2行+padding）。与 DialectHintBar 渲染高度对齐，文案换行变化则同步调。
-    private static let dialectHintReservedHeight: CGFloat = 88
-
-    /// REVIEW 顶栏 SafeArea + Floating Bar 避让（Color.clear 占位高度），与 customTopBar 实际高度对齐。
-    private var reviewTopClear: CGFloat { 60 }
-    /// REVIEW 正文底部留白 = AgentAskBar(48) + 上下 padding(4+8) + 底部安全区(~34) + 呼吸余量 ≈ 144。
-    /// 确保滚动到最底部时所有文字与待办完全露出，不被悬浮输入栏遮挡。调 AskBar 高度须同步调此值。
-    private var reviewBottomPadding: CGFloat { 144 }
-
     private func scrollLiveToLatest(proxy: ScrollViewProxy) {
         guard session.blocks.last != nil else { return }
         suppressLiveFollowUpdate = true
-        // 锚定底部避让留白（而非最后一条字幕）：最新字幕随 footer 上移，与悬浮底栏拉开呼吸间距，
-        // 避免 scrollTo(.bottom) 在 safeAreaInset 边界处把末段压到底栏背后。
+        // 锚定流末恒定锚点（Color.clear，见 LazyVStack 尾部）：底部避让由
+        // safeAreaInset(edge: .bottom) 承担，锚点高度即与底栏的呼吸间距。
         if reduceMotion {
-            proxy.scrollTo("live-bottom-inset", anchor: .bottom)
+            proxy.scrollTo("live-stream-end", anchor: .bottom)
         } else {
             withAnimation(.recapLiveFollow) {
-                proxy.scrollTo("live-bottom-inset", anchor: .bottom)
+                proxy.scrollTo("live-stream-end", anchor: .bottom)
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
@@ -1228,11 +1241,28 @@ public struct MeetingNoteView: View {
         return Color.recapTea
     }
 
+    /// 当前活跃的 LIVE 顶部提示条标识（方言优先于云端预告，与展示互斥逻辑同口径）。
+    /// nil = 无提示。驱动 ``liveHintVisible`` 的出入与 6s 自动收起。
+    private var liveHintKey: String? {
+        if session.liveDialectSuspected { return "dialect" }
+        if session.showsCloudUpgradeHint { return "cloud" }
+        return nil
+    }
+
     private var endLiveConfirmMessage: String {
-        if session.blocks.isEmpty {
-            return "还没有字幕。结束将停止录音并进入整理。"
+        // 会后云端精转预告（原 LIVE 常驻提示条收编至此）：预告信息真正相关的时刻是结束时刻。
+        var lines: [String] = []
+        if session.liveDialectSuspected {
+            lines.append("检测到方言口音，实时字幕可能不准；整理时将自动用云端重新精转。")
+        } else if session.showsCloudUpgradeHint {
+            lines.append("当前为本机转写；整理时将自动升级为云端高保真转写。")
         }
-        return "将停止录音并开始整理纪要，此操作不可撤销。"
+        if session.blocks.isEmpty {
+            lines.append("还没有字幕。结束将停止录音并进入整理。")
+        } else {
+            lines.append("将停止录音并开始整理纪要，此操作不可撤销。")
+        }
+        return lines.joined(separator: "\n\n")
     }
 
     /// #5：当前麦克风权限被拒 → 失败态给「打开设置」入口，避免死路。
@@ -1277,8 +1307,9 @@ public struct MeetingNoteView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: 0) {
-                    // 顶栏 Safe Area 与 Floating Bar 避让高度，确保标题与 TAB 栏有安全间距，防止误触
-                    Color.clear.frame(height: reviewTopClear)
+                    // 顶部避让已由 safeAreaInset(edge: .top) 承担（原 reviewTopClear 占位删除）；
+                    // 这里只留 Tab 区与顶栏的呼吸间距。
+                    Color.clear.frame(height: Spacing.md)
 
                     // 上滑阅读时整条 Tab 区退场（极简式），只留顶栏返回钮
                     reviewTabBar
@@ -1321,7 +1352,9 @@ public struct MeetingNoteView: View {
                     }
                     .padding(.horizontal, Spacing.xl)
                     .padding(.top, Spacing.md)
-                    .padding(.bottom, reviewBottomPadding)
+                    // 底部避让已由 safeAreaInset(edge: .bottom) 承担（原 144pt 补偿删除）；
+                    // 这里只留滚到底时正文与输入栏的呼吸间距。
+                    .padding(.bottom, Spacing.xxl)
                 }
             }
             .scrollContentBackground(.hidden)
@@ -1444,20 +1477,11 @@ public struct MeetingNoteView: View {
         }
     }
 
-    /// 开始 / 续写手写按钮：1:1--若有已存手写则载入接着画，否则新空白。
+    /// 开始 / 续写手写按钮：1:1——续写笔迹由编辑器容器打开时从磁盘载入（真相源在容器内）。
     private var reviewHandwritingAddButton: some View {
         let hasNote = meeting.handwritingNote != nil
         return Button {
             Haptics.impact(.light)
-            // 仅画布为空时才从磁盘载入：上一次提交若因写盘失败保留了笔迹，这里不能被旧盘覆写。
-            if reviewDrawing.strokes.isEmpty {
-                if let note = meeting.handwritingNote,
-                   let stored = HandwritingStore.load(storedPath: note.drawingRelativePath) {
-                    reviewDrawing = stored
-                } else {
-                    reviewDrawing = PKDrawing()
-                }
-            }
             showHandwritingEditor = true
         } label: {
             Label(hasNote ? "继续书写" : "开始书写", systemImage: "square.and.pencil")
@@ -1469,41 +1493,20 @@ public struct MeetingNoteView: View {
         .buttonStyle(.plain)
     }
 
-    /// 会后手写编辑器：全屏画布 + 取消/保存。
+    /// 会后手写编辑器：全屏画布 + 取消/保存（drawing 真相源在容器内，保存成功才关闭）。
     private var handwritingReviewEditor: some View {
-        NavigationStack {
-            HandwritingCanvasView(drawing: $reviewDrawing, controller: reviewHandwritingController)
-                .background(Color.recapPaper)
-                .navigationTitle("手写笔记")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    // 左：关闭（放弃修改退出）用 xmark，语义明确，不与撤销混淆。
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showHandwritingEditor = false
-                        } label: {
-                            Image(systemName: "xmark")
-                        }
-                    }
-                    // 右：撤销 + 保存同属操作区，撤销不再独居左上被误认为「返回」。
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            reviewHandwritingController.undo()
-                        } label: {
-                            Image(systemName: "arrow.uturn.backward")
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("保存") { commitReviewHandwriting() }
-                            .disabled(reviewDrawing.strokes.isEmpty)
-                    }
-                }
-        }
+        ReviewHandwritingEditorContainer(
+            initialDrawing: Self.storedHandwritingDrawing(for: meeting),
+            onCommit: { drawing, completion in
+                commitReviewHandwriting(drawing, completion: completion)
+            }
+        )
     }
 
-    /// 保存会后手写：1:1 upsert--取本场已有 HandwritingNote 或新建，覆盖落盘 + 重识别。
-    private func commitReviewHandwriting() {
-        guard !reviewDrawing.strokes.isEmpty else { return }
+    /// 保存会后手写：1:1 upsert——取本场已有 HandwritingNote 或新建，覆盖落盘 + 重识别。
+    /// completion(true) = 落盘成功（编辑器可关闭）；false = 失败（保持打开，笔迹待重试）。
+    private func commitReviewHandwriting(_ drawing: PKDrawing, completion: @escaping (Bool) -> Void) {
+        guard !drawing.strokes.isEmpty else { completion(true); return }
         let note: HandwritingNote
         if let existing = meeting.handwritingNote {
             note = existing
@@ -1512,22 +1515,21 @@ public struct MeetingNoteView: View {
             meeting.handwritingNote = note
             modelContext.insert(note)
         }
-        // 编码+写盘移出主线程（对齐 commitLiveHandwriting）。成功后才清画布；失败保留笔迹待重试。
-        let drawingSnapshot = reviewDrawing
+        // 编码+写盘移出主线程（对齐 commitLiveHandwriting）。
         note.recognizedText = nil
         note.title = nil
-        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: drawingSnapshot)
+        HandwritingRecognitionService.shared.extractIfAbsent(for: note, drawing: drawing)
         Task { @MainActor in
             do {
                 note.drawingRelativePath = try await HandwritingStore.saveOffMain(
-                    drawingSnapshot, meetingId: meeting.id)
-                reviewDrawing = PKDrawing()
+                    drawing, meetingId: meeting.id)
+                completion(true)
             } catch {
                 session.statusMessage = "手写保存失败：存储空间不足或写入失败，笔迹已保留，请重试"
+                completion(false)
             }
             try? modelContext.save()
         }
-        showHandwritingEditor = false
     }
 
     private func scrollTranscript(proxy: ScrollViewProxy, startSeconds: Double) {
@@ -2480,6 +2482,8 @@ public struct MeetingNoteView: View {
 
     /// picker 选定：transient 标签立即驱动生成（不等同意）；勾选「记住我」则顺带持久 enroll（非阻断）。
     private func handleSpeakerPick(_ speaker: Speaker, rememberMe: Bool) {
+        // 反馈校准（Step 4a）：用户手动从 picker 指认 = 系统未自动命中的漏并信号 → 放宽阈值。
+        VoiceprintFeedback.shared.recordManualAssign()
         // 持久 enroll：仅 FluidAudio(voiceprintId 非空) + 勾选。复用既有同意门（pendingMeVoiceprintId/showVoiceprintConsent）。
         if rememberMe, let vp = speaker.voiceprintId, !vp.isEmpty {
             if VoiceprintConsent.granted {
@@ -2752,17 +2756,10 @@ public struct MeetingNoteView: View {
         )
     }
 
-    /// 底部动作坞·手写（仅 iPad）：打开全屏画布续写本场手写（若有则载入已有笔迹）。
+    /// 底部动作坞·手写（仅 iPad）：打开全屏画布续写本场手写（续写载入在 cover 内完成）。
     private var handwritingLiveBottomButton: some View {
         Button {
             Haptics.impact(.soft)
-            // 1:1：打开即续写——若有已存手写且画布为空，载入 liveDrawing 接着画
-            //（画布非空 = 上次写盘失败保留的笔迹，不能被旧盘覆写）。
-            if liveDrawing.strokes.isEmpty,
-               let note = meeting.handwritingNote,
-               let stored = HandwritingStore.load(storedPath: note.drawingRelativePath) {
-                liveDrawing = stored
-            }
             showLiveHandwriting = true
         } label: {
             liveDockIcon(RecapSymbol.handwrite)
@@ -3325,9 +3322,12 @@ private struct ProcessStageCanvas: View {
 
     // MARK: - Copy Helper (阶段驱动的动态文案)
 
-    /// 非「整理中」（无 Key 的「已保存」等）沿用传入 title；否则由 stage 提供真实阶段文案。
+    /// 真实阶段永远优先：无 Key（「已保存」）时会后重转/整理链仍在跑——几分钟的云端精转
+    /// 不能被静态「已保存」遮蔽成死屏（用户只看到「已保存 去设置配置模型」以为卡住）。
+    /// 仅 idle/done 等无真实阶段的窗口才回落到传入 title（已保存 / 整理中）。
     private var dynamicStatusTitle: String {
-        if title != "整理中" && !title.isEmpty { return title }
+        if stage.isProcessingStage { return stage.title }
+        if !title.isEmpty { return title }
         return stage.title
     }
 

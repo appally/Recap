@@ -9,6 +9,15 @@ export interface QuotaState {
 
 export const MONTH_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** Pro Apple 验证宽限窗口:该交易近 3 天内成功验证过 → 验证链路故障(Apple/网络)时照常放行,
+ *  付费用户不被锁门外(对齐 App Store Billing Grace Period 思路)。敞口 = 仅限「曾验证成功」
+ *  的交易,伪造者首验即被拒,无历史打点可蹭。 */
+export const PRO_GRACE_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+export function graceActive(lastVerifiedAt: number | undefined, now: number): boolean {
+  return typeof lastVerifiedAt === 'number' && now - lastVerifiedAt < PRO_GRACE_WINDOW_MS;
+}
+
 export interface QuotaDecision {
   allow: boolean;
   nextState: QuotaState;

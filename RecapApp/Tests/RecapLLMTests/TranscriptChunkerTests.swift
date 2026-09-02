@@ -17,6 +17,26 @@ final class TranscriptChunkerTests: XCTestCase {
         XCTAssertTrue(TranscriptChunker.needsMapReduce(over))
     }
 
+    // MARK: - 模型上下文表（P1 回归：qwen-plus 是托管档主力模型，漏匹配会 14k 兜底）
+
+    func testQwenPlusFamilyKnownContext() {
+        // 托管档网关 LLM_MODEL=qwen-plus：不含 "qwen3" 子串，此前落 nil → 14k →
+        // 托管档 >1h 会议全部误走 map-reduce
+        for model in ["qwen-plus", "qwen-plus-latest", "qwen-max", "Qwen-Turbo"] {
+            XCTAssertEqual(ModelContextWindows.contextTokens(for: model), 131_072, "\(model) 应识别为 128k")
+        }
+        // 阈值脱离 14k 兜底（131072×1.5×0.5≈98k 字符，2h 会议走 direct）
+        XCTAssertNotEqual(ModelContextWindows.mapReduceThresholdChars(for: "qwen-plus"), 14_000)
+    }
+
+    func testDoubaoExplicitContextSuffixRespected() {
+        XCTAssertEqual(ModelContextWindows.contextTokens(for: "doubao-pro-32k"), 32_000)
+        XCTAssertEqual(ModelContextWindows.contextTokens(for: "doubao-pro-128k"), 131_072)
+        XCTAssertEqual(ModelContextWindows.contextTokens(for: "doubao-pro-256k"), 256_000)
+        // 未标明后缀的 doubao 保守按 32k（模板默认 pro-32k），不再一律 256k
+        XCTAssertEqual(ModelContextWindows.contextTokens(for: "doubao-pro"), 32_000)
+    }
+
     func testLongKeepsMiddleContent() {
         let marker = "【中段决议拍板XYZ】"
         // 确保总长 > 14k，触发 map-reduce 阈值

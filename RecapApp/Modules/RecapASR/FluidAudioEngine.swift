@@ -36,6 +36,10 @@ public actor FluidAudioEngine: AsrEngine {
         self.kind = kind
     }
 
+    /// SenseVoice 多语言模型（zh/en/yue/ja/ko）——对齐协议文档声明（AsrEngine
+    /// .englishCapable 注释），消除「声明 true 实际继承 false」的文档漂移。
+    nonisolated public var englishCapable: Bool { true }
+
     public func prepare() async throws {
         do {
             let precision: SenseVoiceEncoderPrecision = preferInt8 ? .int8 : .fp16
@@ -208,16 +212,22 @@ public enum FluidAudioBootstrap {
 
 #if DEBUG
     /// 供单测在临时目录伪造「已预下载」缓存（`modelsExist` 同口径三要件：
-    /// preprocessor .mlmodelc + fp16 encoder .mlmodelc + vocab.json，目录即可）。
+    /// preprocessor .mlmodelc + fp16 encoder .mlmodelc + vocab.json，目录即可；
+    /// 0.15.6 起 `ModelCache.validateCompiledModelLayout` 要求 .mlmodelc 内含 coremldata.bin，
+    /// 故每个模型目录内需放置空 coremldata.bin 占位）。
     static func fabricateSenseVoiceCache(root: URL) throws {
         let dir = root.appendingPathComponent(Repo.senseVoiceSmall.folderName, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: dir.appendingPathComponent(ModelNames.SenseVoice.preprocessorFile, isDirectory: true),
-            withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(
-            at: dir.appendingPathComponent(ModelNames.SenseVoice.encoderFile, isDirectory: true),
-            withIntermediateDirectories: true)
+        try fabricateCompiledModel(
+            at: dir.appendingPathComponent(ModelNames.SenseVoice.preprocessorFile, isDirectory: true))
+        try fabricateCompiledModel(
+            at: dir.appendingPathComponent(ModelNames.SenseVoice.encoderFile, isDirectory: true))
         try Data("[]".utf8).write(to: dir.appendingPathComponent(ModelNames.SenseVoice.vocabularyFile))
+    }
+
+    /// 伪造一个满足 `validateCompiledModelLayout` 的最小 .mlmodelc 目录（仅存在性测试用，不加载）。
+    private static func fabricateCompiledModel(at url: URL) throws {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try Data().write(to: url.appendingPathComponent("coremldata.bin"))
     }
 #endif
 
@@ -276,6 +286,20 @@ public enum FluidAudioBootstrap {
             "wespeaker_v2.mlmodelc/weights/weight.bin":
                 "34004f6798d35cad7071e2fdc67e63faaa782f53697e1cb49bcb452cf81ae151",
         ],
+        .campPlus: [
+            "CamPlusPreprocessor.mlmodelc/analytics/coremldata.bin":
+                "11e99d94be389165098b54c5de6f8745ed44de70f6fd294a20ca9548c626df77",
+            "CamPlusPreprocessor.mlmodelc/coremldata.bin":
+                "64fb697bb216eddb9f691250e45fee44b2ef87b52b047ede0063fe7275571f00",
+            "CamPlusPreprocessor.mlmodelc/weights/weight.bin":
+                "09f13054339581673c8b5745954471945a61fea54441b6e55f934f041611143a",
+            "CamPlusPlus.mlmodelc/analytics/coremldata.bin":
+                "be20481d48572c431a3ed23606956706d4e224a0c7994ae1ab1920813edafe5f",
+            "CamPlusPlus.mlmodelc/coremldata.bin":
+                "800dc33d00a27621ead3e315fe93ec15a1800aa5d4a111c064cb1c44aeebbf3a",
+            "CamPlusPlus.mlmodelc/weights/weight.bin":
+                "058c317b6a768cac30fcf89b46676d7df1aa1915357c44ecc7ada4e5b7c11590",
+        ],
     ]
 
     /// FluidAudio 模型缓存根目录（SDK 私有 `modelsRootDirectory()` 的重建，路径见 senseVoiceCachePresent）。
@@ -291,8 +315,19 @@ public enum FluidAudioBootstrap {
         modelsRootURL()?.appendingPathComponent(Repo.diarizer.folderName, isDirectory: true)
     }
 
-    /// diarizer 两件套是否在盘（与 `DiarizerModels.download` 的 requiredModels 同口径）。
-    public static func diarizerCachePresent() -> Bool {
+    /// CAM++ 声纹模型缓存目录（仅下载回退路径会落盘；bundle 命中时不占用户数据区）。
+    public static func campPlusCacheURL() -> URL? {
+        modelsRootURL()?.appendingPathComponent(Repo.campPlus.folderName, isDirectory: true)
+    }
+
+    /// diarizer 模型是否可用：bundle 预置命中（2026-08-23 起随包分发，见
+    /// `FluidDiarizer.bundledModelsDirectory`）即就绪；否则按运行期下载缓存判
+    /// （与 `DiarizerModels.download` 的 requiredModels 同口径）。供设置页就绪态展示；
+    /// 存储占用/清理语义仍只认缓存目录（bundle 属 App 资产，不占用户数据区、不可删）。
+    public static func diarizerModelsAvailable() -> Bool {
+        if Bundle.main.url(forResource: "speaker-diarization-coreml", withExtension: nil) != nil {
+            return true
+        }
         guard let dir = diarizerCacheURL() else { return false }
         return FileManager.default.fileExists(
             atPath: dir.appendingPathComponent(ModelNames.Diarizer.segmentationFile).path)
@@ -370,6 +405,16 @@ public enum FluidAudioBootstrap {
     @discardableResult
     public static func removeDiarizerCache() -> Bool {
         guard let dir = diarizerCacheURL(),
+              FileManager.default.fileExists(atPath: dir.path) else { return false }
+        try? FileManager.default.removeItem(at: dir)
+        return true
+    }
+
+    /// 删除 CAM++ 下载缓存（校验失配时调用；bundle 路径不受影响）。
+    /// 调用时机在模型构造失败/校验之后，无驻留映射，无崩溃窗口。
+    @discardableResult
+    public static func removeCampPlusCache() -> Bool {
+        guard let dir = campPlusCacheURL(),
               FileManager.default.fileExists(atPath: dir.path) else { return false }
         try? FileManager.default.removeItem(at: dir)
         return true
