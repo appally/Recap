@@ -138,6 +138,7 @@ enum OpenAICompatibleAgentStreaming {
                 messages: messages,
                 tools: tools,
                 options: options,
+                attempt: attempt,
                 produced: &produced,
                 continuation: continuation
             )
@@ -214,6 +215,7 @@ enum OpenAICompatibleAgentStreaming {
         messages: [AgentMessage],
         tools: [AgentToolSpec],
         options: AgentTransportOptions,
+        attempt: Int,
         produced: inout Bool,
         continuation: AsyncThrowingStream<AgentTransportEvent, Error>.Continuation
     ) async throws {
@@ -252,6 +254,17 @@ enum OpenAICompatibleAgentStreaming {
         var sawFinish = false
         var dsmlFilter = DeepSeekDSML.StreamFilter()
 
+        // 首 token 看门狗（移植 MinutesPipeline raceFirstToken 范式）：timeoutInterval 是
+        // 「空闲」超时——SSE 心跳注释行/空 choices 控制帧每到达即重置，上游排队只发心跳
+        // 不出内容时请求永不超时，而 AgentKernel 墙钟只在步与步之间检查、无法中断在飞流。
+        // 首个有效内容（produced）到达前，每个到达的行处理后检查墙钟；越限按
+        // URLError.timedOut 抛出→走既有瞬态重试。产出后解除武装（不掐健康长流）。
+        // 预算随尝试递增 20→40→60s（对齐管线首 token 预算），调用方更紧的 timeout
+        // （如查询改写 8s）以其自身值为准。
+        let firstTokenDeadline = Date().addingTimeInterval(
+            min(options.timeout, 20.0 + Double(attempt) * 20.0)
+        )
+
         // 按行消费（此前逐字节迭代 + 手工拼缓冲：每字节一次挂起/恢复，长回答放大开销；
         // SSE 是行协议，CRLF/LF 由 lines 归一，余下交给 SSELineParser）。
         for try await line in bytes.lines {
@@ -264,6 +277,10 @@ enum OpenAICompatibleAgentStreaming {
                 dsmlFilter: &dsmlFilter,
                 continuation: continuation
             ) { produced = true }
+            // 先处理后查表：本行恰是首内容则先行解除武装；心跳/控制帧则计入看门狗。
+            if !produced, Date() > firstTokenDeadline {
+                throw URLError(.timedOut)
+            }
         }
 
         let structured = accumulator.finish()
