@@ -260,8 +260,8 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .deepseek: return "性价比高 · 纪要默认推荐"
         case .qwen: return "阿里云百炼 · OpenAI 兼容"
-        case .glm: return "智谱开放平台"
-        case .kimi: return "月之暗面 · 长上下文"
+        case .glm: return "智谱开放平台 · Flash 高性价比"
+        case .kimi: return "月之暗面 · 旗舰(输出单价高)"
         case .doubao: return "火山方舟"
         case .openai: return "GPT 系列"
         case .claude: return "Anthropic（兼容网关）"
@@ -285,12 +285,14 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
     }
 
     /// 2026 默认模型；若厂商返回 model_not_found，请在设置页改成该厂商现页最新 ID。
+    /// 2026-09-02 刷新:moonshot-v1 全系 2026-08-31 已下线(旧默认必 model_not_found)→ kimi-k3
+    /// (输出 ¥100/M,贵,已撤出 featured);glm-4-flash → glm-5.3-flash(0.8/2.8 限时+缓存 0.115)。
     public var defaultModel: String {
         switch self {
         case .deepseek: return LLMPresets.deepSeekFlash
         case .qwen: return "qwen3.7-plus"
-        case .glm: return "glm-4-flash"
-        case .kimi: return "moonshot-v1-128k"
+        case .glm: return "glm-5.3-flash"
+        case .kimi: return "kimi-k3"
         case .doubao: return "doubao-pro-32k"
         case .openai: return "gpt-5.6-luna"
         case .claude: return "claude-sonnet-5"
@@ -306,8 +308,8 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .deepseek: return LLMPresets.deepSeekPro
         case .qwen: return "qwen3.7-plus"
-        case .glm: return "glm-4-flash"
-        case .kimi: return "moonshot-v1-128k"
+        case .glm: return "glm-5.3-flash"
+        case .kimi: return "kimi-k3"
         case .doubao: return "doubao-pro-32k"
         case .openai: return "gpt-5.6-luna"
         case .claude: return "claude-sonnet-5"
@@ -339,8 +341,9 @@ public enum LLMProviderTemplate: String, CaseIterable, Sendable, Identifiable {
     }
 
     /// 设置页主推：国内常用 + 自定义；国外厂商仍可选。
+    /// kimi 已撤出主推(2026-09:kimi-k3 输出 ¥100/M,纪要场景性价比差),仍可在完整列表选。
     public static var featured: [LLMProviderTemplate] {
-        [.deepseek, .qwen, .kimi, .glm, .doubao, .openai, .custom]
+        [.deepseek, .qwen, .glm, .doubao, .openai, .custom]
     }
 }
 
