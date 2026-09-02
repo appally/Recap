@@ -35,7 +35,8 @@ public enum LLMProviderFactory {
                 apiKey: cred.token,
                 baseURL: cred.llmBase,
                 defaultModel: cred.llmModel,
-                summaryModel: cred.llmModel
+                summaryModel: cred.llmModel,
+                tokenRefresher: Self.hostedTokenRefresher
             )
         case .freeTrial:
             // 免费档:网关签发的阿里 token(服务端按次计量);无 ASR token,转写走端侧。
@@ -46,7 +47,8 @@ public enum LLMProviderFactory {
                 apiKey: cred.token,
                 baseURL: cred.llmBase,
                 defaultModel: cred.llmModel,
-                summaryModel: cred.llmModel
+                summaryModel: cred.llmModel,
+                tokenRefresher: Self.hostedTokenRefresher
             )
         case .byok:
             return try makeSelectedBYOK()
@@ -112,5 +114,12 @@ public enum LLMProviderFactory {
     /// `https://api.deepseek.com` → `api.deepseek.com`（已弃用：改用 OpenAICompatibleProvider(baseURL:)）。
     public static func host(from baseURL: String) -> String {
         OpenAICompatibleProvider.parseBaseURL(baseURL).host
+    }
+
+    /// 托管档 401（token 中途过期）重签钩子：强制走网关续签后返回新 token。
+    /// 长会管线（map-reduce 数十次串行调用）总时长可超 token 30min TTL。
+    private static let hostedTokenRefresher: @Sendable () async throws -> String = {
+        try await RecapCredentialProvider.shared.ensureFresh(force: true)
+        return try RecapCredentialProvider.shared.current(requiresASRModel: false).token
     }
 }

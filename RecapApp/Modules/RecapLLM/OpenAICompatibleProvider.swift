@@ -7,10 +7,27 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let defaultModel: String
     public let summaryModel: String
-    private let client: OpenAI
-    private let apiKey: String
     private let host: String
     private let basePath: String
+    /// 托管档 token 中途过期(401)的重签钩子：强制走网关续签并返回新 token。
+    /// BYOK 持久密钥为 nil——401 即 key 错误，重签无意义。
+    /// 长会 map-reduce/润色的串行调用总时长可超网关 token 30min TTL，不重签则
+    /// 中段起每块 401（不在可重试白名单）→ 整场纪要报废且已烧光全部 map 调用。
+    private let tokenRefresher: (@Sendable () async throws -> String)?
+    // client/token 运行期可被 handleExpiredToken 重建；provider 实例按管线独占使用，
+    // NSLock 仅为跨并发域兜底（@unchecked Sendable 的诚实化）。
+    private let stateLock = NSLock()
+    private var clientStorage: OpenAI
+    private var tokenStorage: String
+    private var client: OpenAI {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return clientStorage
+    }
+    /// 当前生效 token（extractViaToolHTTP 构建请求时读取，重签后自动跟随）。
+    private var currentToken: String {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return tokenStorage
+    }
     /// 首 token 超时预算（秒）：产出首个有效 delta 前若超过则放弃本次、按瞬态错误重试。
     /// MacPaw 流式 session 库内部自建 `.default` URLSession、不可注入超时（吃默认 60s），
     /// 故在 provider 内用「首 token race」兜底，避免一场短会卡满 60s 才知道失败。
@@ -26,16 +43,41 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
                 baseURL: String = "https://api.deepseek.com",
                 defaultModel: String = LLMPresets.deepSeekFlash,
                 summaryModel: String? = nil,
-                firstTokenTimeoutSeconds: Double = 20) {
+                firstTokenTimeoutSeconds: Double = 20,
+                tokenRefresher: (@Sendable () async throws -> String)? = nil) {
         self.id = id
         self.defaultModel = defaultModel
         self.summaryModel = summaryModel ?? defaultModel
-        self.apiKey = apiKey
         let parsed = Self.parseBaseURL(baseURL)
         self.host = parsed.host
         self.basePath = parsed.basePath
         self.firstTokenTimeoutSeconds = firstTokenTimeoutSeconds
-        self.client = OpenAI(configuration: .init(token: apiKey, host: parsed.host, basePath: parsed.basePath))
+        self.tokenRefresher = tokenRefresher
+        self.tokenStorage = apiKey
+        self.clientStorage = OpenAI(configuration: .init(token: apiKey, host: parsed.host, basePath: parsed.basePath))
+    }
+
+    /// 401（托管 token 过期）重签一次：成功重建 client/token 返回 true；无钩子或
+    /// 重签失败返回 false（沿用原错误走正常失败路径）。
+    private func handleExpiredToken() async -> Bool {
+        guard let tokenRefresher,
+              let newToken = try? await tokenRefresher(), !newToken.isEmpty else { return false }
+        swapToken(newToken)
+        RecapLog.provider.info("托管 token 中途过期已重签，续跑当前管线")
+        return true
+    }
+
+    /// NSLock 不允许在 async 上下文直接持有——换 token 的临界区收敛到同步方法。
+    private func swapToken(_ newToken: String) {
+        stateLock.lock()
+        tokenStorage = newToken
+        clientStorage = OpenAI(configuration: .init(token: newToken, host: host, basePath: basePath))
+        stateLock.unlock()
+    }
+
+    private static func isExpiredTokenError(_ error: Error) -> Bool {
+        guard case OpenAIError.statusError(_, let statusCode) = error else { return false }
+        return statusCode == 401
     }
 
     /// `https://a.com/compatible-mode/v1` -> ("a.com", "/compatible-mode/v1")；无路径默认 "/v1"。
@@ -119,7 +161,8 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         query: ChatQuery,
         model: String,
         attempt: Int,
-        continuation: AsyncThrowingStream<String, Error>.Continuation
+        continuation: AsyncThrowingStream<String, Error>.Continuation,
+        allowTokenRefresh: Bool = true
     ) async {
         // 首 token 预算随重试递增（20→40→60s）：thinking 模型正文首 token 可能 >20s（前段
         // 全是 reasoning），固定预算会在同一位置连续误杀 3 次、整体判死但网络其实正常。
@@ -137,6 +180,15 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         let isRetryable = (error is FirstTokenTimeoutError)
             || ((error as? URLError).map(Self.isTransientNetworkError) ?? false)
             || Self.isRetryableStatusError(error)
+
+        // 托管 token 中途过期(401)：先重签再续跑（不受 attempt 预算限制——重签即修复，
+        // allowTokenRefresh=false 保证每条流至多一次，防重签循环）。
+        if !outcome.produced, allowTokenRefresh,
+           Self.isExpiredTokenError(error), await handleExpiredToken() {
+            await runStream(query: query, model: model, attempt: attempt,
+                            continuation: continuation, allowTokenRefresh: false)
+            return
+        }
 
         if !outcome.produced && attempt < Self.maxRetries && isRetryable {
             let delayNs = UInt64(300_000_000) * UInt64(attempt + 1)   // 300ms / 600ms
@@ -342,12 +394,20 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Bearer \(currentToken)", forHTTPHeaderField: "Authorization")
         req.httpBody = data
         req.timeoutInterval = 90
 
         // P1-B: 瞬态重试（URLError 瞬态 + 5xx，与流式 runStream 同构），避免单次网络抖动丢全部待办。
-        let (respData, _) = try await performToolRequest(req)
+        // 请求经闭包构建：401 重签后用新 token 重建（长会待办批与 summary 流同样会撞 token TTL）。
+        let baseRequest = req
+        let (respData, _) = try await performToolRequest { [weak self] in
+            var r = baseRequest
+            if let token = self?.currentToken, !token.isEmpty {
+                r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            }
+            return r
+        }
 
         guard let root = try JSONSerialization.jsonObject(with: respData) as? [String: Any],
               let choices = root["choices"] as? [[String: Any]],
@@ -393,15 +453,21 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     /// 执行 tool-call HTTP 请求，瞬态错误重试（URLError `.timedOut`/`.networkConnectionLost`/
     /// `.notConnectedToInternet` + 429/5xx），与流式 ``runStream`` 同构：最多 `maxRetries+1` 次，
     /// 300ms/600ms 退避。其余 4xx 与非瞬态错误立即抛出；仅在 2xx 时返回 `(body, response)`。
-    private func performToolRequest(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    private func performToolRequest(_ makeRequest: @escaping @Sendable () -> URLRequest) async throws -> (Data, HTTPURLResponse) {
         var attempt = 0
+        var refreshed = false
         while true {
             do {
-                let (data, resp) = try await URLSession.shared.data(for: req)
+                let (data, resp) = try await URLSession.shared.data(for: makeRequest())
                 guard let http = resp as? HTTPURLResponse else { throw ExtractError.badResponse }
                 if (200..<300).contains(http.statusCode) { return (data, http) }
                 let msg = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
                 RecapLog.provider.error("extractViaTool HTTP \(http.statusCode): \(msg, privacy: .public)")
+                // 401 = 托管 token 过期：重签一次并用新 token 重建请求（与流式路径同策）。
+                if http.statusCode == 401, !refreshed, await handleExpiredToken() {
+                    refreshed = true
+                    continue
+                }
                 if attempt < Self.maxRetries && (http.statusCode == 429 || (500..<600).contains(http.statusCode)) {
                     try? await Task.sleep(nanoseconds: UInt64(300_000_000) * UInt64(attempt + 1))
                     if Task.isCancelled { throw CancellationError() }
