@@ -13,6 +13,13 @@ xcuserdata/
 # macOS system files
 .DS_Store
 
+# 个人资产（plan 057：不入公开仓库；文件保留在本地工作区）
+/*.png
+/*.jpg
+/SpeechDemoIOS.zip
+/SpeechDemoIOS/
+/production-docs/
+
 # Swift Package Manager & CocoaPods
 .swiftpm/
 Pods/

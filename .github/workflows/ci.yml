@@ -31,7 +31,9 @@ jobs:
     name: iOS build + unit tests
     runs-on: macos-latest
     env:
-      # 部署目标 iOS 26；runner 默认装最新 Xcode（含 iOS 26 SDK）。设备名可在此处覆盖。
+      # 部署目标 iOS 26；runner 默认装最新 Xcode（含 iOS 26 SDK）。
+      # ⚠️ 构建与测试都必须用「具体模拟器」（arm64-only）：generic destination 会连带编
+      # x86_64 切片，而 FluidAudio 的 NemoTextProcessing.xcframework 无该切片（plan 056 实测链接失败）。
       TEST_DESTINATION: platform=iOS Simulator,name=iPhone 16 Pro
     steps:
       - uses: actions/checkout@v4
@@ -42,17 +44,36 @@ jobs:
         run: |
           xcodebuild -version
           xcrun simctl list devices available | head -20
+      - name: Resolve simulator UDID (arm64)
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available | grep "iPhone" | head -1 | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/')
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Using simulator UDID: $UDID"
       - name: Build (simulator)
         run: |
           xcodebuild build \
             -project RecapApp/RecapApp.xcodeproj \
             -scheme RecapApp \
-            -destination "generic/platform=iOS Simulator" \
+            -destination id=${{ steps.sim.outputs.udid }} \
             CODE_SIGNING_ALLOWED=NO
       - name: Run unit tests (393 cases: Models/LLM/ASR/UI)
         run: |
           xcodebuild test \
             -project RecapApp/RecapApp.xcodeproj \
             -scheme RecapApp \
-            -destination "$TEST_DESTINATION" \
+            -destination id=${{ steps.sim.outputs.udid }} \
             CODE_SIGNING_ALLOWED=NO
+
+  secrets:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
