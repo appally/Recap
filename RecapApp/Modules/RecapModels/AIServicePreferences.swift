@@ -8,7 +8,7 @@ public enum AIServiceMode: String, CaseIterable, Sendable, Identifiable {
     case recapCloud
     /// 免费体验：端侧 ASR + 平台 Flash LLM 滴灌（按次限量，无需配置）。
     case freeTrial
-    /// 自备密钥（BYOK）：Key 仅存本机 Keychain（需解锁）。
+    /// 自备密钥（BYOK）：Key 仅存本机 Keychain（plan 058 起对所有用户免费开放）。
     case byok
 
     public var id: String { rawValue }

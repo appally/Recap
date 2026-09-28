@@ -116,12 +116,12 @@ struct MembershipSettingsView: View {
 
     private var byokOfferHero: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Text("自备密钥")
+            Text("支持 Recap")
                 .font(.recapHero)
                 .tracking(Tracking.hero)
                 .foregroundStyle(Color.recapInk)
 
-            Text("已有模型 API Key？一次性解锁全部端侧增强，永久可用。")
+            Text("自备密钥已对所有用户免费开放。这是一次对开源项目的支持——获得支持者徽章，帮 Recap 走得更远。")
                 .font(.recapBody)
                 .foregroundStyle(Color.recapTea)
                 .lineSpacing(Leading.tight)
@@ -149,10 +149,10 @@ struct MembershipSettingsView: View {
 
     private var byokPerks: [PlanPerk] {
         [
-            .init(symbol: "waveform.badge.checkmark", title: "端侧增强",   value: "本地 SenseVoice 转写"),
-            .init(symbol: "doc.text.magnifyingglass", title: "自带强模型", value: "用你的 API Key 生成纪要与待办"),
-            .init(symbol: "infinity",                title: "永久买断",   value: "一次付费，不再续费"),
-            .init(symbol: "lock.shield",             title: "密钥自主",   value: "Key 仅存本机，不上传"),
+            .init(symbol: "heart.fill",                title: "支持开源",   value: "帮助 Recap 持续开发与维护"),
+            .init(symbol: "seal",                      title: "支持者徽章", value: "账户与设置页永久展示"),
+            .init(symbol: "infinity",                  title: "一次买断",   value: "一次付费，不再续费"),
+            .init(symbol: "lock.shield",               title: "密钥自主",   value: "自备密钥始终免费，Key 仅存本机"),
         ]
     }
 
@@ -236,7 +236,7 @@ struct MembershipSettingsView: View {
                     Haptics.impact(.medium)
                     Task { await membership.purchase(byok) }
                 } label: {
-                    Text("解锁 · \(byok.displayPrice)")
+                    Text("支持项目 · \(byok.displayPrice)")
                         .font(.recapTitleS)
                         .foregroundStyle(.white)
                         .opacity(inFlight ? 0 : 1)
@@ -255,7 +255,7 @@ struct MembershipSettingsView: View {
                 .disabled(inFlight)
                 .animation(.recapValueSwap, value: inFlight)
             } else {
-                Text("自备密钥商品暂不可用，请稍后重试。")
+                Text("支持者商品暂不可用，请稍后重试。")
                     .font(.recapMeta)
                     .foregroundStyle(Color.recapTea.opacity(0.75))
                     .frame(maxWidth: .infinity)

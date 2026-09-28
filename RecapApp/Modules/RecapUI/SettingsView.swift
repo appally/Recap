@@ -149,12 +149,13 @@ public struct SettingsView: View {
         .accessibilityLabel("会员与额度看板")
     }
 
-    /// 会员卡标题（如 免费版 / Pro 年度 / BYOK 极客版）
+    /// 会员卡标题（如 免费版 / Pro 年度 / 支持者）
     private var membershipCardTitle: String {
         if membership.isPro {
             return membership.tierLabel
         } else if membership.byokUnlocked {
-            return "BYOK 极客版"
+            // plan 058：自备密钥已免费开放，买断商品改义为「支持者」。
+            return "支持者"
         } else {
             // 永久免费档（非限时试用）——勿写「免费试用」，审核会追问试用转订阅机制。
             return "免费版"
@@ -163,7 +164,8 @@ public struct SettingsView: View {
 
     /// 用量进度比例 (0.0 ~ 1.0)
     private var quotaProgress: CGFloat {
-        if membership.isPro || membership.byokUnlocked {
+        // plan 058：按「当前模式」而非「历史购买」判定——byok 模式额度由用户密钥决定。
+        if membership.isPro || AIServiceMode.current == .byok {
             return 1.0
         }
         let limit = CGFloat(max(1, FreeTrialQuota.monthlyLimit))
@@ -175,17 +177,17 @@ public struct SettingsView: View {
     private var quotaDetailText: String {
         if membership.isPro {
             return "每月 30 小时"
-        } else if membership.byokUnlocked {
+        } else if AIServiceMode.current == .byok {
             return "自备 Key·额度由你的密钥决定"
         } else {
             return "\(FreeTrialQuota.remainingThisMonth) 次剩余 / 每月 \(FreeTrialQuota.monthlyLimit) 次"
         }
     }
 
-    /// 右侧辅助状态（例如：已解锁）。续费日期改由详情页与系统订阅页承载，卡片不再展示。
+    /// 右侧辅助状态。续费日期改由详情页与系统订阅页承载，卡片不再展示。
     private var quotaBadgeText: String {
         if membership.byokUnlocked {
-            return "已解锁"
+            return "支持者"
         } else {
             return ""
         }

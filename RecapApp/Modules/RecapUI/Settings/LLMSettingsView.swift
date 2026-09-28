@@ -23,24 +23,15 @@ struct LLMSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xxl) {
-                if membership.byokUnlocked {
-                    // BYOK 已解锁：暴露来源选择与完整技术配置（厂商 / Key / 模型 / 搜索）。
-                    sourcePicker
-                    if mode == .recapCloud {
-                        cloudPanel
-                    } else if mode == .byok {
-                        byokPanel
-                        webSearchPanel
-                    } else {
-                        freeTrialPanel
-                    }
+                // plan 058：BYOK 对所有用户免费开放——来源选择常驻，不再按解锁门控。
+                sourcePicker
+                if mode == .recapCloud {
+                    cloudPanel
+                } else if mode == .byok {
+                    byokPanel
+                    webSearchPanel
                 } else {
-                    // 非 BYOK：Recap 托管，不暴露 Key/模型/搜索等技术配置，只看状态与升级/管理。
-                    if membership.isPro {
-                        cloudPanel
-                    } else {
-                        freeTrialPanel
-                    }
+                    freeTrialPanel
                 }
             }
             .padding(.horizontal, Spacing.xl)
@@ -87,15 +78,9 @@ struct LLMSettingsView: View {
                     icon: "key",
                     title: "自备密钥",
                     subtitle: "用你自己的厂商 Key，费用自理",
-                    badge: membership.byokUnlocked ? nil : "需解锁",
-                    badgeTint: .recapOchre,
                     selected: mode == .byok
                 ) {
-                    if membership.byokUnlocked {
-                        selectMode(.byok)
-                    } else {
-                        showMembership = true
-                    }
+                    selectMode(.byok)
                 }
             }
 
@@ -114,7 +99,7 @@ struct LLMSettingsView: View {
         case .byok:
             return "当前使用你配置的厂商密钥。再次点选可回退到免费档。"
         case .freeTrial:
-            return "当前为免费档：端侧转写 + 平台 Flash 纪要，每月少量额度。开通 Pro 或解锁自备密钥可获得更强能力。"
+            return "当前为免费档：端侧转写 + 平台 Flash 纪要，每月少量额度。可切「自备密钥」用自己的 Key（免费），或升级 Pro 获得云端高保真。"
         }
     }
 
@@ -232,7 +217,7 @@ struct LLMSettingsView: View {
                 SettingsNavRow(
                     icon: "creditcard",
                     iconTint: .recapInk,
-                    title: "升级 Pro 或解锁自备密钥",
+                    title: "升级 Pro 会员",
                     value: account.tier.title
                 )
             }
@@ -356,15 +341,9 @@ struct LLMSettingsView: View {
 
     private func reload() {
         mode = .current
-        if !membership.byokUnlocked {
-            // 非 BYOK：模式锁定为权益对应的 Recap 服务（Pro->云端 / 否则->免费），不暴露来源选择。
-            let target: AIServiceMode = membership.isPro ? .recapCloud : .freeTrial
-            if mode != target {
-                mode = target
-                AIServiceMode.current = target
-            }
-        } else if mode == .recapCloud && !membership.isPro {
-            // BYOK 已解锁但停在 recapCloud 而无 Pro：回落免费档，避免锁态来源卡显示为"已选"。
+        if mode == .recapCloud && !membership.isPro {
+            // 停在 recapCloud 而无 Pro：回落免费档，避免来源卡显示为"已选"。
+            // （plan 058 后自备密钥已无门禁，仅云端仍按 Pro 验证。）
             mode = .freeTrial
             AIServiceMode.current = .freeTrial
         }

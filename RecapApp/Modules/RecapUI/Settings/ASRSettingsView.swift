@@ -37,15 +37,10 @@ struct ASRSettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.xxl) {
                 SettingsInlineNotice(message: $status)
-                if membership.byokUnlocked {
-                    // BYOK：暴露引擎选择器与厂商 Key。
-                    engineSection
-                    if needsFunCredentials {
-                        funSection
-                    }
-                } else {
-                    // 非 BYOK：Recap 按权益自动选引擎，不暴露选择器/Key。
-                    engineStatusCard
+                // plan 058：引擎选择器与厂商 Key 对所有用户开放，不再按解锁门控。
+                engineSection
+                if needsFunCredentials {
+                    funSection
                 }
                 voiceprintSection
                 // 052 双转正 Phase 1：分离引擎与端侧重转出 DEBUG，Release 可 opt-in（默认关）。
@@ -65,11 +60,6 @@ struct ASRSettingsView: View {
             preference = .current
             serviceMode = .current
             hasFun = AsrEngineResolver.hasFunCredentials
-            // 非 BYOK：引擎由 Recap 按权益自动选择，锁定 .auto，避免历史偏好残留。
-            if !membership.byokUnlocked, preference != .auto {
-                preference = .auto
-                ASRPreference.current = .auto
-            }
             refreshModelStorage()
         }
         .onDisappear {
@@ -140,40 +130,6 @@ struct ASRSettingsView: View {
     // MARK: - 非 BYOK 引擎状态（Recap 托管，不暴露选择器）
 
     /// 非 BYOK 用户：引擎由 Recap 按权益自动选择（Pro 云端优先 / 免费端侧优先）。
-    private var engineStatusCard: some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            HStack(spacing: Spacing.md) {
-                Image(systemName: "waveform")
-                    .font(.system(size: 20, weight: .regular))
-                    .foregroundStyle(Color.recapInk)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(membership.isPro ? "云端高保真转写" : "端侧转写为主")
-                        .font(.recapTitleS)
-                        .foregroundStyle(Color.recapInk)
-                    Text(membership.isPro
-                         ? "云端优先，离线时自动切换本机转写。"
-                         : "本机转写优先，不可用时自动使用云端额度。")
-                        .font(.recapMeta)
-                        .foregroundStyle(Color.recapTea)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            NavigationLink {
-                MembershipSettingsView()
-            } label: {
-                SettingsNavRow(
-                    icon: "creditcard",
-                    iconTint: .recapInk,
-                    title: membership.isPro ? "管理会员与订阅" : "升级 Pro 享云端高保真",
-                    value: membership.tierLabel
-                )
-            }
-            .buttonStyle(SettingsPressStyle())
-        }
-        .padding(.vertical, Spacing.xs)
-    }
-
     private var needsFunCredentials: Bool {
         // 会员云端由网关代付时可不填；BYOK 或显式选 Fun 时展示。
         serviceMode == .byok
