@@ -41,38 +41,45 @@ struct RecapAppApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MeetingListView()
-                .environment(membership)
-                .task {
-                    // 首帧渲染后启动错峰预热（fire-and-forget，后台 utility）：ASR 资源/SpeakerKit
-                    // 下载 → 间隔 → FluidDiarizer 编译。详见 `Warmup.startPostFrame`。
-                    Warmup.startPostFrame()
-                    await AppleCredentialChecker.reconcileIfNeeded()
-                    await membership.start()
-                    // Pro 会员(recapCloud):tier 同步后启动后台滚动续签阿里临时凭证
-                    // (内部自判 recapCloud+Pro,否则 no-op);LLM/ASR 的 makeCurrent/prepare 读其缓存。
-                    RecapCredentialProvider.shared.startBackgroundRefresh()
+            // plan 064：人物升为一等入口（TabView）。FAB/搜索/设置仍属「记录」tab——
+            // MeetingListView 自带 NavigationStack + 状态，包 TabView 无需其内部改动。
+            TabView {
+                MeetingListView()
+                    .tabItem { Label("记录", systemImage: "waveform.circle.fill") }
+                PeopleView()
+                    .tabItem { Label("人物", systemImage: "person.2.fill") }
+            }
+            .environment(membership)
+            .task {
+                // 首帧渲染后启动错峰预热（fire-and-forget，后台 utility）：ASR 资源/SpeakerKit
+                // 下载 → 间隔 → FluidDiarizer 编译。详见 `Warmup.startPostFrame`。
+                Warmup.startPostFrame()
+                await AppleCredentialChecker.reconcileIfNeeded()
+                await membership.start()
+                // Pro 会员(recapCloud):tier 同步后启动后台滚动续签阿里临时凭证
+                // (内部自判 recapCloud+Pro,否则 no-op);LLM/ASR 的 makeCurrent/prepare 读其缓存。
+                RecapCredentialProvider.shared.startBackgroundRefresh()
+            }
+            .onChange(of: scenePhase) { _, phase in
+                // 回前台即对账权益：App 常驻多日不杀时，订阅过期/退款不会即时回收
+                // （云端有网关验签兜底，但本地 UI 会一直显示过期的 Pro）。启动/购买/恢复/
+                // Transaction.updates 之外的这块盲区由 active 对账补上。
+                guard phase == .active else { return }
+                Task { await membership.refreshEntitlements() }
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: UIApplication.didReceiveMemoryWarningNotification
+            )) { _ in
+                // P0-①：系统内存告警 → 卸载 diarizer 模型（pyannote+WeSpeaker，20-40MB wired），
+                // 降低低内存机型(A14 iPad)被 jetsam 强杀概率。下次分离自动 reload（缓存命中 ~100ms）。
+                Task {
+                    await DiarizationService.activeDiarizer.unload()
+                    // CAM++ embedder 同批卸载（CoreML 常驻；diarizer 三件套外的漏网项）
+                    await CampPlusEmbedderProvider.shared.unload()
                 }
-                .onChange(of: scenePhase) { _, phase in
-                    // 回前台即对账权益：App 常驻多日不杀时，订阅过期/退款不会即时回收
-                    // （云端有网关验签兜底，但本地 UI 会一直显示过期的 Pro）。启动/购买/恢复/
-                    // Transaction.updates 之外的这块盲区由 active 对账补上。
-                    guard phase == .active else { return }
-                    Task { await membership.refreshEntitlements() }
-                }
-                .onReceive(NotificationCenter.default.publisher(
-                    for: UIApplication.didReceiveMemoryWarningNotification
-                )) { _ in
-                    // P0-①：系统内存告警 → 卸载 diarizer 模型（pyannote+WeSpeaker，20-40MB wired），
-                    // 降低低内存机型(A14 iPad)被 jetsam 强杀概率。下次分离自动 reload（缓存命中 ~100ms）。
-                    Task {
-                        await DiarizationService.activeDiarizer.unload()
-                        // CAM++ embedder 同批卸载（CoreML 常驻；diarizer 三件套外的漏网项）
-                        await CampPlusEmbedderProvider.shared.unload()
-                    }
-                    // 顺手丢弃 mermaid 预热 WebView（仅失热缓存，下次按需重建）。
-                    MermaidWebViewPool.shared.evictOnMemoryPressure()
-                }
+                // 顺手丢弃 mermaid 预热 WebView（仅失热缓存，下次按需重建）。
+                MermaidWebViewPool.shared.evictOnMemoryPressure()
+            }
         }
         .modelContainer(modelContainer)
     }

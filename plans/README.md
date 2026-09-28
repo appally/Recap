@@ -233,6 +233,21 @@ Follow-up（本批不实现）：**024** vocabulary_id 持久热词；**025** �
 拒（本批不做，防假精确）：按任务路由到不同端点；能力自动探测（thinking/tool_choice 自动试验）；OpenAI Responses API；自定义**流式** ASR（LIVE 保持内置引擎，WS 方言碎片化交社区/P2）；skill 在线目录 / URL 安装 / 签名（P2）；MinutesPipeline prompt 技能化（P3 另案，prompt caching 契约风险）；onboarding 双路径重排与模型面板（Phase 2，059 后立项）；App 内常驻 MCP server（iOS 后台限制——改读开放工作区的独立工具，诊断 F4）。
 红线：**057 公开 repo 前，056 的中转 Key 轮换必须完成**（用户在 token.toai.pro 操作，git 历史/已售二进制旧 Key 作废）；061 Release 默认值等 Wave C POC 数据再拍板（同 055 纪律）。
 
+### Batch S — 记忆成形（2026-09-28 立项，09 报告 Step 2）
+
+背景：《定位升级与产品重构建议-2026-09》Step 2——Batch P 让魔法在**单场内**可见（053-055），本批让资产**跨场**可见：人物一等入口、人物档案、承诺收件箱、通知回访钩子。与 Batch R P1（059-061）按合并单轨交替：本批先行（W4-6），开放 P1 随后（W7-9）。勘察结论已入各 plan Current state（无 TabView / SpeakerDetailSheet 366 行可迁移 / ActionItem 无方向字段用 owner 匹配 / 通知层全工程零使用）。
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|------|-------|----------|--------|------------|--------|
+| 064  | 人物 Tab 与人物目录——SpeakerDirectory 单遍聚合 + 根视图 Tab 化 | P0 | M | — | DONE（2026-09-29：代码+构建+4 单测+全量回归+启动冒烟全绿；画廊状态为命名真相/RecapUI 落点两处偏差已记录；200 场性能抽查与真机目检待用户） |
+| 065  | 人物档案页——轨迹/双向承诺/常提术语/问 Recap（sheet 瘦身为快速纠错） | P0 | M–L | **064 硬** | TODO |
+| 066  | 承诺收件箱 + 首页承诺卡（openOnly 口径 + 句级回跳） | P0 | M | **064 硬**；065 软 | TODO |
+| 067  | 通知基建 + 会前 30 分钟提醒 + 承诺到期提醒（日历读 opt-in） | P1 | L | **066 硬** | TODO |
+
+执行：064 → 065 → 066 → 067（064 Wave A 聚合服务与 066 Wave A 数据面同源，串行做避免聚合口径分叉）。
+拒（本批不做，防缠车）：三 Tab 化/「我的」搬迁（09 报告 §4.1 完整首页改版另案）；ActionItem 加方向字段（owner 匹配出双栏，模型不动）；跨会议自由 Ask 基建（「问 Recap」v1 落最近一场 meeting-scoped 链路）；MeetingNoteView 拆分（§4.5 过路费——本批新页面为主不阻塞，064-067 落地后与 §4.3 people-first 化合并另案）；常提术语 embedding/聚类（NLTokenizer+停用词够用）；BGTaskScheduler 后台刷新（前台刷新+文案明示）；evidenceQuote/纪要原文进通知（锁屏隐私红线，同 054）。
+验收（09 报告）：北极星不变（声纹命名率 + 第 7 日二次会议留存，埋点另案）；过程验收=模拟器 seed 场景手测清单（各 plan Verification）。
+
 历史 Batch B 波次（已完成，仅存档）：
 
 1. Wave 1：`004` ∥ `010` ∥ `006` ∥ `009`  
@@ -273,6 +288,8 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (reason) | REJECTED (rational
 - **056 网关先行**：/v1/relay 上线（旧客户端无感，新字段可选）后客户端才切流；灰度窗口内客户端对缺失 relay_token 报「网关版本过旧」。
 - **058 → 059 / 061（硬）**：多端点与自定义 ASR 都建在门禁废除后的设置语义上。
 - **059 ∥ 060 ∥ 061**：分别动 LLMSelection / Skills / AsrEngine 三条独立面，可并行；三者都改设置页，并行时先合 058 的设置页重排再各自开分支。
+- **064 → 065 / 066（硬）**：SpeakerDirectory 聚合与 Tab 路由是档案页/收件箱的地基；聚合口径分叉是最大风险，064 先定型。
+- **067 权限纪律**：通知权限在首次承诺确认时请求（不打扰首启）；日历读 opt-in 默认关（高敏权限）；dispatched 承诺不发本地通知（EKAlarm 已有，防双提醒）。
 
 ## Findings considered and rejected (Batch B)
 
