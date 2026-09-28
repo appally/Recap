@@ -221,7 +221,7 @@ Follow-up（本批不实现）：**024** vocabulary_id 持久热词；**025** �
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 056  | 托管 LLM 中转 Key 出二进制——网关 /v1/relay 代理化（开源红线） | P0 | S–M | —（网关先部署后客户端） | DONE（2026-09-28：网关 51 测试绿 + **已部署生产 v c4a4cb46** + 线上 E2E 全通（token 签发/401/model 改写 glm-5.2/SSE 透传）；客户端 BUILD SUCCEEDED + LLM 245/LLM + Models 101/101；Key 从未入 git 历史，轮换按观察窗属运营项） |
-| 057  | 开源 repo 卫生包——AGPL License / README / CI / 历史清洗 | P0 | S | **056 硬**（Key 轮换完成） | IN PROGRESS（2026-09-28：Wave A–C DONE——LICENSE/NOTICE（6 依赖核实）/README/CONTRIBUTING/CoC/issue 模板/docs·security-model+schema/CI 修 x86_64 坑+新增 gitleaks job；⚠️ 随包 CoreML 模型卡 license 待逐一确认；Wave D 资产清单待用户拍板后公开推送；Key 未入史 → 无需 filter-repo） |
+| 057  | 开源 repo 卫生包——AGPL License / README / CI / 历史清洗 | P0 | S | **056 硬**（Key 轮换完成） | DONE（2026-09-28：Wave A–D 全 DONE——License/NOTICE（依赖+CoreML 模型逐一核实，speakerkit-coreml CC BY 4.0 署名）/README/CONTRIBUTING/CoC/模板/ROADMAP/RELEASES/docs；CI 修 x86_64 坑+gitleaks；个人资产与 production-docs 出库；公开推送 v0.9.0-oss） |
 | 058  | BYOK 门禁废除——模型自由不再收费墙（byok.unlock 改义支持者徽章） | P0 | S | — | DONE（2026-09-28：三处设置拆锁 + 会员卡/商品改义支持者 + 文案清零 + BUILD SUCCEEDED + 测试 346/346 绿；模拟器 UI 手测留用户 5 分钟抽查；App Store 文案待用户） |
 | 059  | Provider Registry v1——多自定义端点 + 连接测试 + 配方导入导出 | P1 | M | **058 硬** | TODO |
 | 060  | Skills 文件化——内置资源化 + 用户目录 + 全功能编辑器 + 导入导出 | P1 | M | 058 软 | TODO |

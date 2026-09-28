@@ -71,5 +71,5 @@
 - **Wave A DONE**：`LICENSE`（AGPL-3.0 gnu.org 官方全文 661 行）；`NOTICE.md`（SPM 六依赖逐一核实：MacPaw OpenAI / argmax-oss-swift = MIT；FluidAudio / swift-openapi-runtime / swift-http-types / swift-argument-parser = Apache-2.0；与 AGPL 分发兼容）。**唯一未结项**：随包 CoreML 模型文件（`App/speakerkit-coreml/` 等）的 HF 模型卡原文逐一再分发确认——不过则改运行时下载（NOTICE 已标注 ⚠️）。
 - **Wave B DONE**：`README.md`（英文摘要 + 中文主体：能力 / 自建路径（含 arm64 destination 坑）/ 架构 / FAQ / 合规提醒）；`CONTRIBUTING.md`（三种贡献重量级：技能配方数据文件 → issue+数据 → 代码；xcodegen/fix_scheme 工程约定）；`CODE_OF_CONDUCT.md`；`.github/ISSUE_TEMPLATE/{bug,feature}.md`（bug 模板含供应商/引擎环境字段）。`docs/security-model.md`、`docs/schema.md` 早前已写。
 - **Wave C DONE**：既有 `ci.yml`（8 月建的 cloud+ios 两 job）修复 ios build 的 `generic` destination x86_64 链接坑（改动态解析具体模拟器 UDID）；**新增 `secrets` job**（gitleaks 全历史扫描）。
-- **Wave D 待拍板（见下方清单）**：好消息——旧中转 Key 从未入 git 历史（`git log -S` 零命中），filter-repo 大概率不需要；已核实图标等资产**在** git 跟踪中（`git ls-files` 命中 ICON*.png 等），公开前需 `git rm --cached`。
-- **状态：IN PROGRESS**（Wave A–C 全部落地；Wave D 等用户拍板资产清单后执行公开推送）。
+- **Wave D DONE（2026-09-28，用户拍板后执行）**：随包 CoreML 模型 license 逐一核实（`argmaxinc/speakerkit-coreml` = **CC BY 4.0** 署名再分发；wespeaker/CAM++ = Apache-2.0）→ NOTICE 已署名，无阻塞项；根目录 20 图片 + SpeechDemoIOS（zip+目录）+ `production-docs/`（App Store 运营/审核沟通）`git rm --cached` 出库（本地保留）+ .gitignore 兜底；根目录战略/调研 md 公开；历史无需 filter-repo（旧 Key 从未入史 + CI gitleaks 全史扫描兜底）；分四笔提交（Batch P / 056 / 058 / 057）推送，repo 转 public，tag `v0.9.0-oss`。
+- **状态：DONE**。
