@@ -57,7 +57,7 @@ jobs:
             -scheme RecapApp \
             -destination id=${{ steps.sim.outputs.udid }} \
             CODE_SIGNING_ALLOWED=NO
-      - name: Run unit tests (393 cases: Models/LLM/ASR/UI)
+      - name: "Run unit tests (393 cases: Models/LLM/ASR/UI)"
         run: |
           xcodebuild test \
             -project RecapApp/RecapApp.xcodeproj \
