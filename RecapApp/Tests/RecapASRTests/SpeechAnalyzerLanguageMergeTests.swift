@@ -168,4 +168,99 @@ final class SpeechAnalyzerLanguageMergeTests: XCTestCase {
             en: (text: "the greek story", confidence: nil),
             sticky: .en, bias: .zh), "the greek story")
     }
+
+    // MARK: - zh 偏置 solo-en 抑制（中文会议开局英文闪现的根修）
+
+    func testZhBiasSuppressesSoloEnglishBeforeAnyFinal() {
+        // 开局竞速：en 模型幻觉先于 zh 首稿到达（sticky=nil）→ 不上屏
+        XCTAssertNil(SpeechAnalyzerEngine.preferredPartial(
+            zh: nil, en: (text: "the meeting now", confidence: nil),
+            sticky: nil, bias: .zh))
+    }
+
+    func testZhBiasSuppressesSoloEnglishAfterChineseEstablished() {
+        // 中文已实证（sticky=.zh）、zh 发空 volatile 清草稿的间隙 → en 残留不上屏
+        XCTAssertNil(SpeechAnalyzerEngine.preferredPartial(
+            zh: nil, en: (text: "hallucinated latin", confidence: nil),
+            sticky: .zh, bias: .zh))
+    }
+
+    func testZhBiasAllowsSoloEnglishWhenEnglishEstablished() {
+        // 英文语境已实证（近期 en 定稿胜出）→ solo-en 照常流式（英文夹句不冻结）
+        XCTAssertEqual(SpeechAnalyzerEngine.preferredPartial(
+            zh: nil, en: (text: "let me continue", confidence: nil),
+            sticky: .en, bias: .zh), "let me continue")
+    }
+
+    func testEnBiasUnaffectedBySoloEnglishSuppression() {
+        // 英文会场（bias=.en）开局 solo-en 正常上屏——闸门只作用于 zh 偏置场
+        XCTAssertEqual(SpeechAnalyzerEngine.preferredPartial(
+            zh: nil, en: (text: "hello everyone", confidence: nil),
+            sticky: nil, bias: .en), "hello everyone")
+    }
+
+    func testZhBiasSoloChineseAlwaysShows() {
+        // solo-zh（en 模型尚无候选）不受闸门影响——中文首稿照常上屏
+        XCTAssertEqual(SpeechAnalyzerEngine.preferredPartial(
+            zh: (text: "我们开始今天的会议", confidence: nil), en: nil,
+            sticky: nil, bias: .zh), "我们开始今天的会议")
+    }
+
+    func testZhBiasBothSidesEnglishPhraseStillStreams() {
+        // 双侧都在（说英文夹句时 zh 模型同步出无 CJK 音素乱码）→ 既有启发式照常给英文草稿
+        XCTAssertEqual(SpeechAnalyzerEngine.preferredPartial(
+            zh: (text: "th greek stow of", confidence: nil),
+            en: (text: "the greek story", confidence: nil),
+            sticky: nil, bias: .zh), "the greek story")
+    }
+
+    // MARK: - zh 偏置 solo-en 定稿佐证闸门（veto 语义；2026-09-09 真机 dialect-probe 标定）
+
+    func testEnFinalLowConfidenceVetoedRegardlessOfPhaseOrLength() {
+        // 真机实测（普通话会场，zh avg 0.89+）：en 幻觉定稿 avg=0.069（9 runs，先于 zh
+        // 首稿到达）/ 0.212（7 runs）。置信度在场即一票否决——不看长度（幻觉能凑 5+ 词）、
+        // 不看 bootstrap（开局首个 final 正是幻觉的高发位）。
+        XCTAssertFalse(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "the meeting now", confidence: 0.069, chineseEstablished: false),
+            "bootstrap + 低置信（开局幻觉先于 zh 首稿）必须丢弃")
+        XCTAssertFalse(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "the quick brown fox jumps over the lazy", confidence: 0.212,
+            chineseEstablished: true),
+            "已实证 + 低置信：长度不翻案（7+ 词的幻觉照样丢）")
+        XCTAssertFalse(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "okay", confidence: 0.3, chineseEstablished: true))
+    }
+
+    func testEnFinalHighConfidenceAllowedInAnyPhase() {
+        // 真说英文时 en 模型解母语，置信度高（典型 0.8+）：≥ 阈值即放行（单词 "OK" 也放行）。
+        // bootstrap 放行 = 英文会议（免费档双模块是唯一英文来源）不被误拦。
+        XCTAssertTrue(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "ok", confidence: 0.9, chineseEstablished: true))
+        XCTAssertTrue(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "let's get started", confidence: 0.82, chineseEstablished: false))
+        XCTAssertEqual(SpeechAnalyzerEngine.enFinalHighConfidence, 0.75)
+    }
+
+    func testEnFinalNilConfidenceFallsBackToLengthHeuristic() {
+        // attributeOptions 未生效（runs=0、confidence nil 的设备）：bootstrap 放行
+        // （无判据时英文会议优先），已实证须成句（≥5 个多字符词）。
+        XCTAssertTrue(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "the meeting now", confidence: nil, chineseEstablished: false))
+        XCTAssertFalse(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "the meeting now", confidence: nil, chineseEstablished: true))
+        XCTAssertFalse(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "the greek story now", confidence: nil, chineseEstablished: true))
+        XCTAssertTrue(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "let me take a look at the deployment pipeline", confidence: nil,
+            chineseEstablished: true))
+        XCTAssertTrue(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "the greek story of athena", confidence: nil, chineseEstablished: true),
+            "恰好 5 个多字符词——达到长度门槛即放行（无判据时真英文优先于过度拦截）")
+    }
+
+    func testEnFinalSingleCharTokensNotCounted() {
+        // 单字符 token 不计词数：凑碎片不因长度放行
+        XCTAssertFalse(SpeechAnalyzerEngine.enFinalCorroborated(
+            text: "a I a I a I a", confidence: nil, chineseEstablished: true))
+    }
 }

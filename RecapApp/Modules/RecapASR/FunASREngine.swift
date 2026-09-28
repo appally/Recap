@@ -87,11 +87,22 @@ public actor FunASREngine: AsrEngine {
         language == .en ? ASRPresets.funRealtimeEnModel : ASRPresets.funRealtimeModel
     }
 
-    /// run-task 语种声明：en·批处理锁 `["en"]`（全篇证据 + 终稿稳定优先）；en·LIVE 与
-    /// 全部 zh 实例不声明（nil = 服务端逐句自动检测）。官方：fun-asr 系列多值仅首个
-    /// 生效，语义=声明语种（「不设置时模型自动识别」）——多值候选集不可用。
-    static func languageHints(language: MeetingLanguage, liveMode: Bool) -> [String]? {
-        language == .en && !liveMode ? ["en"] : nil
+    /// run-task 语种声明：
+    /// - en·批处理锁 `["en"]`（全篇证据 + 终稿稳定优先）；en·LIVE 不锁（热切换依据只有
+    ///   文本分类，方言乱稿误判时服务端逐句自动检测仍是救回通道）。
+    /// - zh·LIVE·fun-asr 家族：`ASRFeatureFlags.funZHLiveLanguageLock` 开（默认）时锁
+    ///   `["zh"]`——自动检测在中文/方言音频上偶发漂移出英文（plan 023 记录的误识通道）。
+    /// - 其余（zh·批处理 / paraformer 中文模型 / mixed）不声明（nil = 自动检测/无需语种）。
+    /// 官方：fun-asr 系列多值仅首个生效，语义=声明语种（「不设置时模型自动识别」）。
+    static func languageHints(language: MeetingLanguage,
+                              liveMode: Bool,
+                              model: String = ASRPresets.funRealtimeModel) -> [String]? {
+        if language == .en { return liveMode ? nil : ["en"] }
+        if liveMode, language == .zh, model.contains("fun-asr"),
+           ASRFeatureFlags.funZHLiveLanguageLock {
+            return ["zh"]
+        }
+        return nil
     }
 
     /// 英文能力 = 英文模型实例（fun-asr-realtime 多语言自动检测，en 实例直出英文）。
@@ -99,12 +110,18 @@ public actor FunASREngine: AsrEngine {
     nonisolated public var englishCapable: Bool { language == .en }
 
     /// 当前会话模型为 fun-asr 家族（prepare 后置位）。zh 实例 + fun 模型 = 多语言
-    /// 自动检测天然覆盖英文——热切换 en 实例只是同模型重启（白断流数秒），应跳过。
+    /// 自动检测天然覆盖英文——但 zh LIVE 锁语种（``autoCoversEnglish`` 见下）后此
+    /// 覆盖被有意关闭，热切换 en 实例重新有意义（不再是同模型白重启）。
     private let funModelFlag = EngineFlag()
 
     /// LIVE 引擎已可自动产出英文（BYOK fun-asr zh 实例）：英文热切换无增益，跳过切换、
     /// 仅保留检测结论给会后复核（终稿仍可走 en 批量精转收口）。
-    nonisolated public var autoCoversEnglish: Bool { language != .en && funModelFlag.current }
+    /// zh LIVE 锁语种（funZHLiveLanguageLock 开）时不宣称覆盖——锁 zh 后英文段走 zh
+    /// 声学解码，会中英文检测须放行热切换 funASREn（en·LIVE 不锁，自动检测可出英文）。
+    nonisolated public var autoCoversEnglish: Bool {
+        if language != .en, ASRFeatureFlags.funZHLiveLanguageLock { return false }
+        return language != .en && funModelFlag.current
+    }
 
     /// plan 050 Wave A：云端 Fun-ASR 也消费热词——fun-asr-realtime 经 run-task 的
     /// `input.context`（≤400 字符）注入；paraformer（托管档）无此能力，存下但不起作用。
@@ -251,13 +268,12 @@ public actor FunASREngine: AsrEngine {
                     ? FunASRProtocol.contextPayload(from: contextualHints)
                     : nil,
                 vocabularyId: vocabularyId,
-                // 语种声明（P0-1 去硬锁）：仅 en·批处理实例锁 ["en"]（会后重转有全篇文本
-                // 证据，终稿稳定性优先）。en·LIVE 实例不锁——热切换依据只有文本分类，
-                // 方言罗马化乱稿误判时，服务端逐句自动检测仍能把中文音频解码回中文
-                // （回头路 P0-2 / 会后复核 P0-3 的救回通道）；终稿由 .language 精转
-                // （批处理·锁 en）收口。zh 实例维持不声明（fun-asr 多语言自动检测
-                // 覆盖混说；paraformer 中文模型无需语种）。
-                languageHints: Self.languageHints(language: language, liveMode: liveMode),
+                // 语种声明：en·批处理锁 ["en"]（会后重转有全篇文本证据，终稿稳定性优先）；
+                // en·LIVE 不锁（热切换误判救回通道）；zh·LIVE·fun-asr 家族按
+                // funZHLiveLanguageLock 锁 ["zh"]（中文/方言音频不再漂移出英文——
+                // plan 023 记录的误识通道；英文会议靠热切换 funASREn + 会后 en 精转兜底）；
+                // paraformer（中文模型）与 zh 批处理不声明。
+                languageHints: Self.languageHints(language: language, liveMode: liveMode, model: model),
                 semanticPunctuation: Self.modelSupportsSemanticPunctuation(model)
             ),
             box: box
@@ -978,9 +994,9 @@ final class WSTaskBox: @unchecked Sendable {
 enum FunASRProtocol {
     /// - Parameters:
     ///   - languageHints: `parameters.language_hints`（官方：「待识别音频语种，不设置时
-    ///     模型自动识别」；fun-asr 系列多值仅首个生效）。en·批处理实例传 `["en"]` 锁语种
-    ///     消除流式摇摆；en·LIVE（热切换）实例不传——误判救回通道，见
-    ///     `FunASREngine.languageHints(language:liveMode:)`。
+    ///     模型自动识别」；fun-asr 系列多值仅首个生效）。en·批处理锁 `["en"]`；en·LIVE
+    ///     不锁（误判救回通道）；zh·LIVE·fun-asr 家族按 flag 锁 `["zh"]`——见
+    ///     `FunASREngine.languageHints(language:liveMode:model:)`。
     ///   - semanticPunctuation: `parameters.semantic_punctuation_enabled`（官方：「语义断句
     ///     准确性更高，适合会议转写场景」，默认 false=VAD 静音断句——把长句切碎）。
     ///     仅模型支持时置 true（见 `FunASREngine.modelSupportsSemanticPunctuation`）。

@@ -156,6 +156,34 @@ final class MeetingSessionLifecycleTests: XCTestCase {
         XCTAssertFalse(PipelineStage.idle.isProcessingStage)
         XCTAssertFalse(PipelineStage.done.isProcessingStage)
     }
+
+    // MARK: - segments(from:) 持久化出口排序（到达序 → 时间序）
+
+    /// LIVE 检查点持久化的到达序（拆句残留的晚到早段在尾）必须经 blocks→segments
+    /// 出口排序——下游按有序消费（回听高亮边界语义），乱序入库会在恢复路径错块。
+    func testSegmentsFromBlocksSortsByStartSeconds() {
+        let placeholder = Speaker(id: "asr-live", name: "转写", colorIndex: 0)
+        func block(_ id: String, start: Double, text: String) -> TranscriptBlock {
+            TranscriptBlock(id: id, speaker: placeholder,
+                            timestamp: "", raw: text, polished: text,
+                            isFinal: true, startSeconds: start, endSeconds: start + 2)
+        }
+        // 模拟到达序：晚到的早段（12s 段先到、0s 段最后到）+ 尾部草稿（墙钟最晚）
+        let blocks = [
+            block("b3", start: 12, text: "第三句"),
+            block("b2", start: 5, text: "第二句"),
+            block("b1", start: 0, text: "第一句"),
+            TranscriptBlock(id: "draft", speaker: placeholder,
+                            timestamp: "", raw: "草稿", polished: "草稿",
+                            isFinal: false, startSeconds: 15, endSeconds: 15),
+        ]
+        let segs = MeetingSession.segments(from: blocks)
+        XCTAssertEqual(segs.map(\.startSeconds), [0, 5, 12, 15],
+                       "持久化出口应按 start 升序，尾部草稿（墙钟）排最后")
+        XCTAssertEqual(segs.map(\.text), ["第一句", "第二句", "第三句", "草稿"])
+        // 占位说话人不写真 id 的既有契约不因排序回归
+        XCTAssertNil(segs.first?.speakerId)
+    }
 }
 
 /// registry 查询/注销语义（旧 token 不抹新条目）。

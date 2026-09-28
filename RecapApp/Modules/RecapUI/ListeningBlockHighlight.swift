@@ -32,8 +32,10 @@ final class ListeningBlockHighlight: ObservableObject {
     }
 
     /// 转写块集合变化时刷新起点表（.task / 重转完成后调用）。
+    /// 入口按 start 排序——`refresh` 的「最后一个 start ≤ t」边界语义假设有序，
+    /// 而 blocks 行序是到达序（merger 不排序；旧持久化数据也可能乱序），不排会错块。
     func updateBlocks(_ blocks: [(id: String, start: Double)]) {
-        boundaries = blocks
+        boundaries = blocks.sorted { $0.start < $1.start }
     }
 
     private func refresh(t: Double, isReady: Bool) {

@@ -49,6 +49,10 @@ public struct MeetingNoteView: View {
     @State private var showResearchDraft = false
     @State private var selectedResearchDraft: ResearchDraft?
     @State private var researchError: String?
+    /// 承诺确认 hero 卡的逐条确认 sheet（plan 053）。
+    @State private var showPromiseSheet = false
+    /// 解散指纹的内存镜像（UserDefaults 不驱动 body 重算；init 时从 store 读初值）。
+    @State private var promiseHeroDismissal: String?
     /// 会中拍照取景 Overlay（锚定到打开瞬间的会议秒）。
     @State private var showMomentCapture = false
     @State private var momentCaptureAnchor: Int = 0
@@ -75,7 +79,7 @@ public struct MeetingNoteView: View {
     /// LIVE：贴底才自动跟随；上滑回看后停跟，需点「回到最新」。
     @State private var isFollowingLive = true
     @State private var missedLiveBlocks = 0
-    /// LIVE 顶部提示条（方言/云端精转预告）短暂展示后自动收起：
+    /// LIVE 顶部提示条（方言口音）短暂展示后自动收起：
     /// 预告信息只在其出现时刻告知一次（读两行字约 4s，给 6s 余量），
     /// 结束确认弹窗的动态文案兜底——「降级可见」不靠常驻色块实现。
     @State private var liveHintVisible = false
@@ -123,12 +127,40 @@ public struct MeetingNoteView: View {
             _pendingScrollStart = State(initialValue: initialScrollStart)
             _reviewTab = State(initialValue: .transcript)
         }
+        // 解散态跨启动持久（plan 053）：init 直读 store，绕过 UserDefaults 不驱动重算的问题。
+        _promiseHeroDismissal = State(initialValue: PromiseHeroDismissalStore.dismissedFingerprint(for: meeting.id))
     }
 
     private var sortedItems: [ActionItem] {
         meeting.actionItems.sorted { a, b in
             if a.isLowConfidence != b.isLowConfidence { return a.isLowConfidence && !b.isLowConfidence }
             return (a.startSeconds ?? 0) < (b.startSeconds ?? 0)
+        }
+    }
+
+    // MARK: 承诺确认 hero（plan 053）
+
+    /// 待确认承诺（draft 态）：hero 卡与确认 sheet 的同一数据源。
+    private var promiseDrafts: [ActionItem] {
+        meeting.actionItems.filter { $0.status == .draft }
+    }
+
+    /// 仅 review 态出现（整理/飞升流式期间不抢戏）；解散判定见 `PromiseHeroGate`。
+    private var promiseHeroVisible: Bool {
+        guard session.phase == .review else { return false }
+        let gate = PromiseHeroGate(
+            draftIDs: promiseDrafts.map(\.id),
+            dismissedFingerprint: promiseHeroDismissal
+        )
+        return gate.isVisible
+    }
+
+    private func dismissPromiseHero() {
+        let gate = PromiseHeroGate(draftIDs: promiseDrafts.map(\.id), dismissedFingerprint: nil)
+        Haptics.selection()
+        PromiseHeroDismissalStore.dismiss(gate.fingerprint, for: meeting.id)
+        withAnimation(reduceMotion ? nil : .recapSoft) {
+            promiseHeroDismissal = gate.fingerprint
         }
     }
 
@@ -305,6 +337,40 @@ public struct MeetingNoteView: View {
                     onJumpToTranscript: { start in jumpToTranscript(startSeconds: start) }
                 )
                 .presentationBackground(Color.recapBg)
+            }
+        }
+        .sheet(isPresented: $showPromiseSheet) {
+            // 卡片装配与总结 Tab 待办区完全同一套回调（plan 053：不复制确认/分发逻辑）。
+            // sheet 内触发跳转/调研/Agent 前先收起自己，避免多 sheet 抢占不弹。
+            PromiseConfirmSheet(drafts: promiseDrafts, isPresented: $showPromiseSheet) { item in
+                ActionItemCard(
+                    item: item,
+                    speakers: meeting.speakers,
+                    meetingTitle: meeting.title,
+                    onJumpToSource: { start in
+                        showPromiseSheet = false
+                        jumpToTranscript(startSeconds: start)
+                    },
+                    onResearchFollowUp: {
+                        showPromiseSheet = false
+                        startResearch(for: item)
+                    },
+                    hasResearchDraft: researchDraft(for: item) != nil,
+                    onOpenResearchDraft: {
+                        if let draft = researchDraft(for: item) {
+                            showPromiseSheet = false
+                            selectedResearchDraft = draft
+                            showResearchDraft = true
+                        }
+                    },
+                    hasResearchInProgress: researchInProgress(for: item) != nil,
+                    onOpenResearchProgress: {
+                        if let task = researchInProgress(for: item) {
+                            showPromiseSheet = false
+                            openResearchProgress(taskId: task.id)
+                        }
+                    }
+                )
             }
         }
         .fullScreenCover(isPresented: $showMomentCapture) {
@@ -513,7 +579,7 @@ public struct MeetingNoteView: View {
         if AIServiceMode.current == .freeTrial {
             return MinutesPipelineSmoke.canRunMinutesPipeline
                 ? nil
-                : "免费额度已用完，升级 Pro 或解锁自备密钥"
+                : "免费额度已用完，可在设置中改用自备密钥（免费）"
         }
         if AIServiceMode.current == .recapCloud {
             return MinutesPipelineSmoke.canRunMinutesPipeline
@@ -589,13 +655,29 @@ public struct MeetingNoteView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 // 方言口音提示：端侧误识方言时短暂展示（出现时刻告知一次，6s 后自动收起，
                 // 常驻语义由结束确认弹窗的动态文案承接——降级可见但不打扰）。
+                // 云端精转预告不在此出条：录音中不暴露引擎概念（2026-09-02），承诺由
+                // 结束弹窗动态文案（endLiveConfirmMessage）在真正相关的时刻承接。
                 if session.liveDialectSuspected && liveHintVisible {
                     DialectHintBar()
                         .transition(.opacity.combined(with: .move(edge: .top)))
-                } else if session.showsCloudUpgradeHint && liveHintVisible {
-                    // 降级可见性（产品原则：永不静默也不打扰）：LIVE 在本机但会后确定云端精转
-                    CloudUpgradeHintBar()
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                // 在场声纹 chips（plan 055，flag+同意门控）：「在场：王总 · 还有未识别的声音」。
+                // 首个命中落地前不渲染（避免空态噪音）；暂停期间保留（人还在屋里）。
+                if !session.livePresence.isEmpty || session.livePresenceHasUnknown {
+                    LivePresenceChips(
+                        entries: session.livePresence,
+                        hasUnknown: session.livePresenceHasUnknown
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+                // 「听起来像 TA」轻提示（plan 055）：每画廊条目每场至多一次
+                if let prompt = session.liveVoicePrompt {
+                    LiveVoicePromptBar(
+                        name: prompt.name,
+                        onConfirm: { session.resolveLiveVoicePrompt(voiceprintId: prompt.voiceprintId, accepted: true) },
+                        onDeny: { session.resolveLiveVoicePrompt(voiceprintId: prompt.voiceprintId, accepted: false) }
+                    )
+                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
         }
@@ -606,6 +688,9 @@ public struct MeetingNoteView: View {
         .animation(reduceMotion ? nil : .recapSoft, value: isSettling)
         .animation(reduceMotion ? nil : .recapNotice, value: liveHintVisible)
         .animation(reduceMotion ? nil : .recapNotice, value: liveHintKey)
+        // plan 055：在场 chips / 轻提示 进出场
+        .animation(reduceMotion ? nil : .recapSoft, value: session.livePresence)
+        .animation(reduceMotion ? nil : .recapSoft, value: session.liveVoicePrompt)
     }
 
     /// LIVE「Transport Bar」：左·状态胶囊(呼吸点+时长，点按收起) · 右·控制胶囊(暂停+停止)，两颗玻璃胶囊成对；
@@ -1012,14 +1097,16 @@ public struct MeetingNoteView: View {
     private var liveRecordingOrPausedContent: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
-                // defaultScrollAnchor(.bottom)：初始锚底 + 内容增长时系统保持贴底（用户上滑
-                // 脱离底部后不强拉）。替代「每块 scrollTo 流末锚点」作为自动跟随的主机制——
-                // scrollTo 对被 LazyVStack 回收的视口外尾部项会无声失败，长会议断链停摆。
+                // 最新在底（时间序：旧→新、上→下，与会后 REVIEW 转写及一切实时字幕的认知
+                // 习惯一致；2026-09-09 回退「最新在顶」实验——倒序阅读、新句在头部插入把
+                // 整段历史往下顶，均反直觉）。defaultScrollAnchor(.bottom)：初始锚底 +
+                // 内容增长时系统保持贴底（用户上滑脱离底部后不强拉），且最新草稿行的
+                // partial 增高发生在尾部，贴底由系统吸收、无需 scrollTo 逐块钉底。
                 // scrollTo 仅保留给「回到最新」按钮与初始定位（锚点在视口内时有效）。
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        // 顶部避让已由 safeAreaInset(edge: .top) 承担（原 Color.clear 手动占位删除，
-                        // 不再需要与栏高同步的魔法数）；这里只留首条内容的呼吸间距（随内容滚走）。
+                        // 顶部避让已由 safeAreaInset(edge: .top) 承担；这里只留首条内容的
+                        // 呼吸间距（随内容滚走）。
                         Color.clear.frame(height: Spacing.md)
 
                         // 仅暂停后且真有待办时提示；启动台 / 录音中不出现
@@ -1029,9 +1116,6 @@ public struct MeetingNoteView: View {
                                 .padding(.bottom, Spacing.md)
                                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
                         }
-
-                        // 声波已上移至顶栏 Transport Bar（屏内唯一一条，避免双声波抢戏）
-
 
                         ForEach(session.blocks) { block in
                             let isLast = block.id == session.blocks.last?.id
@@ -1047,6 +1131,7 @@ public struct MeetingNoteView: View {
                             .padding(.horizontal, Spacing.xl)
                         }
 
+                        // 状态行（异常/暂停/演示才出字）与最新字幕同侧收尾。
                         liveStreamFooter
                             .padding(.leading, Spacing.xl + 2 + Spacing.md) // 与字幕文字栏对齐（竖条 + 间距）
                             .padding(.trailing, Spacing.xl)
@@ -1241,11 +1326,10 @@ public struct MeetingNoteView: View {
         return Color.recapTea
     }
 
-    /// 当前活跃的 LIVE 顶部提示条标识（方言优先于云端预告，与展示互斥逻辑同口径）。
-    /// nil = 无提示。驱动 ``liveHintVisible`` 的出入与 6s 自动收起。
+    /// 当前活跃的 LIVE 顶部提示条标识。nil = 无提示。
+    /// 驱动 ``liveHintVisible`` 的出入与 6s 自动收起。
     private var liveHintKey: String? {
         if session.liveDialectSuspected { return "dialect" }
-        if session.showsCloudUpgradeHint { return "cloud" }
         return nil
     }
 
@@ -1951,7 +2035,7 @@ public struct MeetingNoteView: View {
             let isQuota = AIServiceMode.current == .freeTrial
             noteNoKeyErrorIsQuotaExhausted = isQuota
             noteNoKeyError = isQuota
-                ? "免费额度已用完，升级 Pro 或解锁自备密钥后再生成笔记。"
+                ? "免费额度已用完，可在设置中改用自备密钥（免费）再生成笔记。"
                 : "未配置可用的大模型密钥，请先在设置里配置。"
             return
         }
@@ -2016,6 +2100,26 @@ public struct MeetingNoteView: View {
         VStack(alignment: .leading, spacing: Spacing.xxl) {
             if session.revealStep == 0 {
                 processingHero
+            }
+            // 承诺确认 hero（plan 053）：整理结束第一眼是承诺，不是正文。
+            if session.phase == .review, promiseHeroVisible {
+                PromiseHeroCard(
+                    count: promiseDrafts.count,
+                    previews: promiseDrafts.prefix(3).map { item in
+                        PromiseHeroCard.PromisePreviewRow(
+                            id: item.id,
+                            task: item.task,
+                            meta: [item.owner, item.dueText]
+                                .compactMap { $0 }
+                                .filter { !$0.isEmpty }
+                                .joined(separator: " · ")
+                        )
+                    },
+                    onOpen: { showPromiseSheet = true },
+                    onDismiss: { dismissPromiseHero() }
+                )
+                .id("summary-promise-hero")
+                .transition(revealTransition(isPrimary: true))
             }
             // 稳定 id：避免流式每次改文触发 insertion transition 叠出两张卡
             // 首段可轻上移；后续段只 fade，避免连续瀑布感

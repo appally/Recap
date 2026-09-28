@@ -22,6 +22,34 @@ final class LiveTranscriptMergerTests: XCTestCase {
         XCTAssertEqual(merger.rows[0].id, seg.id.uuidString, "应保留检查点行 id")
     }
 
+    func testLoadCheckpointSortsArrivalOrderInput() {
+        // LIVE 检查点可能持久化「到达序」：拆句残留的晚到早段 append 在尾。
+        // 恢复时必须排序——下游按有序消费（回听高亮边界语义 / 时间轴展示）。
+        var merger = LiveTranscriptMerger()
+        merger.loadCheckpoint(segments: [
+            TranscriptSegment(startSeconds: 12, endSeconds: 14, text: "第三句"),
+            TranscriptSegment(startSeconds: 0, endSeconds: 4, text: "第一句"),
+            TranscriptSegment(startSeconds: 5, endSeconds: 9, text: "第二句"),
+        ])
+        XCTAssertEqual(merger.rows.map(\.text), ["第一句", "第二句", "第三句"],
+                       "恢复行序应按 start 升序，治愈持久化的到达序")
+        XCTAssertEqual(merger.rows.map(\.startSeconds), [0, 5, 12])
+        // 排序后 index 重建正确：同 start 更新仍走原地 upsert 而非 append。
+        merger.applySegment(TranscriptSegment(startSeconds: 5, endSeconds: 10, text: "第二句（修订）"))
+        XCTAssertEqual(merger.rows.count, 3)
+        XCTAssertEqual(merger.rows[1].text, "第二句（修订）")
+    }
+
+    func testLoadCheckpointSortIsStableForEqualStarts() {
+        // 同刻多段（历史重叠数据）：稳定排序保持落盘相对序，不引入非确定性。
+        var merger = LiveTranscriptMerger()
+        merger.loadCheckpoint(segments: [
+            TranscriptSegment(startSeconds: 3, endSeconds: 4, text: "后落盘"),
+            TranscriptSegment(startSeconds: 3, endSeconds: 5, text: "先落盘"),
+        ])
+        XCTAssertEqual(merger.rows.map(\.text), ["后落盘", "先落盘"])
+    }
+
     func testApplyPartialUpdatesDraftInPlace() {
         var merger = LiveTranscriptMerger()
         merger.applyPartial(text: "你", elapsedSeconds: 3)

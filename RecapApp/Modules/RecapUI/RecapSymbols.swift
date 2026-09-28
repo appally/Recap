@@ -30,6 +30,7 @@ public enum RecapSymbol {
     public static let check = "checkmark"
     public static let play = "play.fill"
     public static let pause = "pause.fill"
+    /// LIVE「回到最新」：最新字幕在底部，箭头向下。
     public static let scrollToLatest = "arrow.down"
     /// 搜索（独立搜索界面入口）。
     public static let search = "magnifyingglass"

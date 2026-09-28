@@ -616,31 +616,6 @@ public struct DialectHintBar: View {
     }
 }
 
-// MARK: - 云端精转预告（LIVE 顶部常驻：本机转写中 · 会后自动升级）
-
-/// LIVE 落到端侧（Pro 云端回落 / 免费档体验场）且会后确定会云端精转时，顶部常驻安心提示：
-/// 实时字幕是本机质量，结束后自动升级云端高保真。「可见但不打扰」——用户无需理解引擎/凭证
-/// 概念（2026-08-17 产品原则：降级永不静默，但绝不弹错误打断会议）。
-/// 由 `MeetingSession.showsCloudUpgradeHint` 驱动出入，与 DialectHintBar 互斥展示。
-public struct CloudUpgradeHintBar: View {
-    public init() {}
-
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("本机转写中")
-                .font(.recapMeta.weight(.medium))
-                .foregroundStyle(Color.recapOchre)
-            Text("结束后将自动升级为云端高保真转写")
-                .font(.recapCaption)
-                .foregroundStyle(Color.recapTea)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Spacing.sm)
-        .background(Color.recapOchre.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-        .accessibilityElement(children: .combine)
-    }
-}
-
 // MARK: - 网络连通性（云端能力可用性提示）
 
 /// 全局网络连通监测（NWPathMonitor）。云端转写/纪要/Ask/搜索依赖网络；端侧 ASR 离线可用。

@@ -26,6 +26,9 @@ public final class RecordingSession: ObservableObject {
     public var onError: ((String) -> Void)?
     /// 音频中断开始(true)/恢复(false)。与会话层计时耦合：中断期间无 PCM，会话层据此暂停计时。
     public var onInterrupted: ((Bool) -> Void)?
+    /// LIVE 声纹抽检 tap（plan 055，flag+同意门控在 spotter 内）：只读旁路——ingest 仅
+    /// 环形缓冲 append，推理在 spotter actor 内异步发生，绝不反压 ASR 喂流。
+    public var voiceprintSpotter: LiveVoiceprintSpotter?
 
     private let recorder = AudioRecorder()
     private var engine: (any AsrEngine)?
@@ -212,6 +215,10 @@ public final class RecordingSession: ObservableObject {
                             self.lastError = msg
                             self.onError?(msg)
                         }
+                    }
+                    // plan 055：声纹抽检旁路（spotter 未启用时为 nil / 惰性关闭，零开销）
+                    if let spotter = self.voiceprintSpotter {
+                        await spotter.ingest(chunk)
                     }
                     audioAccum += Double(chunk.count) / rate
                     if audioAccum >= 5.0 {

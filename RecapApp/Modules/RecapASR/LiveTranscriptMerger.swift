@@ -57,18 +57,24 @@ public struct LiveTranscriptMerger: Sendable {
     public init() {}
 
     /// 从落盘 segments 恢复，并重建 index（修复冷启动叠行）。
+    /// 输入按 startSeconds 排序后落行：LIVE 检查点可能持久化「到达序」——SpeechAnalyzer
+    /// 拆句残留的晚到早段 append 在尾部（merger 行序=到达序），不排序会随恢复带回
+    /// REVIEW，且下游按有序假设消费（ListeningBlockHighlight 的边界二分语义）会错块。
+    /// 稳定排序：同刻多段保持落盘相对序。
     public mutating func loadCheckpoint(segments: [TranscriptSegment]) {
         lastMutation = .rebuilt
-        rows = segments.map { seg in
-            LiveCaptionRow(
-                id: seg.id.uuidString,
-                startSeconds: seg.startSeconds,
-                endSeconds: seg.endSeconds,
-                text: seg.text,
-                isFinal: true,
-                confidence: seg.confidence
-            )
-        }
+        rows = segments
+            .sorted { $0.startSeconds < $1.startSeconds }
+            .map { seg in
+                LiveCaptionRow(
+                    id: seg.id.uuidString,
+                    startSeconds: seg.startSeconds,
+                    endSeconds: seg.endSeconds,
+                    text: seg.text,
+                    isFinal: true,
+                    confidence: seg.confidence
+                )
+            }
         segmentDriven = !rows.isEmpty
         timelineOffset = 0
         rebuildSegmentIndex()

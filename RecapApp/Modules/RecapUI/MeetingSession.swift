@@ -152,6 +152,21 @@ public final class MeetingSession: ObservableObject {
 
     public let meeting: Meeting
 
+    /// 录音 Live Activity 控制器（plan 054）：灵动岛/锁屏常驻「正在记录」。
+    /// 任何 ActivityKit 失败静默降级，绝不影响录音主流程。
+    private let recordingActivity = RecordingActivityController()
+
+    // MARK: LIVE 声纹抽检（plan 055，flag+同意门控在 spotter 内）
+
+    private let liveVoiceprintSpotter = LiveVoiceprintSpotter()
+    /// 在场命中（chips 行）；展示名过滤（占位名/「我」）在事件处理层做。
+    @Published public private(set) var livePresence: [LiveVoiceprintSpotter.PresenceEntry] = []
+    /// 有净语音但画廊未命中（诚实口径：不做人数推断，UI 只说「还有未识别的声音」）。
+    @Published public private(set) var livePresenceHasUnknown = false
+    /// 「听起来像 TA」轻提示（每 id 每场至多一次）。
+    @Published public private(set) var liveVoicePrompt: LiveVoiceprintSpotter.VoicePrompt?
+    private var promptedLiveVoiceIds: Set<String> = []
+
     private var recording: RecordingSession?
     private var powerCancellable: AnyCancellable?
     private var streamTask: Task<Void, Never>?
@@ -192,9 +207,10 @@ public final class MeetingSession: ObservableObject {
     public var liveEngineKind: AsrEngineKind? { recording?.engineKind }
 
     /// 降级可见性（产品原则：永不静默也不打扰）：LIVE 落在端侧且会后**确定**会云端精转时为
-    /// true——顶部常驻 CloudUpgradeHintBar（「本机转写中·结束后自动升级云端高保真」）。
-    /// 方言条优先（其文案已含会后精转语义）。Pro 显式选端侧（非回落）不显示——音频不会
-    /// 上云，不能做此预告（与 autoCloudRetranscribeReason 的隐私边界同口径）。
+    /// true——驱动结束确认弹窗的动态文案（「当前为本机转写；整理时将自动升级…」）。
+    /// 录音中不再出顶部提示条（2026-09-02：技术细节不进会议现场，承诺在结束时刻才相关）。
+    /// Pro 显式选端侧（非回落）不显示——音频不会上云，不能做此预告（与
+    /// autoCloudRetranscribeReason 的隐私边界同口径）。
     public var showsCloudUpgradeHint: Bool {
         guard liveEngineKind == .speechAnalyzer, !liveDialectSuspected else { return false }
         if AIServiceMode.current == .recapCloud, RecapAccountStore.current.tier == .pro {
@@ -622,6 +638,51 @@ public final class MeetingSession: ObservableObject {
         liveStartFailed = false
         statusMessage = status
         setIdleTimerDisabled(false)
+        // Live Activity 同步暂停态（plan 054）：手动暂停与暂停后重进共用此出口
+        recordingActivity.pause()
+    }
+
+    // MARK: LIVE 声纹抽检事件（plan 055）
+
+    private func handleLiveVoiceprintEvent(_ event: LiveVoiceprintSpotter.Event) {
+        switch event {
+        case .matched(let id, let name):
+            guard !livePresence.contains(where: { $0.voiceprintId == id }) else { return }
+            let displayable = LiveVoiceprintSpotter.isDisplayableName(name)
+            if displayable {
+                livePresence.append(.init(voiceprintId: id, name: name))
+            }
+            // 轻提示仅展示名（占位名/「我」没有可确认的信息量，静默忽略）
+            if displayable, !promptedLiveVoiceIds.contains(id) {
+                promptedLiveVoiceIds.insert(id)
+                liveVoicePrompt = .init(voiceprintId: id, name: name)
+            }
+            pushLiveActivitySpeakerSummary()
+        case .unknownVoice:
+            livePresenceHasUnknown = true
+            pushLiveActivitySpeakerSummary()
+        }
+    }
+
+    /// 「听起来像 TA」的「是/不是」。否 = 负样本（本场不再匹配该 id + 日志供阈值校准）。
+    public func resolveLiveVoicePrompt(voiceprintId: String, accepted: Bool) {
+        guard liveVoicePrompt?.voiceprintId == voiceprintId else { return }
+        liveVoicePrompt = nil
+        if accepted {
+            RecapLog.session.info("LIVE 声纹在场确认「是」: \(voiceprintId, privacy: .public)")
+        } else {
+            RecapLog.session.info("LIVE 声纹在场否决「不是」（负样本，供阈值校准）: \(voiceprintId, privacy: .public)")
+            livePresence.removeAll { $0.voiceprintId == voiceprintId }
+            Task { [liveVoiceprintSpotter] in await liveVoiceprintSpotter.deny(voiceprintId: voiceprintId) }
+        }
+        pushLiveActivitySpeakerSummary()
+    }
+
+    /// 054 软集成：在场变化同步到灵动岛（LA 未起/不可用时控制器内部 no-op）。
+    private func pushLiveActivitySpeakerSummary() {
+        var parts = livePresence.map(\.name)
+        if livePresenceHasUnknown { parts.append("还有未识别的声音") }
+        recordingActivity.setSpeakerSummary(parts.isEmpty ? nil : parts.joined(separator: " · "))
     }
 
     /// 会中暂停：停麦停表，留在 LIVE，展示继续 / 完成 / 删除。
@@ -759,6 +820,11 @@ public final class MeetingSession: ObservableObject {
         }
         let epoch = liveEpoch
         let session = RecordingSession()
+        // plan 055：LIVE 声纹抽检旁路（spotter 内部三道闸，未启用时 ingest 零开销）
+        session.voiceprintSpotter = liveVoiceprintSpotter
+        await liveVoiceprintSpotter.setOnEvent { [weak self] event in
+            Task { @MainActor in self?.handleLiveVoiceprintEvent(event) }
+        }
         session.onPartial = { [weak self] text in
             self?.applyPartial(text)
         }
@@ -823,6 +889,11 @@ public final class MeetingSession: ObservableObject {
             // 引擎名不进字幕行；仅在状态栏短暂可查
             statusMessage = ""
             setIdleTimerDisabled(true)
+            // Live Activity：录音真正起跑后才常驻（plan 054）；resume 复用同一 activity 只翻暂停态。
+            // elapsed 含续录前累计（restoreElapsedIfNeeded 抬过表）。
+            recordingActivity.startRecording(elapsed: TimeInterval(elapsed))
+            // LIVE 声纹抽检随录音起跑（plan 055）；未启用/无画廊时惰性关闭。
+            await liveVoiceprintSpotter.beginSession()
         } catch {
             // 竞态防护（P1）：迟到失败不得动新会话的 recording/UI——无条件置 nil 同样砸引用。
             guard self.recording === session else {
@@ -942,22 +1013,30 @@ public final class MeetingSession: ObservableObject {
         }
     }
 
-    nonisolated private static func segments(from blocks: [TranscriptBlock]) -> [TranscriptSegment] {
-        blocks.map { block in
-            let start = block.startSeconds ?? parseTimestamp(block.timestamp)
-            // 未标注说话人（fallback "?" / LIVE 转写 "asr-live"）输出 speakerId: nil——
-            // 把假 id 写成真值会污染持久化：diarize 守卫按 spk* 前缀判定虽能放行，
-            // 但其他按「speakerId 非 nil」消费的路径会误判为已标注。
-            let sid = block.speaker.id
-            let effectiveSpeakerId = (sid == "?" || sid == "asr-live") ? nil : sid
-            return TranscriptSegment(
-                startSeconds: start,
-                endSeconds: block.endSeconds ?? start,
-                speakerId: effectiveSpeakerId,
-                text: block.raw,
-                confidence: block.confidence
-            )
-        }
+    /// blocks → 持久化分段。按 startSeconds 排序输出：merger 行序=到达序（SpeechAnalyzer
+    /// 拆句残留的晚到早段 append 在尾），LIVE 检查点若原样落盘会把乱序写进库——
+    /// REVIEW 时间轴展示虽有兜底排序，回听高亮的边界表与后续按序消费的路径没有。
+    /// 尾部草稿行（墙钟 start）排在音频轴定稿之后（墙钟 ≥ 音频轴），稳定排序保位。
+    /// internal 供 @testable 单测（同 shouldRejectRetranscribe 先例）。
+    nonisolated static func segments(from blocks: [TranscriptBlock]) -> [TranscriptSegment] {
+        blocks
+            .map { block -> (Double, TranscriptSegment) in
+                let start = block.startSeconds ?? parseTimestamp(block.timestamp)
+                // 未标注说话人（fallback "?" / LIVE 转写 "asr-live"）输出 speakerId: nil——
+                // 把假 id 写成真值会污染持久化：diarize 守卫按 spk* 前缀判定虽能放行，
+                // 但其他按「speakerId 非 nil」消费的路径会误判为已标注。
+                let sid = block.speaker.id
+                let effectiveSpeakerId = (sid == "?" || sid == "asr-live") ? nil : sid
+                return (start, TranscriptSegment(
+                    startSeconds: start,
+                    endSeconds: block.endSeconds ?? start,
+                    speakerId: effectiveSpeakerId,
+                    text: block.raw,
+                    confidence: block.confidence
+                ))
+            }
+            .sorted { $0.0 < $1.0 }
+            .map(\.1)
     }
 
     /// 重转引擎解析意图：跟随偏好 / 云端优先（不向用户暴露引擎名）。
@@ -1186,7 +1265,7 @@ public final class MeetingSession: ObservableObject {
             statusMessage = "重转过慢/超时，请稍后重试"
             return false
         } catch RecapCredentialError.issueFailed(let status, _) where status == 403 {
-            statusMessage = "免费额度已用完，升级 Pro 或解锁自备密钥后再试"
+            statusMessage = "免费额度已用完，可在设置中改用自备密钥（免费）继续"
             return false
         } catch {
             RecapLog.session.error("重转失败: \(error.localizedDescription, privacy: .public)")
@@ -1857,6 +1936,15 @@ public final class MeetingSession: ObservableObject {
         guard phase == .live, !endingLive else { return }
         endingLive = true
         isLivePaused = false
+        // Live Activity 先于一切收尾工作撤下（plan 054）：防重入守卫之后立即执行，
+        // 避免收尾链耗时期间锁屏仍显示「正在记录」
+        recordingActivity.end()
+        // 声纹抽检随录音停止（plan 055）：在场/提示清场，spotter 释缓冲
+        livePresence = []
+        livePresenceHasUnknown = false
+        liveVoicePrompt = nil
+        promptedLiveVoiceIds = []
+        Task { [liveVoiceprintSpotter] in await liveVoiceprintSpotter.endSession() }
 
         clockTask?.cancel()
         streamTask?.cancel()
@@ -2119,8 +2207,9 @@ public final class MeetingSession: ObservableObject {
                 let briefSummary = self.meeting.briefPromptSummary
                 let momentsSummary = self.meeting.momentsPromptSummary
                 let handwritingSummary = self.meeting.handwritingPromptSummary
-                // P1-D: token-based 模式(recapCloud/免费档)开跑前确保凭证新鲜（满 TTL 窗口），
-                // 避免近过期 token 在长会 map-reduce 中段 401。BYOK 持久密钥无需刷新；
+                // P1-D: token-based 模式(recapCloud/免费档)开跑前确保凭证新鲜——2026-09-10 起
+                // LLM 直联中转、凭证只承担配额闸门/滴灌锚点(ASR 仍用网关 token),但开跑前
+                // 过一遍 issue 仍有计量意义。BYOK 持久密钥无需刷新；
                 // 刷新失败(网络)不阻断——退回 makeCurrent，仍可用旧缓存或抛 notReady 走 catch。
                 if AIServiceMode.current != .byok {
                     try? await RecapCredentialProvider.shared.ensureFresh()

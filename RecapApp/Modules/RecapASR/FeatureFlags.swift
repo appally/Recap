@@ -56,6 +56,26 @@ public enum ASRFeatureFlags {
         set { UserDefaults.standard.set(newValue, forKey: identityMatcherKey) }
     }
 
+    private static let liveVoiceprintSpotterKey = "asr.liveVoiceprintSpotterEnabled"
+
+    /// LIVE 声纹抽检（plan 055）：会中对最近语音窗做 CAM++ 抽检命中画廊，
+    /// 驱动「在场 chips + 听起来像 TA」轻提示。flag + `VoiceprintConsent.granted`
+    /// 双门控；Release 默认关——真机 POC（055 Wave C：命中 ≤30s / 误命中 0 / 无热劣化）
+    /// 过门槛后再拍板默认值。仅读旁路，不影响 ASR。
+    public static var liveVoiceprintSpotterEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: liveVoiceprintSpotterKey) == nil {
+                #if DEBUG
+                return true
+                #else
+                return false
+                #endif
+            }
+            return UserDefaults.standard.bool(forKey: liveVoiceprintSpotterKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: liveVoiceprintSpotterKey) }
+    }
+
     private static let dialectThresholdKey = "asr.dialectConfidenceThreshold"
 
     /// 方言自动重转的端侧 confidence 均值阈值：低于此值判定方言，触发云端 Fun-ASR 重转。
@@ -68,5 +88,23 @@ public enum ASRFeatureFlags {
             return UserDefaults.standard.double(forKey: dialectThresholdKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: dialectThresholdKey) }
+    }
+
+    private static let funZHLiveLockKey = "asr.funZHLiveLanguageLock"
+
+    /// BYOK fun-asr zh LIVE 实例锁语种（run-task `language_hints: ["zh"]`）：关掉服务端
+    /// 逐句自动检测在中文/方言音频上偶发的漂移出英文（plan 023 记录的「英文乱识别」通道，
+    /// 中文优先定位下的正确默认）。代价：混说中的整段英文改走 zh 声学解码（常见英文词
+    /// 仍可直出，长英文段降级）——但英文会议有既有机器兜底：autoCoversEnglish 随锁
+    /// 置 false → 会中英文检测放行热切换 funASREn（en·LIVE 不锁，逐句自动检测）；
+    /// 会后 endLive 分类 .en → `.language` 精转（en·批处理锁 en）收口。
+    /// 仅作用于 fun-asr 家族模型（paraformer 中文模型无需语种声明）与 LIVE（批处理
+    /// zh 本就不声明）。默认开；混说体验回归时可关。
+    public static var funZHLiveLanguageLock: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: funZHLiveLockKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: funZHLiveLockKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: funZHLiveLockKey) }
     }
 }

@@ -10,6 +10,10 @@ import RecapModels
 //   • en-US 模型机会式启用：已安装 → 双转写器（zh+en）同流并行，中文/英文/混说自动覆盖；
 //     未安装 → 后台预拉、本次 zh-only（与旧行为一致，绝不因英文资源缺失阻塞录音）
 //   • 双转写器定稿合并：同刻两模型出稿时按「置信度 → 含 CJK → zh」择优（shouldReplace）
+//   • zh 偏置 solo-en 定稿闸门（enFinalCorroborated）：无 zh 竞争的 en 定稿须过佐证
+//     ——置信度在场即一票判定（幻觉实测 0.07~0.21 / 真英文 0.8+），缺席才退长度
+//     启发式。静音、噪声、开局竞速里 zh 缺席时的英文幻觉碎片不再进定稿表，也就
+//     不再能经 lastFinalWinner 解锁 solo-en partial 流
 //   • 输入必须是 16-bit signed integer PCM（Float32 会触发：
 //     "Failed precondition: Audio sample data must be 16-bit signed integers"）
 //   • progressiveTranscription：volatile（!isFinal）→ .partial；isFinal → .segment
@@ -46,7 +50,12 @@ public actor SpeechAnalyzerEngine: AsrEngine {
     /// 最近一次定稿胜出的语言（粘性）：partial 无置信度，同刻两语言草稿择优时优先沿用
     /// 近期定稿的实证胜方——英文会议中 zh 模块的 CJK 幻觉草稿不再压掉正确的 en 草稿
     /// （含 CJK 优先倾向是为中文会场稳定设计的，对英文会议是反作用）。nil = 尚无定稿。
+    /// 不变量：sticky=.en 只可能由过闸（佐证/bootstrap/有 zh 竞争胜出）的 en 定稿设置——
+    /// 幻觉定稿在落地前已被闸门丢弃，无法投毒粘性。
     private var lastFinalWinner: MeetingLanguage?
+    /// 本场是否出现过含 CJK 的 zh 定稿（中文实证）。solo-en 定稿闸门的判据：中文未实证
+    /// （英文会议 bootstrap）时英文放行；实证后无 zh 竞争的 en 定稿须佐证才落库。
+    private var hasZhCjkFinal = false
     /// 端侧热词（人名/公司/术语），注入 AnalysisContext.contextualStrings。
     private var contextualHints: [String] = []
     private var firstTokenMs: Double?
@@ -154,6 +163,7 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         segmentMap.removeAll(keepingCapacity: true)
         partials.removeAll(keepingCapacity: true)
         lastFinalWinner = nil
+        hasZhCjkFinal = false
         firstTokenMs = nil
         streamStartedAt = Date()
         isStreaming = true
@@ -455,11 +465,32 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         // 定稿即清本语言草稿（emitPartial 的择优会让含 CJK 的旧 zh 草稿压掉正确的新 en
         // partial——中文会议里说英文时字幕会冻结在上一句中文，直到 en 定稿落地）。
         partials[language] = nil
+        // 中文实证追踪：zh 定稿含 CJK 即建立（场级粘性——实证后本场按中文会场收口）。
+        if language == .zh, TranscriptLanguageClassifier.containsCJK(text) {
+            hasZhCjkFinal = true
+        }
         // 跨语言重叠预裁（诊断入口A旁路②）：后到定稿驱逐重叠旧稿前必须过择优闸门——
         // 败给任一重叠旧稿则整条丢弃（同刻音频只留胜者），杜绝「谁后定稿谁拥有该行」
         // 造成的英文反杀中文/中英双行叠录。同语言重叠（拆句残留）不裁，照旧驱逐。
         let overlapped = segmentMap.filter { key, old in
             key != start && old.end > start && key < safeEnd
+        }
+        // zh 竞争存在性：同刻或时间重叠的 zh 稿。无竞争的 en 定稿在 zh 偏置场要走佐证闸门。
+        let hasZhRival = overlapped.values.contains { $0.language == .zh }
+            || segmentMap[start]?.language == .zh
+        // zh 偏置 solo-en 定稿闸门（中文会议英文幻觉落库的根修）：中文已实证的场次，
+        // 无 zh 竞争的 en 定稿必须过 enFinalCorroborated 才落库。置信度在场即一票判定
+        // （2026-09-09 真机标定：普通话上的幻觉 avg=0.069/0.212，真英文 0.8+——低置信
+        // 直接丢弃，长度不翻案）；置信度缺席才退长度启发式。静音段、噪声段、收尾竞速
+        // 里 zh 缺席时 en 模型的幻觉碎片整条丢弃——此前它们无对手直接落库并 yield 成
+        // .segment（中文会议里"总是出现英文"的主通道），且落地即把 lastFinalWinner
+        // 抬成 .en，反向解锁 preferredPartial 的 solo-en 抑制。
+        // 不在此列：置信度 ≥0.75 的 en 定稿（真英文——免费档双模块是英文会议唯一英文
+        // 来源）；有 zh 竞争（既有 shouldReplace 跨语言择优，CJK 规则已保护）。
+        if mergeBias == .zh, language == .en, !hasZhRival,
+           !Self.enFinalCorroborated(text: text, confidence: confidence, chineseEstablished: hasZhCjkFinal) {
+            RecapLog.session.debug("solo-en 定稿未过佐证闸门，丢弃: \(text.prefix(48), privacy: .public)")
+            return
         }
         for (_, old) in overlapped where old.language != language {
             if !Self.shouldReplace(
@@ -522,6 +553,14 @@ public actor SpeechAnalyzerEngine: AsrEngine {
             case .en where en != nil: return en?.text
             default: break
             }
+        }
+        // zh 偏置下的 solo-en 抑制：「唯一候选是英文」的时刻不得上屏——开局 en 模型
+        // 首个幻觉常先于 zh 首稿到达（中文会议先闪英文字幕的主因），以及 zh 发空
+        // volatile 清草稿的间隙里 en 垃圾残留。sticky==.en 是已实证的英文语境，放行。
+        // 英文内容不丢：定稿路径（shouldReplace 跨语言择优）照常落地，只放弃英文
+        // 片段的 partial 流式（zh 会场里英文夹词本就次秒级定稿）。
+        if bias == .zh, zh == nil, en != nil, sticky != .en {
+            return nil
         }
         guard let zh else { return en?.text }
         guard let en else { return zh.text }
@@ -588,6 +627,35 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         return newHasCJK ? newIsZh : !newIsZh
     }
 
+    // MARK: - zh 偏置 solo-en 定稿佐证闸门
+
+    /// en 无竞争定稿的高置信门槛。真机标定（2026-09-09 dialect-probe，普通话会场）：
+    /// en 模块对普通话音频的幻觉定稿 avg=0.069 / 0.212；真说英文（en 模型解母语）
+    /// 典型 0.8+。0.75 落在幻觉带上沿之上、母语带之下——置信度在场即为分界线。
+    static let enFinalHighConfidence: Double = 0.75
+    /// 无置信度（attributeOptions 未生效、runs=0 的设备）时的长度门槛（≥2 字符的词数）：
+    /// 静音/噪声上的幻觉多为 1-4 词碎片；真英文成句更长。仅在置信度**缺席**时启用。
+    static let enFinalMinWordCount = 5
+
+    /// zh 偏置下 en 定稿无竞争（无重叠/同刻 zh 稿）落地的佐证闸门（纯函数，供单测）：
+    /// - **置信度在场 = 一票判定**：≥ ``enFinalHighConfidence`` 放行（真英文），低于即
+    ///   丢弃——不看长度（幻觉照样能凑 5+ 词）、不看 bootstrap（开局首个幻觉常先于
+    ///   zh 首稿到达，2026-09-09 实测 0.069 首条即幻觉）；
+    /// - 置信度缺席（nil）才退长度启发式：中文未实证（英文会议 bootstrap——免费档
+    ///   双模块是英文会议唯一英文来源，不得拦）放行；已实证须 ≥ ``enFinalMinWordCount``
+    ///   个多字符词。单字符词（"a I"）不计——凑 token 的碎片不因长度放行。
+    static func enFinalCorroborated(text: String,
+                                    confidence: Double?,
+                                    chineseEstablished: Bool) -> Bool {
+        if let confidence {
+            return confidence >= enFinalHighConfidence
+        }
+        guard chineseEstablished else { return true }
+        let words = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .filter { $0.count >= 2 }
+        return words.count >= enFinalMinWordCount
+    }
+
     private func currentSegments() -> [TranscriptSegment] {
         segmentMap.sorted { $0.key < $1.key }
             .map { TranscriptSegment(startSeconds: $0.key, endSeconds: $0.value.end, text: $0.value.text, confidence: $0.value.confidence) }
@@ -605,6 +673,7 @@ public actor SpeechAnalyzerEngine: AsrEngine {
         segmentMap.removeAll(keepingCapacity: true)
         partials.removeAll(keepingCapacity: true)
         lastFinalWinner = nil
+        hasZhCjkFinal = false
         for task in collectTasks { task.cancel() }
         collectTasks.removeAll()
     }

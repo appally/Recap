@@ -24,5 +24,7 @@ struct StartRecordingControl: ControlWidget {
 struct RecapControlsBundle: WidgetBundle {
     var body: some Widget {
         StartRecordingControl()
+        // 录音 Live Activity（plan 054）：灵动岛 + 锁屏常驻「正在记录」
+        RecordingActivityWidget()
     }
 }

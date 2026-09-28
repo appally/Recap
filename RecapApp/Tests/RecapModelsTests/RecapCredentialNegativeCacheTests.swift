@@ -41,7 +41,9 @@ final class RecapCredentialNegativeCacheTests: XCTestCase {
         .init(token: "tok", asrWSS: "wss://example", llmBase: "https://example",
               remainingSeconds: 100, asrModel: "asr-m", llmModel: "llm-m",
               expiresAt: Date().addingTimeInterval(1800),
-              asrVocabularyId: nil, lang: lang)
+              asrVocabularyId: nil,
+              relayToken: "relay-tok", relayBase: "https://example/v1/relay",
+              lang: lang)
     }
 
     private func makeFactoryThrowQuota() {
