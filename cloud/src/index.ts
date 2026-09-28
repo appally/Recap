@@ -12,6 +12,7 @@ import {
   ISSUE_IP_MAX_DEVICES_PER_HOUR,
 } from './env';
 import { issueAliyunToken } from './core/aliyun';
+import { signRelayToken, verifyRelayToken, rewriteRelayModel } from './core/relay';
 import { verifyPro } from './core/prove';
 import { verifyFreeApple } from './core/prove-free';
 import { isPlausibleDeviceId } from './core/ratelimit';
@@ -58,6 +59,12 @@ export default {
     // POST /v1/issue —— 签发阿里短期 token(MVP:验权益 → 签发;配额 Phase 2 加 DO)
     if (url.pathname === '/v1/issue' && req.method === 'POST') {
       return handleIssue(req, env);
+    }
+
+    // POST /v1/relay/* —— 托管 LLM 中转代理(plan 056)：验短期 HMAC relay token → model 强制改写 →
+    // 用 Workers secret 里的真实中转 Key 转发上游，SSE 流式透传。共享 Key 自此出二进制(开源红线)。
+    if (url.pathname.startsWith('/v1/relay/')) {
+      return handleRelay(req, env, url);
     }
 
     // POST /v1/account/delete —— 账号删除(App Store 5.1.1(v)):
@@ -223,6 +230,18 @@ async function handleIssue(req: Request, env: Env): Promise<Response> {
       : FREE_LLM_EXPIRE_SECONDS;
   }
 
+  // 托管 LLM 中转凭证(plan 056)：客户端改持短期 HMAC relay token 经 /v1/relay 代理访问中转，
+  // 不再内嵌共享中转 Key。未配置 RELAY_* 三件(本地 dev/灰度)不下发——旧响应形状逐字节不变。
+  let relayToken: string | undefined;
+  if (env.RELAY_HMAC_SECRET && env.RELAY_API_KEY && env.RELAY_BASE_URL) {
+    relayToken = await signRelayToken({
+      userId: user.userId,
+      tier: user.tier,
+      ttlSeconds: expireSeconds,
+      secret: env.RELAY_HMAC_SECRET,
+    });
+  }
+
   let token: string;
   try {
     // ASR/LLM 物理隔离:usage=asr 且配置了 ASR 专用 key 时用它签发(白名单仅 ASR 模型),
@@ -246,8 +265,54 @@ async function handleIssue(req: Request, env: Env): Promise<Response> {
       env,
       // 语言感知模型下发:英文会议请求英文模型(X-Recap-Lang: en),其余走 ASR_MODEL 原逻辑。
       lang: (req.headers.get('X-Recap-Lang') ?? 'zh').toLowerCase() === 'en' ? 'en' : 'zh',
+      relayToken,
+      relayBase: relayToken ? `${new URL(req.url).origin}/v1/relay` : undefined,
     }),
   );
+}
+
+/** POST /v1/relay/chat/completions：托管 LLM 中转代理(plan 056)。
+ *  验 Bearer relay_token(HMAC，TTL 与签发它的 /v1/issue 一致) → body.model 强制改写为
+ *  LLM_RELAY_MODEL(托管模型由网关独占决定，客户端不可选) → 以 Workers secret 的真实 Key
+ *  转发上游，SSE 流式透传(直接回传 upstream.body，禁止缓冲——keepalive delta 靠它续命)。
+ *  计量口径仍按 /v1/issue(与既有 aliyun token 同信任模型：TTL 内不限次，免费档 LLM 15min 封顶)。 */
+const RELAY_ALLOWLIST = new Set(['/chat/completions']);
+
+async function handleRelay(req: Request, env: Env, url: URL): Promise<Response> {
+  if (!env.RELAY_HMAC_SECRET || !env.RELAY_API_KEY || !env.RELAY_BASE_URL) {
+    return Response.json({ error: 'relay_not_configured' }, { status: 503 });
+  }
+  const auth = req.headers.get('Authorization') ?? '';
+  if (!auth.startsWith('Bearer ')) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  const payload = await verifyRelayToken(auth.slice('Bearer '.length).trim(), env.RELAY_HMAC_SECRET);
+  if (!payload) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 });
+  }
+  const upstreamPath = url.pathname.slice('/v1/relay'.length);
+  if (req.method !== 'POST' || !RELAY_ALLOWLIST.has(upstreamPath)) {
+    return Response.json({ error: 'forbidden_path' }, { status: 404 });
+  }
+  const rawBody = await req.text();
+  const rewritten = rewriteRelayModel(rawBody, env.LLM_RELAY_MODEL ?? 'auto/glm');
+  if (rewritten === null) {
+    return Response.json({ error: 'invalid_body' }, { status: 400 });
+  }
+  // 用量观测(v1 只记日志，计量仍按 /v1/issue)：异常放量是触发旧共享 Key 提前轮换的信号(plan 056 Wave C)。
+  console.log(`[relay] sub=${payload.sub} tier=${payload.tier} bytes=${rawBody.length}`);
+  const upstream = new URL(env.RELAY_BASE_URL.replace(/\/+$/, '') + upstreamPath);
+  const resp = await fetch(upstream, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${env.RELAY_API_KEY}`,
+      // 显式要未压缩体：透传时 content-type/content-length 与实际字节一致，SSE 不受影响。
+      'accept-encoding': 'identity',
+    },
+    body: rewritten,
+  });
+  return new Response(resp.body, resp);
 }
 
 /** 语言 → 下发模型：en 用 ASR_MODEL_EN（缺省 fun-asr-realtime，多语言自动检测——百炼无英文
@@ -269,6 +334,10 @@ export function buildIssueResponse(args: {
   expiresInSeconds: number;
   env: Pick<Env, 'ASR_WSS' | 'LLM_BASE' | 'ASR_MODEL' | 'ASR_MODEL_EN' | 'LLM_MODEL' | 'ASR_VOCABULARY_ID'>;
   lang?: 'zh' | 'en';
+  /** plan 056：短期中转代理凭证，仅在网关配置 RELAY_* 三件时由 handleIssue 传入。 */
+  relayToken?: string;
+  /** /v1/relay 代理基址(本 Worker 域)，与 relayToken 成对出现。 */
+  relayBase?: string;
 }): Record<string, unknown> {
   const asrModel = resolveAsrModel(args.env, args.lang ?? 'zh');
   const body: Record<string, unknown> = {
@@ -288,6 +357,11 @@ export function buildIssueResponse(args: {
     // 词表 target_model 绑 zh 的 ASR_MODEL——en 会话携带必 task-failed(词表与模型不匹配),
     // 客户端虽有清词重试兜底,但热词静默失效且多一轮失败握手。en 不带词表。
     body.asr_vocabulary_id = args.env.ASR_VOCABULARY_ID;
+  }
+  if (args.relayToken && args.relayBase) {
+    // plan 056：托管 LLM 中转代理凭证。成对携带，未配置时整键缺席(旧客户端双向兼容)。
+    body.relay_token = args.relayToken;
+    body.relay_base = args.relayBase;
   }
   return body;
 }

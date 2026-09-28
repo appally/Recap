@@ -9,6 +9,13 @@ export interface Env {
    *  配置后 ASR 桶签发的 token 物理上无法调用任何 LLM/高价模型——即使主 key 白名单误配也被隔离。
    *  未配置时回落 DASHSCOPE_API_KEY(须靠其模型白名单约束)。 */
   DASHSCOPE_ASR_API_KEY?: string;
+  /** 中转真实 API Key（plan 056）：仅 /v1/relay 代理内使用，永不下发客户端。
+   *  历史值曾随客户端二进制分发（可提取滥用），2026-09-28 起收回 secret——开源红线。
+   *  ⚠️ 旧值已泄露，上线后按 plan 056 Wave C 的观察窗在中转侧轮换作废。 */
+  RELAY_API_KEY?: string;
+  /** relay_token 的 HMAC-SHA256 签名密钥（plan 056）。未配置时 /v1/issue 不下发 relay_*
+   *  字段、/v1/relay 返回 503（部署灰度窗口，旧客户端形状逐字节不变）。 */
+  RELAY_HMAC_SECRET?: string;
   /** App Store Connect .p8 + 元数据:Pro 权益服务端真校验(App Store Server API)。 */
   APPLE_PRIVATE_KEY?: string;
   APPLE_KEY_ID?: string;
@@ -28,6 +35,11 @@ export interface Env {
   /** 服务端统一下发的 LLM 模型(钉快照 qwen-plus-2025-12-01:别名已冻结,新款涨价 2.5-4 倍,
    *  裸别名有被阿里重指涨价款的静默成本风险;升级须同步百炼 key 白名单 + 客户端兜底常量)。 */
   LLM_MODEL?: string;
+  /** 上游中转基址（plan 056）：/v1/relay 代理的转发目标（含路径，如 https://token.toai.pro/v1）。 */
+  RELAY_BASE_URL?: string;
+  /** 托管档经 /v1/relay 强制改写的模型（auto/* 路由系）。客户端发送的 model 一律被覆盖——
+   *  托管模型由网关独占决定，顺带消灭客户端模型名硬编码漂移。 */
+  LLM_RELAY_MODEL?: string;
   /** 百炼全局共享热词表 id(运营在控制台创建,Paraformer 系 ≤500 词;账号级上限 10 表 → 托管档只能全局共享,无法每用户)。
    *  随 /v1/issue 下发 asr_vocabulary_id,客户端 run-task payload 顶层携带(paraformer 不支持 input.context)。
    *  留空/缺省 = 不启用(响应不带该字段,客户端回落无热词)。BYOK 不经网关,继续走 input.context。

@@ -2,7 +2,9 @@ import Foundation
 import OpenAI
 import RecapModels
 
-/// MacPaw/OpenAI 兼容实现：接 DeepSeek V4（及任何 OpenAI 兼容端点）。
+/// OpenAI 兼容实现：接 DeepSeek V4（及任何 OpenAI 兼容端点，含第三方中转）。
+/// 流式走手写 SSE（URLSession.bytes + SSELineParser，与 Agent 传输层同构）：部分中转
+/// 的流式 chunk 带 finish_reason:"" 等非标值，MacPaw 严格 Codable 枚举会 DecodingError。
 public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     public let id: String
     public let defaultModel: String
@@ -14,28 +16,23 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     /// 长会 map-reduce/润色的串行调用总时长可超网关 token 30min TTL，不重签则
     /// 中段起每块 401（不在可重试白名单）→ 整场纪要报废且已烧光全部 map 调用。
     private let tokenRefresher: (@Sendable () async throws -> String)?
-    // client/token 运行期可被 handleExpiredToken 重建；provider 实例按管线独占使用，
+    // token 运行期可被 handleExpiredToken 换新；provider 实例按管线独占使用，
     // NSLock 仅为跨并发域兜底（@unchecked Sendable 的诚实化）。
     private let stateLock = NSLock()
-    private var clientStorage: OpenAI
     private var tokenStorage: String
-    private var client: OpenAI {
-        stateLock.lock(); defer { stateLock.unlock() }
-        return clientStorage
-    }
-    /// 当前生效 token（extractViaToolHTTP 构建请求时读取，重签后自动跟随）。
+    /// 当前生效 token（consumeSSE / extractViaToolHTTP 构建请求时读取，重签后自动跟随）。
     private var currentToken: String {
         stateLock.lock(); defer { stateLock.unlock() }
         return tokenStorage
     }
     /// 首 token 超时预算（秒）：产出首个有效 delta 前若超过则放弃本次、按瞬态错误重试。
-    /// MacPaw 流式 session 库内部自建 `.default` URLSession、不可注入超时（吃默认 60s），
-    /// 故在 provider 内用「首 token race」兜底，避免一场短会卡满 60s 才知道失败。
+    /// request.timeoutInterval 是「空闲」超时，上游排队只发心跳不出内容时不会触发，
+    /// 故在 provider 内用「首 token race」墙钟兜底（中转路由期只发 keepalive 即此形态）。
     private let firstTokenTimeoutSeconds: Double
 
     /// - Parameter baseURL: 完整 OpenAI 兼容基址（含路径，如
     ///   `https://dashscope.aliyuncs.com/compatible-mode/v1`）。自动拆 host + basePath；
-    ///   MacPaw 与原始 HTTP 都走全路径，修子路径被吞（旧实现在此丢 qwen/glm/doubao/gemini/claude 的路径）。
+    ///   手写 SSE 与原始 HTTP 都走全路径，修子路径被吞（旧实现在此丢 qwen/glm/doubao/gemini/claude 的路径）。
     /// - Parameter summaryModel: 纪要等高质量任务用的强模型；nil 时与 defaultModel 同款。
     /// - Parameter firstTokenTimeoutSeconds: 首 token 超时；命中后按瞬态错误重试（与 QUIC 抖动同路）。
     public init(id: String = "deepseek",
@@ -54,10 +51,9 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         self.firstTokenTimeoutSeconds = firstTokenTimeoutSeconds
         self.tokenRefresher = tokenRefresher
         self.tokenStorage = apiKey
-        self.clientStorage = OpenAI(configuration: .init(token: apiKey, host: parsed.host, basePath: parsed.basePath))
     }
 
-    /// 401（托管 token 过期）重签一次：成功重建 client/token 返回 true；无钩子或
+    /// 401（托管 token 过期）重签一次：成功换 token 返回 true；无钩子或
     /// 重签失败返回 false（沿用原错误走正常失败路径）。
     private func handleExpiredToken() async -> Bool {
         guard let tokenRefresher,
@@ -71,13 +67,11 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     private func swapToken(_ newToken: String) {
         stateLock.lock()
         tokenStorage = newToken
-        clientStorage = OpenAI(configuration: .init(token: newToken, host: host, basePath: basePath))
         stateLock.unlock()
     }
 
     private static func isExpiredTokenError(_ error: Error) -> Bool {
-        guard case OpenAIError.statusError(_, let statusCode) = error else { return false }
-        return statusCode == 401
+        (error as? HTTPStatusError)?.statusCode == 401
     }
 
     /// `https://a.com/compatible-mode/v1` -> ("a.com", "/compatible-mode/v1")；无路径默认 "/v1"。
@@ -95,6 +89,13 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     }
 
     // MARK: - Streaming（瞬态重试 + 首 token 超时）
+
+    /// HTTP ≥400（流式路径）：MacPaw 时代的 OpenAIError.statusError 同职责，
+    /// 手写 SSE 后由本类型承载（URLError 原样透传，不包装）。
+    private struct HTTPStatusError: Error {
+        let statusCode: Int
+        let body: String
+    }
 
     /// 首 token 超时（不跨模块，避免 RecapLLM 依赖 RecapASR 的 InferenceTimeoutError）。
     private struct FirstTokenTimeoutError: Error, LocalizedError {
@@ -115,12 +116,12 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         }
     }
 
-    /// MacPaw 对 HTTP ≥400 抛 `OpenAIError.statusError`：仅 429 / 5xx 视为瞬态可重试
-    ///（4xx 为客户端错误，重试无意义）。与 Agent 路径 `AgentTransportError.shouldRetryTransient` 对齐，
+    /// 仅 429 / 5xx 视为瞬态可重试（4xx 为客户端错误，重试无意义）。
+    /// 与 Agent 路径 `AgentTransportError.shouldRetryTransient` 对齐，
     /// 否则纪要 summary 流式遇服务端 5xx（常见瞬态）直接放弃，与 Agent 路径行为不一致。
     private static func isRetryableStatusError(_ error: Error) -> Bool {
-        guard case OpenAIError.statusError(_, let statusCode) = error else { return false }
-        return statusCode == 429 || (500...599).contains(statusCode)
+        guard let status = (error as? HTTPStatusError)?.statusCode else { return false }
+        return status == 429 || (500...599).contains(status)
     }
 
     public func streamText(
@@ -130,25 +131,24 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         temperature: Double
     ) -> AsyncThrowingStream<String, Error> {
         let m = model ?? defaultModel
-        let chatMessages: [ChatQuery.ChatCompletionMessageParam] = [
-            .system(.init(content: .textContent(system)))
-        ] + messages.map { turn in
-            switch turn.role {
-            case .user:
-                return .user(.init(content: .string(turn.content)))
-            case .assistant:
-                return .assistant(.init(content: .textContent(turn.content)))
-            }
+        // 手写请求体（不经 MacPaw ChatQuery）：严格 Codable 在部分中转的非标 chunk 上
+        // 直接 DecodingError（实测 token.toai.pro 的 finish_reason:""），宽容解码只取 delta.content。
+        // 提前序列化成 Data：Swift 6 严格并发下 [String: Any] 不可跨 @Sendable 闭包捕获。
+        let body: [String: Any] = [
+            "model": m,
+            "temperature": temperature,
+            "stream": true,
+            "messages": [["role": "system", "content": system]]
+                + messages.map { turn -> [String: Any] in
+                    ["role": turn.role == .user ? "user" : "assistant", "content": turn.content]
+                },
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
+            return AsyncThrowingStream { $0.finish(throwing: URLError(.cannotParseResponse) ) }
         }
-        let query = ChatQuery(
-            messages: chatMessages,
-            model: m,
-            temperature: temperature,
-            stream: true
-        )
         return AsyncThrowingStream { continuation in
             let task = Task {
-                await self.runStream(query: query, model: m, attempt: 0, continuation: continuation)
+                await self.runStream(body: bodyData, model: m, attempt: 0, continuation: continuation)
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -158,7 +158,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
     /// 重试守卫 `!produced`：已向下游产出任意 delta 后**绝不重试**
     ///（否则下游 ``MinutesPipeline`` 把 delta 重复拼进 summaryText、破坏 mergeStreamText）。
     private func runStream(
-        query: ChatQuery,
+        body: Data,
         model: String,
         attempt: Int,
         continuation: AsyncThrowingStream<String, Error>.Continuation,
@@ -167,7 +167,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         // 首 token 预算随重试递增（20→40→60s）：thinking 模型正文首 token 可能 >20s（前段
         // 全是 reasoning），固定预算会在同一位置连续误杀 3 次、整体判死但网络其实正常。
         let outcome = await performStreamOnce(
-            query: query,
+            body: body,
             continuation: continuation,
             firstTokenBudget: firstTokenTimeoutSeconds * Double(attempt + 1)
         )
@@ -185,7 +185,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         // allowTokenRefresh=false 保证每条流至多一次，防重签循环）。
         if !outcome.produced, allowTokenRefresh,
            Self.isExpiredTokenError(error), await handleExpiredToken() {
-            await runStream(query: query, model: model, attempt: attempt,
+            await runStream(body: body, model: model, attempt: attempt,
                             continuation: continuation, allowTokenRefresh: false)
             return
         }
@@ -194,7 +194,7 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
             let delayNs = UInt64(300_000_000) * UInt64(attempt + 1)   // 300ms / 600ms
             try? await Task.sleep(nanoseconds: delayNs)
             if Task.isCancelled { continuation.finish(); return }
-            await runStream(query: query, model: model, attempt: attempt + 1, continuation: continuation)
+            await runStream(body: body, model: model, attempt: attempt + 1, continuation: continuation)
             return
         }
 
@@ -202,32 +202,65 @@ public final class OpenAICompatibleProvider: LLMProvider, @unchecked Sendable {
         continuation.finish(throwing: error)
     }
 
-    /// 单次流式尝试：消费 `client.chatsStream`，与「首 token 超时」race。
+    /// 单次流式尝试：消费 ``consumeSSE``（URLSession.bytes 原始 SSE），与「首 token 超时」race。
     ///
-    /// MacPaw 网络层失败（`.timedOut`/`.networkConnectionLost` 等）**原样透传** `URLError`
-    ///（`StreamingSession.didCompleteWithError` 不包装，仅 HTTP ≥400 才包 `OpenAIError.statusError`），
-    /// 故可被上层 `URLError` 分支精确捕获、纳入瞬态重试。
+    /// URLSession 失败（`.timedOut`/`.networkConnectionLost` 等）原样透传 `URLError`，
+    /// HTTP ≥400 包成 ``HTTPStatusError``——两者均可被上层精确捕获、纳入瞬态重试。
     ///
     /// 返回 `(produced, error)`：error==nil 表示流自然结束。结论以 actor 内 produced/timedOut 为准
     ///（首 chunk 与超时几乎同时到达时，produced 压制 timedOut，避免误判导致重试）。
     private func performStreamOnce(
-        query: ChatQuery,
+        body: Data,
         continuation: AsyncThrowingStream<String, Error>.Continuation,
         firstTokenBudget: Double
     ) async -> (produced: Bool, error: Error?) {
         let attempt = StreamAttempt(continuation: continuation)
         return await Self.raceFirstToken(budget: firstTokenBudget, attempt: attempt) {
             do {
-                for try await chunk in self.client.chatsStream(query: query) {
-                    if Task.isCancelled { break }
-                    if let t = chunk.choices.first?.delta.content, !t.isEmpty {
-                        await attempt.yieldContent(t)
-                    }
-                }
+                try await self.consumeSSE(body: body, attempt: attempt)
             } catch is CancellationError {
                 // 超时取消 / 外层取消：静默，结论由 outcome 表达。
             } catch {
                 await attempt.recordConsumeError(error)
+            }
+        }
+    }
+
+    /// 原始 SSE 消费（URLSession.bytes + SSELineParser，与 Agent 传输层同构）。
+    /// 只提取 choices[0].delta.content；其余帧（keepalive 空 delta / reasoning_content /
+    /// usage / finish_reason 任意取值）一律忽略——宽容解码是接第三方中转的前提。
+    private func consumeSSE(body: Data, attempt: StreamAttempt) async throws {
+        guard let url = URL(string: "https://\(host)\(basePath)/chat/completions") else {
+            throw URLError(.badURL)
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(currentToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.httpBody = body
+        // 空闲超时：任意数据到达即重置（心跳也算）；首 token 墙钟由 raceFirstToken 兜底。
+        request.timeoutInterval = 120
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            var errorData = Data()
+            for try await byte in bytes {
+                errorData.append(byte)
+                if errorData.count > 8_192 { break }
+            }
+            let text = String(data: errorData, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            RecapLog.provider.error("streamText HTTP \(http.statusCode): \(text.prefix(240), privacy: .public)")
+            throw HTTPStatusError(statusCode: http.statusCode, body: text)
+        }
+        for try await line in bytes.lines {
+            if Task.isCancelled { break }
+            if case .data(let payload) = SSELineParser.classify(line),
+               let data = payload.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let delta = (obj["choices"] as? [[String: Any]])?.first?["delta"] as? [String: Any],
+               let content = delta["content"] as? String, !content.isEmpty {
+                await attempt.yieldContent(content)
             }
         }
     }

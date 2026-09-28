@@ -44,7 +44,17 @@ public enum LLMPresets {
     /// 权威来源是网关 wrangler.jsonc 的 LLM_MODEL(现 qwen-plus-2025-12-01 钉快照:别名已冻结,
     /// 新款 qwen3.X-plus 涨 2.5-4 倍,裸别名有被重指涨价款的静默成本风险),各路径统一读 cred.llmModel;
     /// 此常量只作防御性兜底,值须与网关 LLM_MODEL 保持一致,否则会请求到白名单外的模型 -> 403。
+    /// 2026-09-10 起托管 LLM 直联中转(hostedRelayModel),此常量仅剩 /v1/issue 解码兜底职责,
+    /// 不再有运行时请求消费方。
     public static let cloudDefaultModel = "qwen-plus-2025-12-01"
+    /// 托管档(Pro/免费)LLM 出口（plan 056，2026-09-28 起）：客户端不再持有共享中转 Key——
+    /// /v1/issue 下发短期 relay_token + relay_base，LLM 请求经网关 /v1/relay 代理转发，
+    /// 真实中转 Key 只存 Workers secret（开源红线：Key 出二进制）。
+    /// 模型仍由此常量发送，网关会强制改写为 LLM_RELAY_MODEL（双保险——托管模型由网关独占决定）；
+    /// auto/* 路由系（中转内部故障转移；单前缀如 aug/ 上游挂了直接 502，勿用）：
+    /// auto/glm 实测路由 glm-5.2，流式 + 强制 tool_choice（待办提取）均验证可用；
+    /// keepalive 空 delta 与 reasoning_content 由 OpenAICompatibleProvider 天然容忍。
+    public static let hostedRelayModel = "auto/glm"
     /// 与 `LLMProviderTemplate.deepseek.keychainAccount` 对齐。
     public static let deepSeekKeychainAccount = "llm.deepseek.apikey"
 }

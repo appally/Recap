@@ -8,6 +8,8 @@ public enum LLMProviderFactory {
         case missingAPIKey(account: String)
         case requiresMembership
         case cloudGatewayUnavailable
+        /// plan 056：网关未下发 relay 凭证（旧版网关/RELAY_* 未配置的灰度窗口）。
+        case relayCredentialUnavailable
 
         public var errorDescription: String? {
             switch self {
@@ -17,6 +19,8 @@ public enum LLMProviderFactory {
                 return "当前为会员模式，请开通 Pro 或切换到「自备密钥」"
             case .cloudGatewayUnavailable:
                 return "云服务暂未接通，请改用「自备密钥」或稍后再试"
+            case .relayCredentialUnavailable:
+                return "云服务版本暂未就绪（中转凭证缺失），请稍后重试或改用「自备密钥」"
             }
         }
     }
@@ -25,34 +29,41 @@ public enum LLMProviderFactory {
     public static func makeCurrent() throws -> any LLMProvider {
         switch AIServiceMode.current {
         case .recapCloud:
-            // Pro 托管:Recap 网关签发的阿里临时 token + qwen 兼容端点(不经 BYOK key)。
+            // Pro 托管:网关只作配额闸门/计量(验签 + /v1/issue 按次计数);LLM 出口
+            // plan 056 起经网关 /v1/relay 代理(短期 relay token,共享 Key 已出二进制)。
             guard RecapAccountStore.current.tier == .pro else { throw FactoryError.requiresMembership }
-            let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
-            // cred.llmModel 为非可选：网关下发的模型名即唯一来源（原 `??` 右侧是
-            // 永不生效的死代码，2026-08-02 已统一单一来源，此处删净）。
-            return OpenAICompatibleProvider(
-                id: "recap-cloud",
-                apiKey: cred.token,
-                baseURL: cred.llmBase,
-                defaultModel: cred.llmModel,
-                summaryModel: cred.llmModel,
-                tokenRefresher: Self.hostedTokenRefresher
-            )
+            return try makeHostedRelayProvider(id: "recap-cloud")
         case .freeTrial:
-            // 免费档:网关签发的阿里 token(服务端按次计量);无 ASR token,转写走端侧。
-            // 模型名以网关下发的 cred.llmModel 为准(与 Pro/Ask 路径同一来源),不再客户端自定。
-            let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
-            return OpenAICompatibleProvider(
-                id: "recap-free",
-                apiKey: cred.token,
-                baseURL: cred.llmBase,
-                defaultModel: cred.llmModel,
-                summaryModel: cred.llmModel,
-                tokenRefresher: Self.hostedTokenRefresher
-            )
+            // 免费档:网关签发仅锚定滴灌配额(remaining_seconds 权威计数,转写走端侧);
+            // LLM 出口与 Pro 同一 relay 代理。
+            return try makeHostedRelayProvider(id: "recap-free")
         case .byok:
             return try makeSelectedBYOK()
         }
+    }
+
+    /// 托管档（Pro/免费）LLM 出口（plan 056）：持 /v1/issue 下发的短期 relay token，
+    /// 经网关 /v1/relay 代理访问中转——真实中转 Key 只存 Workers secret。
+    /// 401 重签钩子：免费档 relay token 15min TTL，长会 map-reduce 串行调用可超时——
+    /// 强制续签取新 relay token 续跑（P1-7 纪律的 relay 版；重签多计一次免费档签发，
+    /// 远小于整场纪要报废）。
+    private static func makeHostedRelayProvider(id: String) throws -> any LLMProvider {
+        let cred = try RecapCredentialProvider.shared.current(requiresASRModel: false)
+        guard let token = cred.relayToken, let base = cred.relayBase,
+              !token.isEmpty, !base.isEmpty else {
+            throw FactoryError.relayCredentialUnavailable
+        }
+        return OpenAICompatibleProvider(
+            id: id,
+            apiKey: token,
+            baseURL: base,
+            defaultModel: LLMPresets.hostedRelayModel,
+            summaryModel: LLMPresets.hostedRelayModel,
+            tokenRefresher: {
+                try await RecapCredentialProvider.shared.ensureFresh(force: true)
+                return (try RecapCredentialProvider.shared.current(requiresASRModel: false)).relayToken ?? ""
+            }
+        )
     }
 
     /// 从 SwiftData 中的 LLMProviderConfig 构建（API Key 仍读 Keychain）。
@@ -114,12 +125,5 @@ public enum LLMProviderFactory {
     /// `https://api.deepseek.com` → `api.deepseek.com`（已弃用：改用 OpenAICompatibleProvider(baseURL:)）。
     public static func host(from baseURL: String) -> String {
         OpenAICompatibleProvider.parseBaseURL(baseURL).host
-    }
-
-    /// 托管档 401（token 中途过期）重签钩子：强制走网关续签后返回新 token。
-    /// 长会管线（map-reduce 数十次串行调用）总时长可超 token 30min TTL。
-    private static let hostedTokenRefresher: @Sendable () async throws -> String = {
-        try await RecapCredentialProvider.shared.ensureFresh(force: true)
-        return try RecapCredentialProvider.shared.current(requiresASRModel: false).token
     }
 }

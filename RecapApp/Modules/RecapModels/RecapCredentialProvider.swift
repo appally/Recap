@@ -15,6 +15,7 @@ public struct RecapIssuedCredential: Sendable, Equatable {
     /// 服务端统一下发的 ASR 模型(默认 fun-asr-realtime)。FunASREngine 用此替代硬编码常量。
     public let asrModel: String
     /// 服务端统一下发的 LLM 模型(网关 LLM_MODEL,现 qwen-plus);缺省回落 LLMPresets.cloudDefaultModel。
+    /// 2026-09-10 起托管 LLM 直联中转(LLMPresets.hostedRelayModel),此字段仅解码保留,无运行时消费方。
     public let llmModel: String
     /// token 本身的过期时刻（≠ remainingSeconds——那是网关配额桶剩余，非 token 寿命）。
     /// FunASREngine 的 LIVE 会话滚动续签据此排期（token 到期前主动换会话）。
@@ -22,6 +23,11 @@ public struct RecapIssuedCredential: Sendable, Equatable {
     /// 全局共享热词表 id（网关 ASR_VOCABULARY_ID 下发；未配置为 nil）。
     /// paraformer 不支持 input.context，托管档热词走 run-task payload.vocabulary_id。
     public let asrVocabularyId: String?
+    /// 托管 LLM 中转代理凭证（plan 056）：/v1/relay 短期 HMAC token 与基址。
+    /// 网关未配置 RELAY_*（旧版网关/灰度窗口）时为 nil——消费方应报「网关版本过旧」，
+    /// 不得静默回落任何内嵌 Key（共享 Key 已删除，开源红线）。
+    public let relayToken: String?
+    public let relayBase: String?
 }
 
 public enum RecapCredentialError: Error, LocalizedError, Sendable {
@@ -63,7 +69,7 @@ public enum RecapCredentialError: Error, LocalizedError, Sendable {
             if body.contains("quota_exceeded") {
                 return tier == .pro
                     ? "本月云端额度已用完。"
-                    : "免费额度已用完，升级 Pro 或解锁自备密钥后再试。"
+                    : "免费额度已用完，可在「设置 → 大模型」改用自备密钥（免费）继续。"
             }
             if body.contains("requires_membership") {
                 return "Pro 凭证签发被拒，请确认订阅有效后重试。"
@@ -71,7 +77,7 @@ public enum RecapCredentialError: Error, LocalizedError, Sendable {
             // body 解析失败的兜底:按 tier 区分,避免 Pro 用户看到「免费额度已用完」
             return tier == .pro
                 ? "Pro 凭证签发被拒，请确认订阅有效后重试。"
-                : "免费额度已用完，升级 Pro 或解锁自备密钥后再试。"
+                : "免费额度已用完，可在「设置 → 大模型」改用自备密钥（免费）继续。"
         }
     }
 }
@@ -96,6 +102,9 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         let llmModel: String
         let expiresAt: Date
         let asrVocabularyId: String?
+        /// plan 056：托管 LLM 中转代理凭证（网关未配置 RELAY_* 时为 nil，见 RecapIssuedCredential）。
+        let relayToken: String?
+        let relayBase: String?
         /// 签发时的语言（网关按 X-Recap-Lang 下发对应 asr_model）。缓存命中需语言一致——
         /// 英文会议的重转必须拿到英文模型 token，不能复用中文 token。
         let lang: MeetingLanguage
@@ -170,7 +179,7 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         guard let c = hit, c.expiresAt.timeIntervalSinceNow > minValidSeconds else {
             throw RecapCredentialError.notReady
         }
-        return RecapIssuedCredential(token: c.token, asrWSS: c.asrWSS, llmBase: c.llmBase, remainingSeconds: c.remainingSeconds, asrModel: c.asrModel, llmModel: c.llmModel, tokenExpiresAt: c.expiresAt, asrVocabularyId: c.asrVocabularyId)
+        return RecapIssuedCredential(token: c.token, asrWSS: c.asrWSS, llmBase: c.llmBase, remainingSeconds: c.remainingSeconds, asrModel: c.asrModel, llmModel: c.llmModel, tokenExpiresAt: c.expiresAt, asrVocabularyId: c.asrVocabularyId, relayToken: c.relayToken, relayBase: c.relayBase)
     }
 
     /// 异步换 token(启动 / 兜底续签)。并发去重,缓存够新则跳过。
@@ -314,6 +323,8 @@ public final class RecapCredentialProvider: @unchecked Sendable {
             llmModel: decoded.llm_model ?? LLMPresets.cloudDefaultModel,
             expiresAt: Date().addingTimeInterval(TimeInterval(decoded.expires_in)),
             asrVocabularyId: decoded.asr_vocabulary_id,
+            relayToken: decoded.relay_token,
+            relayBase: decoded.relay_base,
             lang: lang
         )
     }
@@ -395,6 +406,9 @@ public final class RecapCredentialProvider: @unchecked Sendable {
         let llm_model: String?
         /// 网关配置了 ASR_VOCABULARY_ID 才有此键（未配置/空串不带，双向兼容）。
         let asr_vocabulary_id: String?
+        /// plan 056：托管 LLM 中转代理凭证（可选键——网关未配置 RELAY_* 时缺席，旧网关双向兼容）。
+        let relay_token: String?
+        let relay_base: String?
     }
 
     // MARK: - 锁保护的缓存 / 任务读写

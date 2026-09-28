@@ -18,6 +18,11 @@
     // ⚠️ 切换/升级时须同步:百炼 key 白名单加新模型名 + 客户端 LLMProviderConfig.cloudDefaultModel
     // (TranscriptChunker 按 contains 匹配 qwen-plus 前缀,快照名天然兼容)。
     "LLM_MODEL": "qwen-plus-2025-12-01",
+    // 托管 LLM 中转代理(plan 056)：/v1/relay 的转发目标与强制模型。真实 Key 与 HMAC 签名密钥
+    // 是 Secrets(RELAY_API_KEY / RELAY_HMAC_SECRET，见下方注释块)；三件齐备后 /v1/issue
+    // 才下发 relay_* 字段，未配置 = 灰度旧形状(旧客户端零感知)。
+    "RELAY_BASE_URL": "https://token.toai.pro/v1",
+    "LLM_RELAY_MODEL": "auto/glm",
     // 百炼控制台「业务定制—热词」创建的全局共享词表 id(≤500 词,运营维护品牌词/常见术语)。
     // ⚠️ 词表 target_model 必须与 ASR_MODEL 一致——换模型须同步改绑词表并重跑
     // scripts/verify-gateway-asr.mjs 词表探针,否则托管档 run-task task-failed。
@@ -45,6 +50,10 @@
   //                        部署后跑 scripts/verify-gateway-asr.mjs(含负向探针)+ verify-sts-llm.mjs 双确认。
   //   DASHSCOPE_ASR_API_KEY (可选加固)ASR 专用子账号 key,白名单仅开两个 ASR 模型;
   //                        配置后 ASR 桶与 LLM 桶 token 物理隔离,主 key 白名单误配也刷不了 LLM。
+  //   RELAY_API_KEY        plan 056 托管 LLM 中转真实 Key(原随客户端二进制分发,现只存 secret——
+  //                        开源红线)。⚠️ 旧值已入 git 历史/已售二进制,新版 adoption 达阈值后必须
+  //                        在中转侧轮换作废(plan 056 Wave C 观察窗:旧版托管流量 <10% 或异常放量)。
+  //   RELAY_HMAC_SECRET    relay_token 的 HMAC-SHA256 签名密钥(任意高熵随机串,如 `openssl rand -base64 32`)。
   //   APPLE_PRIVATE_KEY / APPLE_KEY_ID / APPLE_ISSUER_ID / APPLE_BUNDLE_ID   Phase 2 真实验证
   //
   // Phase 2(用户量起来):加 Durable Object 做 per-user 配额(需 Workers Paid plan $5/月),
