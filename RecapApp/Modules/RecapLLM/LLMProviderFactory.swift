@@ -83,6 +83,19 @@ public enum LLMProviderFactory {
     /// 当前选中的 BYOK 模板（不依赖 SwiftData，供会话 / 冒烟使用）。
     public static func makeSelectedBYOK() throws -> any LLMProvider {
         let template = LLMSelection.selectedTemplate
+        // plan 059：custom = 激活端点（per-endpoint Keychain + 端点自带双档模型）。
+        if template == .custom, let endpoint = CustomLLMEndpointStore.shared.activeEndpoint {
+            guard let key = KeychainStore.get(endpoint.keychainAccount), !key.isEmpty else {
+                throw FactoryError.missingAPIKey(account: endpoint.keychainAccount)
+            }
+            return OpenAICompatibleProvider(
+                id: "custom",
+                apiKey: key,
+                baseURL: endpoint.baseURL,
+                defaultModel: endpoint.defaultModel,
+                summaryModel: endpoint.resolvedSummaryModel
+            )
+        }
         guard let key = KeychainStore.get(template.keychainAccount), !key.isEmpty else {
             throw FactoryError.missingAPIKey(account: template.keychainAccount)
         }

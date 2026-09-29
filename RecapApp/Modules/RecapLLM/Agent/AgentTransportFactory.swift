@@ -66,8 +66,15 @@ public enum AgentTransportFactory {
 
     public static func makeSelectedBYOK(role: AgentModelRole) throws -> any AgentTransport {
         let template = LLMSelection.selectedTemplate
-        guard let key = KeychainStore.get(template.keychainAccount), !key.isEmpty else {
-            throw FactoryError.missingAPIKey(account: template.keychainAccount)
+        // plan 059：custom 端点的 Key 在端点自己的 Keychain account（非模板账号）。
+        let keyAccount: String
+        if template == .custom, let endpoint = CustomLLMEndpointStore.shared.activeEndpoint {
+            keyAccount = endpoint.keychainAccount
+        } else {
+            keyAccount = template.keychainAccount
+        }
+        guard let key = KeychainStore.get(keyAccount), !key.isEmpty else {
+            throw FactoryError.missingAPIKey(account: keyAccount)
         }
         // custom 模板的 baseURL 是占位符，须读设置页保存的 selectedBaseURL。
         let baseURL = LLMSelection.selectedBaseURL

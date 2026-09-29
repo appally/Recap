@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 import RecapModels
 import RecapLLM
 
@@ -252,6 +253,10 @@ struct LLMSettingsView: View {
 
             credentialEditor
 
+            if selected == .custom {
+                endpointSection
+            }
+
             if !status.isEmpty {
                 Text(status)
                     .font(.recapMeta)
@@ -268,9 +273,10 @@ struct LLMSettingsView: View {
     @ViewBuilder
     private var credentialEditor: some View {
         VStack(alignment: .leading, spacing: Spacing.md) {
-            if selected == .custom {
-                fieldLabel("Base URL")
-                TextField("https://api.example.com/v1", text: $customBaseURL)
+            // plan 059：custom 模板的端点/模型/Key 由下方「自定义端点」区管理（per-endpoint Keychain）。
+            if selected != .custom {
+                fieldLabel("模型")
+                TextField(selected.defaultModel, text: $modelDraft)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.recapMono)
@@ -280,29 +286,201 @@ struct LLMSettingsView: View {
                         Color.recapBg,
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                     )
+
+                SettingsSecureFieldBlock(
+                    title: "\(selected.displayName) API Key",
+                    placeholder: selected == .deepseek ? "sk-…" : "API Key",
+                    text: $apiKeyDraft,
+                    configured: LLMSelection.hasAPIKey(for: selected),
+                    onSave: saveKey,
+                    onClear: clearKey
+                )
+            }
+        }
+    }
+
+    // MARK: - 自定义端点（plan 059）
+
+    @State private var customEndpoints: [CustomLLMEndpoint] = []
+    @State private var activeEndpointID: UUID?
+    @State private var editingEndpoint: CustomLLMEndpoint?
+    @State private var addingEndpoint = false
+    @State private var showRecipeImporter = false
+    @State private var exportRecipeURL: URL?
+
+    private var endpointSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            fieldLabel("自定义端点（任意 OpenAI 兼容）")
+
+            if customEndpoints.isEmpty {
+                Text("添加你自己的端点：公司中转、SiliconFlow、本地 Ollama / LM Studio…可保存多个、随时切换。")
+                    .font(.recapMeta)
+                    .foregroundStyle(Color.recapTea)
+                    .lineSpacing(Leading.tight)
+            } else {
+                VStack(spacing: Spacing.sm) {
+                    ForEach(customEndpoints) { endpoint in
+                        endpointRow(endpoint)
+                    }
+                }
             }
 
-            fieldLabel("模型")
-            TextField(selected.defaultModel, text: $modelDraft)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .font(.recapMono)
-                .padding(.horizontal, Spacing.md)
-                .padding(.vertical, 12)
-                .background(
-                    Color.recapBg,
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
+            HStack(spacing: Spacing.sm) {
+                Button {
+                    addingEndpoint = true
+                } label: {
+                    Label("添加端点", systemImage: "plus")
+                        .font(.recapBodyS.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.recapInk.opacity(0.06))
+                        )
+                }
+                .buttonStyle(SettingsPressStyle())
 
-            SettingsSecureFieldBlock(
-                title: "\(selected.displayName) API Key",
-                placeholder: selected == .deepseek ? "sk-…" : "API Key",
-                text: $apiKeyDraft,
-                configured: LLMSelection.hasAPIKey(for: selected),
-                onSave: saveKey,
-                onClear: clearKey
+                Button {
+                    showRecipeImporter = true
+                } label: {
+                    Label("导入配方", systemImage: "square.and.arrow.down")
+                        .font(.recapBodyS.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.recapInk.opacity(0.06))
+                        )
+                }
+                .buttonStyle(SettingsPressStyle())
+            }
+
+            if let url = exportRecipeURL {
+                ShareLink(item: url) {
+                    Label("导出配方（JSON，不含 Key）", systemImage: "square.and.arrow.up")
+                        .font(.recapBodyS.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(Color.recapInk.opacity(0.06))
+                        )
+                }
+            }
+
+            Text("配方 JSON 不含 API Key（Key 仅存本机 Keychain）；同格式可分享给他人导入。")
+                .font(.recapMeta)
+                .foregroundStyle(Color.recapTea.opacity(0.75))
+                .lineSpacing(Leading.tight)
+        }
+        .sheet(isPresented: $addingEndpoint) {
+            CustomEndpointEditorSheet(existing: nil)
+                .onDisappear { reloadCustomEndpoints() }
+        }
+        .sheet(item: $editingEndpoint) { endpoint in
+            CustomEndpointEditorSheet(existing: endpoint)
+                .onDisappear { reloadCustomEndpoints() }
+        }
+        .fileImporter(isPresented: $showRecipeImporter, allowedContentTypes: [.json]) { result in
+            handleRecipeImport(result)
+        }
+    }
+
+    private func endpointRow(_ endpoint: CustomLLMEndpoint) -> some View {
+        let isActive = activeEndpointID == endpoint.id
+        let hasKey = CustomLLMEndpointStore.shared.hasAPIKey(for: endpoint)
+        return Button {
+            CustomLLMEndpointStore.shared.setActive(endpoint.id)
+            LLMSelection.select(.custom, model: endpoint.defaultModel)
+            reloadCustomEndpoints()
+            status = "已启用 \(endpoint.name)（\(endpoint.hostLabel)）"
+        } label: {
+            HStack(spacing: Spacing.md) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 18, weight: .regular))
+                    .foregroundStyle(Color.recapInk)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(endpoint.name)
+                            .font(.recapTitleS)
+                            .foregroundStyle(Color.recapInk)
+                        if hasKey {
+                            Text("Key ✓")
+                                .font(.recapCaption)
+                                .foregroundStyle(Color.recapTea)
+                        }
+                    }
+                    Text("\(endpoint.hostLabel) · \(endpoint.defaultModel)")
+                        .font(.recapMeta)
+                        .foregroundStyle(Color.recapTea)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.recapInk)
+                }
+                Menu {
+                    Button("编辑") { editingEndpoint = endpoint }
+                    Button("删除", role: .destructive) {
+                        CustomLLMEndpointStore.shared.delete(id: endpoint.id)
+                        reloadCustomEndpoints()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .foregroundStyle(Color.recapTea)
+                }
+            }
+            .padding(Spacing.md)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.recapBg)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(isActive ? Color.recapInk.opacity(0.5) : Color.clear, lineWidth: 1)
+                    )
             )
         }
+        .buttonStyle(SettingsPressStyle())
+    }
+
+    private func reloadCustomEndpoints() {
+        customEndpoints = CustomLLMEndpointStore.shared.endpoints
+        activeEndpointID = CustomLLMEndpointStore.shared.activeEndpoint?.id
+        // 导出配方 = 当前端点列表的临时文件（不含 Key，结构体天然无 Key 字段）。
+        if customEndpoints.isEmpty {
+            exportRecipeURL = nil
+        } else {
+            let data = CustomLLMEndpointStore.shared.exportData()
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("recap-provider-recipes.json")
+            try? data.write(to: url)
+            exportRecipeURL = url
+        }
+    }
+
+    private func handleRecipeImport(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        let secured = url.startAccessingSecurityScopedResource()
+        defer { if secured { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else {
+            status = "配方文件读取失败"
+            return
+        }
+        let decoder = JSONDecoder()
+        let imported: [CustomLLMEndpoint]
+        if let list = try? decoder.decode([CustomLLMEndpoint].self, from: data) {
+            imported = list
+        } else if let single = try? decoder.decode(CustomLLMEndpoint.self, from: data) {
+            imported = [single]
+        } else {
+            status = "配方格式无效（应为端点 JSON）"
+            return
+        }
+        let count = CustomLLMEndpointStore.shared.importEndpoints(imported)
+        reloadCustomEndpoints()
+        status = count > 0 ? "已导入 \(count) 个端点——请为每个端点填写 API Key" : "配方中没有有效端点（Base URL 须以 http 开头）"
     }
 
     private func fieldLabel(_ text: String) -> some View {
@@ -341,6 +519,7 @@ struct LLMSettingsView: View {
 
     private func reload() {
         mode = .current
+        reloadCustomEndpoints()
         if mode == .recapCloud && !membership.isPro {
             // 停在 recapCloud 而无 Pro：回落免费档，避免来源卡显示为"已选"。
             // （plan 058 后自备密钥已无门禁，仅云端仍按 Pro 验证。）
