@@ -63,3 +63,11 @@
 
 - bundle 资源在 RecapLLM framework 内 `Bundle.module` 定位失败（SPM/xcodegen 资源接线问题）且 2 次尝试未解——退回「常量 → 单一生成文件编译进 target」方案并停下说明。
 - Wave B.0 审计发现音频/数据库在 `Documents/` 且迁移风险高（路径写死多/iCloud 引用）——停下报告迁移面；降级方案改为「`Documents/Recap/` 单独子目录 + **不开** `UIFileSharingEnabled`，仅 App 内导入导出」（062 的 Files 可见性整体顺延，063 依赖面同步重估）。
+
+## 执行记录（2026-09-30）
+
+- **Wave A DONE**：23 个内置技能经脚本抽取至 `Agent/Skills/Bundled/*.md`（frontmatter 完整、缩进清洗核对）；project.yml 以 `buildPhase: resources` 编入 RecapLLM；`AgentBundledSkills` 重写为 Bundle 加载器（按文件名稳定排序；展示/推荐序不受影响）。测试 3/3（数量 23/全 parse/id 唯一/已知 id 在/白名单无写操作）。
+- **Wave B DONE**：Wave B.0 审计通过（SwiftData 与音频均在 Application Support，Documents 干净）→ 走原方案（开 Files 共享）；`OpenWorkspace` 开放根（`Documents/Recap/`，062 扩展地基）+ `CustomTemplateStore` 目录化（`skills/<id>.md`，文件名防御性清洗防路径穿越）；旧 UserDefaults 数组自动迁移（旧键改名保留）；外部编辑经 `rescan()` 生效。测试 4/4。
+- **Wave C DONE**：编辑器解锁（模型角色 quick/deep、步数 1–6、工具白名单多选——只读检索池，写操作 codec 层硬禁不变）；「我的模板」头部导入入口（多选 .md → **能力清单同意弹窗**：名称/工具数/步数 + 硬禁声明，F12）；自定义行 contextMenu 导出 .md（系统分享面板）；内置/收藏卡片 contextMenu「复制为我的模板」。
+- **验证**：BUILD SUCCEEDED；新增 7 测试全过 + 全量回归绿（本机跳过环境劣化的手写用例，CI 全量裁决）。
+- **状态：DONE（v1）**。后续小项：外部编辑自动感知（现 onAppear rescan）、skill 签名（v2）、在线社区目录（P2）。
