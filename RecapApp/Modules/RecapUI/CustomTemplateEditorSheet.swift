@@ -4,8 +4,8 @@ import RecapLLM
 /// 自定义模板编辑器（新建 / 编辑）。复用 `AgentSkillDocument` 的 round-trip：
 /// 表单 → 构造 `AgentSkill` → `encode` 成 SKILL.md → 交 `CustomTemplateStore.upsert`。
 ///
-/// MVP 边界：本地存、allowedTools 固定为只读三件套、模型角色 quick / 3 步。
-/// 无图标自定义文本（提供预设）；无多语言；无社区分享（P2）。
+/// plan 060 Wave C 解锁：模型角色（quick/pro）、步数 1–6、工具白名单多选
+/// （仅只读检索池；写操作三件在 codec 层硬禁）。落盘 = `Documents/Recap/skills/<id>.md`。
 struct CustomTemplateEditorSheet: View {
     let store: CustomTemplateStore
     let editing: AgentSkill?
@@ -15,12 +15,27 @@ struct CustomTemplateEditorSheet: View {
     @State private var scenario: TemplateScenario
     @State private var icon: String
     @State private var prompt: String
+    @State private var modelRole: AgentModelRole
+    @State private var maxSteps: Int
+    @State private var selectedTools: Set<String>
+    @State private var showAdvanced = false
 
     @Environment(\.dismiss) private var dismiss
 
     private static let iconPresets = [
         "wand.and.stars", "doc.text", "star", "lightbulb",
         "flag", "tag", "book", "gearshape",
+    ]
+
+    /// 可选工具池（只读检索；`forbiddenTools` 写操作不在此层，codec 硬禁）。
+    private static let toolPool: [(id: String, label: String)] = [
+        ("search_transcript", "检索本场转写"),
+        ("search_brief", "检索会前底稿"),
+        ("list_action_items", "列出本场待办"),
+        ("search_meetings", "跨会议检索"),
+        ("get_meeting_transcript", "读取他场转写"),
+        ("get_meeting_minutes", "读取他场纪要"),
+        ("read_url", "读取网页"),
     ]
 
     init(store: CustomTemplateStore, editing: AgentSkill? = nil) {
@@ -31,6 +46,10 @@ struct CustomTemplateEditorSheet: View {
         _scenario = State(initialValue: editing?.scenario ?? .general)
         _icon = State(initialValue: editing?.icon ?? "wand.and.stars")
         _prompt = State(initialValue: editing?.systemPrompt ?? "")
+        _modelRole = State(initialValue: editing?.modelRole ?? .quick)
+        _maxSteps = State(initialValue: editing?.maxSteps ?? 3)
+        _selectedTools = State(
+            initialValue: editing?.allowedTools ?? AgentSkillDocument.defaultAllowedTools)
     }
 
     var body: some View {
@@ -58,6 +77,38 @@ struct CustomTemplateEditorSheet: View {
                     Text("提示词")
                 } footer: {
                     Text("告诉 AI 怎么处理这场会议。建议给出固定的输出章节骨架；只写转写里的事实，不确定写「待确认」，不要编造。")
+                        .font(.recapMeta)
+                        .foregroundStyle(Color.recapTea)
+                }
+
+                Section {
+                    Toggle("高级设置", isOn: $showAdvanced.animation(.recapSoft))
+                    if showAdvanced {
+                        Picker("模型角色", selection: $modelRole) {
+                            Text("快速（日常/便宜）").tag(AgentModelRole.quick)
+                            Text("深入（纪要/调研）").tag(AgentModelRole.deep)
+                        }
+                        Stepper("步数上限：\(maxSteps)", value: $maxSteps, in: 1...6)
+                        VStack(alignment: .leading, spacing: Spacing.sm) {
+                            Text("允许工具（默认只读三件）")
+                                .font(.recapMeta)
+                                .foregroundStyle(Color.recapTea)
+                            ForEach(Self.toolPool, id: \.id) { tool in
+                                Toggle(tool.label, isOn: Binding(
+                                    get: { selectedTools.contains(tool.id) },
+                                    set: { on in
+                                        if on { selectedTools.insert(tool.id) }
+                                        else { selectedTools.remove(tool.id) }
+                                    }
+                                ))
+                                .font(.recapBodyS)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("执行")
+                } footer: {
+                    Text("写操作（改纪要/建提醒/嵌套技能）对所有模板硬禁；跨会议与网页工具按需开启。")
                         .font(.recapMeta)
                         .foregroundStyle(Color.recapTea)
                 }
@@ -115,6 +166,7 @@ struct CustomTemplateEditorSheet: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !descriptionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !selectedTools.isEmpty
     }
 
     private func save() {
@@ -131,9 +183,9 @@ struct CustomTemplateEditorSheet: View {
             groupTitle: "自定义",
             scenario: scenario,
             systemPrompt: trimmedPrompt,
-            allowedTools: AgentSkillDocument.defaultAllowedTools,
-            modelRole: .quick,
-            maxSteps: 3
+            allowedTools: selectedTools.union(AgentSkillDocument.defaultAllowedTools),
+            modelRole: modelRole,
+            maxSteps: maxSteps
         )
         store.upsert(AgentSkillDocument.encode(skill))
         Haptics.impact(.medium)

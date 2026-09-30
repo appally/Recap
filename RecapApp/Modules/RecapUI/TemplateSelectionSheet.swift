@@ -25,6 +25,11 @@ public struct TemplateSelectionSheet: View {
     @State private var editingCustom: AgentSkill?
     @Namespace private var segmentNS
     @State private var skillToDelete: AgentSkill?
+    // plan 060 Wave C：导入 / 导出 / 复制内置
+    @State private var showSkillImporter = false
+    @State private var importingDocs: [String] = []
+    @State private var exportingSkill: AgentSkill?
+    @State private var exportingURL: URL?
 
     public enum TemplateTab: String, CaseIterable, Identifiable {
         case recommended = "推荐"
@@ -87,6 +92,112 @@ public struct TemplateSelectionSheet: View {
         } message: {
             Text("删除后无法恢复。")
         }
+        // plan 060：导入 SKILL.md（多选）——外部文件是不可信输入，导入前展示能力清单（F12 同意时刻）。
+        .fileImporter(isPresented: $showSkillImporter, allowedContentTypes: [.plainText, .text], allowsMultipleSelection: true) { result in
+            handleSkillImport(result)
+        }
+        .confirmationDialog(
+            "导入 \(importingDocs.count) 个技能模板？",
+            isPresented: Binding(get: { !importingDocs.isEmpty }, set: { if !$0 { importingDocs = [] } }),
+            titleVisibility: .visible
+        ) {
+            Button("导入") {
+                for raw in importingDocs { customStore.upsert(raw) }
+                importingDocs = []
+            }
+            Button("取消", role: .cancel) { importingDocs = [] }
+        } message: {
+            Text(importConsentMessage)
+        }
+        .sheet(item: Binding(
+            get: { exportingSkill.flatMap { skill in
+                ExportedSkillFile(skill: skill, url: exportingURL)
+            } },
+            set: { if $0 == nil { exportingSkill = nil; exportingURL = nil } }
+        )) { file in
+            SkillShareSheet(items: [file.url])
+                .presentationDetents([.medium])
+        }
+        .onAppear { customStore.rescan() }
+    }
+
+    /// 导入同意清单：名称 + 工具数 + 步数——写操作 codec 层硬禁，此处如实展示只读面。
+    private var importConsentMessage: String {
+        let lines = importingDocs.prefix(5).compactMap { raw -> String? in
+            guard let s = try? AgentSkillDocument.parse(raw) else { return nil }
+            return "「\(s.name)」— 工具 \(s.allowedTools.count) 个 · 步数上限 \(s.maxSteps)"
+        }
+        return (lines + ["导入后可在「我的模板」编辑；写操作（改纪要/建提醒）对所有模板硬禁。"])
+            .joined(separator: "\n")
+    }
+
+    private func handleSkillImport(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result else { return }
+        var docs: [String] = []
+        for url in urls.prefix(10) {
+            let secured = url.startAccessingSecurityScopedResource()
+            defer { if secured { url.stopAccessingSecurityScopedResource() } }
+            guard let raw = try? String(contentsOf: url, encoding: .utf8),
+                  (try? AgentSkillDocument.parse(raw)) != nil else { continue }
+            docs.append(raw)
+        }
+        importingDocs = docs
+    }
+
+    /// 导出 = 写临时 .md（SKILL.md 原文）→ 系统分享面板。
+    private func exportSkill(_ skill: AgentSkill) {
+        guard let raw = customStore.documents.first(where: {
+            (try? AgentSkillDocument.parse($0))?.id == skill.id
+        }) ?? bundledDocument(for: skill) else { return }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(OpenWorkspace.skillFileName(for: skill.id))
+        try? raw.write(to: url, atomically: true, encoding: .utf8)
+        exportingSkill = skill
+        exportingURL = url
+    }
+
+    private func bundledDocument(for skill: AgentSkill) -> String? {
+        AgentBundledSkills.documents.first {
+            (try? AgentSkillDocument.parse($0))?.id == skill.id
+        }
+    }
+
+    /// 复制内置/收藏模板为我的模板（改 id/组名，进编辑器微调后保存）。
+    private func duplicateAsCustom(_ skill: AgentSkill) {
+        let copy = AgentSkill(
+            id: "custom-\(UUID().uuidString.prefix(8))",
+            name: skill.name + "（副本）",
+            description: skill.description,
+            icon: skill.icon,
+            groupId: "custom",
+            groupTitle: "自定义",
+            scenario: skill.scenario,
+            systemPrompt: skill.systemPrompt,
+            allowedTools: skill.allowedTools,
+            modelRole: skill.modelRole,
+            maxSteps: skill.maxSteps,
+            temperature: skill.temperature
+        )
+        editingCustom = copy
+        showCustomEditor = true
+    }
+
+    /// 导出文件的 Identifiable 包装（sheet(item:) 要求）。
+    private struct ExportedSkillFile: Identifiable {
+        let skill: AgentSkill
+        let url: URL?
+        var id: String { skill.id }
+    }
+
+    /// 系统分享面板（UIActivityViewController 包装）。
+    private struct SkillShareSheet: UIViewControllerRepresentable {
+        let items: [URL?]
+
+        func makeUIViewController(context: Context) -> UIActivityViewController {
+            UIActivityViewController(activityItems: items.compactMap { $0 }, applicationActivities: nil)
+        }
+
+        func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
     }
 
     // MARK: - Header / segment
@@ -244,7 +355,21 @@ public struct TemplateSelectionSheet: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(RecapPressStyle())
+                Button {
+                    showSkillImporter = true
+                } label: {
+                    Label("导入", systemImage: "square.and.arrow.down")
+                        .font(.recapMeta.weight(.semibold))
+                        .foregroundStyle(Color.recapInk)
+                        .padding(.horizontal, Spacing.xs)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(RecapPressStyle())
             }
+            Text("模板即文件：保存在「文件」App 的 Recap/skills 目录，可随时在电脑上编辑后回 App 生效。")
+                .font(.recapMeta)
+                .foregroundStyle(Color.recapTea.opacity(0.7))
+                .lineSpacing(Leading.tight)
             if customStore.isEmpty {
                 Text("还没有自定义模板——点「新建」，用你的提示词创建一个")
                     .font(.recapMeta)
@@ -325,6 +450,11 @@ public struct TemplateSelectionSheet: View {
             .background(cardBackground(cornerRadius: 14, isSelected: isSelected))
         }
         .buttonStyle(RecapPressStyle())
+        .contextMenu {
+            Button { exportSkill(skill) } label: { Label("导出 .md", systemImage: "square.and.arrow.up") }
+            Button { editingCustom = skill; showCustomEditor = true } label: { Label("编辑", systemImage: "pencil") }
+            Button(role: .destructive) { skillToDelete = skill } label: { Label("删除", systemImage: "trash") }
+        }
     }
 
     private func scenarioHeader(_ group: AgentScenarioGroup) -> some View {
@@ -443,6 +573,9 @@ public struct TemplateSelectionSheet: View {
             .background(cardBackground(cornerRadius: 16, isSelected: isSelected, selectedLineWidth: 2))
         }
         .buttonStyle(RecapPressStyle())
+        .contextMenu {
+            Button { duplicateAsCustom(skill) } label: { Label("复制为我的模板", systemImage: "doc.on.doc") }
+        }
     }
 
     // MARK: - Generate

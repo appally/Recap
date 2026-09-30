@@ -92,6 +92,11 @@ targets:
     platform: iOS
     sources:
       - path: Modules/RecapLLM
+        excludes:
+          # 内置技能 .md 以 resources 编译（plan 060），不进编译源
+          - "Agent/Skills/Bundled/*.md"
+      - path: Modules/RecapLLM/Agent/Skills/Bundled
+        buildPhase: resources
     dependencies:
       - target: RecapModels
       - package: OpenAI
