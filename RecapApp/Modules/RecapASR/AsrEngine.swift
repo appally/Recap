@@ -151,6 +151,7 @@ public enum AsrEngineFactory {
         case .funASR:          FunASREngine()
         case .funASREn:        FunASREngine(language: .en)
         case .fluidSenseVoice: FluidAudioEngine(kind: .fluidSenseVoice)
+        case .customTranscription: CustomTranscriptionEngine()
         }
     }
 }

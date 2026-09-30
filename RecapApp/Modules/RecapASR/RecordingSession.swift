@@ -96,7 +96,7 @@ public final class RecordingSession: ObservableObject {
                 // detached 脱离 MainActor（避免 Speech/Keychain 探测卡首帧），但 detached 不继承父任务取消；
                 // 用 withTaskCancellationHandler 在超时取消时主动 cancel detached，防孤儿任务堆积占资源。
                 let det = Task.detached(priority: .userInitiated) {
-                    try await AsrEngineResolver.resolve(language: language)
+                    try await AsrEngineResolver.resolve(language: language, allowCustom: false)
                 }
                 return try await withTaskCancellationHandler {
                     try await det.value

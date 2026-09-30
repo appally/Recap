@@ -7,6 +7,27 @@ import Foundation
 public enum ASRFeatureFlags {
     private static let fluidRetranscribeKey = "asr.fluidRetranscribeEnabled"
 
+    // MARK: plan 061 —— 自定义转写引擎（POC-gated）
+
+    private static let customTranscriptionKey = "asr.customTranscriptionEnabled"
+
+    /// 自定义 OpenAI 兼容转写（仅会后重转/导入，分片上传）。DEBUG 默认开（真机 POC），
+    /// **Release 默认关**——Wave C POC 门槛（CER 不劣于 SA / 60min 分片内存 <500MB /
+    /// 拼接误差 <300ms）全过才翻默认（同 055 纪律）。
+    public static var customTranscriptionEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: customTranscriptionKey) == nil {
+                #if DEBUG
+                return true
+                #else
+                return false
+                #endif
+            }
+            return UserDefaults.standard.bool(forKey: customTranscriptionKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: customTranscriptionKey) }
+    }
+
     /// 会后端侧高保真重转写（FluidAudio SenseVoice）自动升级入口。
     /// 默认值按构建区分：DEBUG 默认开（真机 POC / 自测自动升级）；Release 默认关——避免被动 447MB
     /// 端侧模型后台下载与未标定方言阈值自动云端重转。用户可在设置显式打开（显式选择始终被尊重）。

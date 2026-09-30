@@ -6,6 +6,9 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
     case auto
     case speechAnalyzer
     case funASR
+    /// plan 061：自定义 OpenAI 兼容转写端点（POC-gated flag；仅会后重转/导入，
+    /// LIVE 永不解析到它——resolver 的 allowCustom=false 路径回落 auto）。
+    case custom
 
     public var id: String { rawValue }
 
@@ -14,6 +17,7 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         case .auto: return "自动"
         case .speechAnalyzer: return "端侧 SpeechAnalyzer"
         case .funASR: return "阿里 Fun-ASR"
+        case .custom: return "自定义转写端点"
         }
     }
 
@@ -22,6 +26,7 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         case .auto: return "端侧优先，不可用时回落云端"
         case .speechAnalyzer: return "免费 · 隐私 · 需 Apple Intelligence"
         case .funASR: return "云端高保真 · 按推流时长计费（静音也计）· 约 ¥0.6–1.2/小时"
+        case .custom: return "任意 OpenAI 兼容转写 API · 仅会后重转/导入 · 实验性"
         }
     }
 
@@ -30,6 +35,7 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         case .auto: return "arrow.triangle.2.circlepath"
         case .speechAnalyzer: return "iphone"
         case .funASR: return "waveform.badge.magnifyingglass"
+        case .custom: return "server.rack"
         }
     }
 
@@ -37,6 +43,7 @@ public enum ASRPreference: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .auto, .speechAnalyzer: return false
         case .funASR: return true
+        case .custom: return false   // 自有 Key 在「自定义转写」分区管理
         }
     }
 
@@ -77,7 +84,19 @@ public enum AsrEngineResolver {
 
     @available(iOS 26.0, *)
     public static func resolve(preference: ASRPreference = .current,
-                               language: MeetingLanguage = .zh) async throws -> any AsrEngine {
+                               language: MeetingLanguage = .zh,
+                               allowCustom: Bool = true) async throws -> any AsrEngine {
+        // plan 061：LIVE（RecordingSession）传 allowCustom=false——自定义转写不支持流式，
+        // 偏好为 .custom 时按 auto 链解析（配置保留，重转/导入路径仍可用）。
+        var preference = preference
+        if preference == .custom {
+            if allowCustom, ASRFeatureFlags.customTranscriptionEnabled,
+               let provider = AsrProviderStore.shared.active {
+                _ = provider
+                return try await prepare(.customTranscription)
+            }
+            preference = .auto
+        }
         // 英文会议云端走 en 实例（托管档网关按 X-Recap-Lang: en 下发 fun-asr-realtime +
         // language_hints；BYOK 同模型但报文带语种声明）。端侧 SpeechAnalyzer 双模块
         // 语种无关，但语言注入合并偏置（en 会场保六批成果 / zh 会场 CJK 优先）。
@@ -87,6 +106,10 @@ public enum AsrEngineResolver {
             return try await prepare(.speechAnalyzer, language: language)
         case .funASR:
             return try await prepare(cloudKind)
+        case .custom:
+            // 正常已在函数入口处理（allowCustom=false 或 flag/配置缺失时上方回落 .auto）；
+            // 到达此处的唯一路径 = 显式 resolve(kind:) 之外的直接调用——交给 custom 引擎。
+            return try await prepare(.customTranscription)
         case .auto:
             // 端侧 → Fun-ASR（火山已下线：无 Pro 网关分支、与 Fun 职责重叠）
             // Pro 会员(recapCloud)：云端高保真优先（已付费），端侧兜底（离线/网络故障）。

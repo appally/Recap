@@ -10,6 +10,9 @@ public enum AsrEngineKind: String, CaseIterable, Sendable, Identifiable {
     /// 不进 LIVE 解析链（LIVE 以 zh/mixed 引擎起步，会后按语言自动精修）。
     case funASREn       = "阿里 Fun-ASR EN (云端)"
     case fluidSenseVoice = "FluidAudio · SenseVoice (端侧)"
+    /// 自定义 OpenAI 兼容转写端点（plan 061，POC-gated flag）：仅会后重转/导入，
+    /// 分片上传（10min 窗 + 25MB 供应商限制），不支持 LIVE 流式。
+    case customTranscription = "自定义转写 (OpenAI 兼容)"
 
     public var id: String { rawValue }
     public var isOnDevice: Bool {

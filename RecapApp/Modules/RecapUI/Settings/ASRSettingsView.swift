@@ -107,7 +107,7 @@ struct ASRSettingsView: View {
                 .foregroundStyle(Color.recapTea)
 
             VStack(spacing: Spacing.sm) {
-                ForEach(ASRPreference.allCases) { pref in
+                ForEach(visiblePreferences) { pref in
                     SettingsChoiceCard(
                         icon: pref.symbolName,
                         title: pref.title,
@@ -124,6 +124,18 @@ struct ASRSettingsView: View {
                     }
                 }
             }
+
+            // plan 061：自定义转写端点配置区（flag 门控；选择 .custom 后展开）。
+            if ASRFeatureFlags.customTranscriptionEnabled {
+                CustomAsrSection(status: $status)
+            }
+        }
+    }
+
+    /// flag 关闭时隐藏 .custom 选项（Release 默认关——POC 纪律）。
+    private var visiblePreferences: [ASRPreference] {
+        ASRPreference.allCases.filter {
+            $0 != .custom || ASRFeatureFlags.customTranscriptionEnabled
         }
     }
 
@@ -146,6 +158,8 @@ struct ASRSettingsView: View {
                 : ("需 Key", .recapOchre)
         case .auto:
             return ("推荐", .recapInk)
+        case .custom:
+            return ("实验", .recapOchre)
         }
     }
 
