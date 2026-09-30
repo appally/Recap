@@ -10,12 +10,32 @@ public enum AgentBundledSkills {
         return Bundle(for: Token.self)
     }()
 
-    /// 全部内置 SKILL.md 原文（按文件名排序——顺序稳定；展示分组由 Catalog/场景聚合负责，
-    /// 推荐排序由 `TemplateRecommender` 负责，文件序不影响两者语义）。
+    /// 原 curated 展示序（= 抽取前 `documents` 数组的顺序；`AgentSkillDocumentTests`
+    /// 与探索 Tab 的组内顺序以此为契约）。文件名即 skill id（`<id>.md`）。
+    private static let displayOrder: [String] = [
+        "customer-follow-up-email", "weekly-report", "project-status", "minutes-short",
+        "external-minutes", "mindmap", "mermaid-flowchart", "action-list", "decision-log",
+        "open-questions", "key-quotes", "sales-review", "customer-visit-notes",
+        "feedback-synthesis", "one-on-one", "interview-eval", "standup-summary", "retro",
+        "lecture-notes", "cornell-notes", "brief-reconcile", "photo-recap", "speech-coach",
+    ]
+
+    /// 全部内置 SKILL.md 原文（按 curated 序；顺序表未覆盖的新文件按文件名序附后，
+    /// 便于社区新增技能不破坏既有契约）。
     public static var documents: [String] {
-        let urls = (bundle.urls(forResourcesWithExtension: "md", subdirectory: nil) ?? [])
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        return urls.compactMap { try? String(contentsOf: $0, encoding: .utf8) }
+        let urls = bundle.urls(forResourcesWithExtension: "md", subdirectory: nil) ?? []
+        var byId: [String: String] = [:]
+        var extra: [String] = []
+        for url in urls {
+            guard let raw = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let id = url.deletingPathExtension().lastPathComponent
+            if displayOrder.contains(id) {
+                byId[id] = raw
+            } else {
+                extra.append(raw)
+            }
+        }
+        return displayOrder.compactMap { byId[$0] } + extra.sorted()
     }
 
     public static func all() throws -> [AgentSkill] {
