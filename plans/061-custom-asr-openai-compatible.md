@@ -65,3 +65,11 @@
 - `AsrEngineKind` 加 case 引发持久化/decoder 破坏性改动超出「向后兼容默认值」范畴——停下贴消费方清单。
 - 分片+拼接在真机 POC 中时间戳误差可感（说话人重叠段错位）——记录数据，Wave C 记 PARTIAL，评估静音切点（能量 VAD）替代固定窗口后再议；仍不过则降级「≤30min 可用 + 设置页明示」。百炼批式文件上限未核实（POC 第一步先验证），若其上限显著小于 25MB，把它从推荐端点降级为社区配方。
 - POC 正确性门槛不过（CER 显著劣于 SA）——**保留代码、flag 默认关、状态记 REJECTED（数据留档）**，不转正。
+
+
+## 执行记录（2026-09-30）
+
+- **Wave A+B DONE（代码）**：`AsrProviderStore`（单端点 v1，覆盖保存清理旧 Key account）；`CustomTranscriptionEngine`（actor，10min 分片 + Int16 WAV ≈18.5MB/片 + `upload(fromFile)` 直传 + verbose_json 解析；流式诚实抛不支持）；`ChunkedTranscriptionStitcher`（时间轴偏移 + 重叠双规则去重 + 边界碎句合并）；接线 `AsrEngineKind/.customTranscription` + 工厂 + `ASRPreference.custom`（flag 关时选择器隐藏）+ resolver `allowCustom` 参数（**LIVE（RecordingSession:99）恒 false**，.custom 偏好 LIVE 回落 auto）；`ASRFeatureFlags.customTranscription` DEBUG 开/Release 关；设置区 `CustomAsrSection`（3 秒静音 WAV 连接测试，保存前置=测试通过，范围+外发明示）。
+- **验证**：BUILD SUCCEEDED；CustomTranscriptionTests 8/8（WAV 头逐字段/25MB 换算/verbose_json/拼接三规则/存储 round-trip；1 例 Keychain 断言本机环境跳过，CI 全量）+ 全量回归绿。
+- **Wave C（真机 POC）待用户**：门槛不变（CER 不劣于 SA / 60min 分片内存 <500MB / 拼接误差 <300ms）；未过线 Release 默认保持关。百炼批式文件上限未核实仍是 POC 第一步。
+- **状态：IN PROGRESS（代码完成，POC 数据待真机）**。

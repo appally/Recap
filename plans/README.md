@@ -226,7 +226,7 @@ Follow-up（本批不实现）：**024** vocabulary_id 持久热词；**025** �
 | 058  | BYOK 门禁废除——模型自由不再收费墙（byok.unlock 改义支持者徽章） | P0 | S | — | DONE（2026-09-28：三处设置拆锁 + 会员卡/商品改义支持者 + 文案清零 + BUILD SUCCEEDED + 测试 346/346 绿；模拟器 UI 手测留用户 5 分钟抽查；App Store 文案待用户） |
 | 059  | Provider Registry v1——多自定义端点 + 连接测试 + 配方导入导出 | P1 | M | **058 硬** | IN PROGRESS（2026-09-30 用户反馈提前执行：Wave A+B DONE——多端点存储/迁移/两工厂 custom 分支/端点编辑器+连接测试/设置页端点区+配方导入导出+外发明示，4 单测绿；**剩**：Wave C 模板 JSON 化、Wave D 出处一行、F1 caps 降级单测、contextWindow 消费接线） |
 | 060  | Skills 文件化——内置资源化 + 用户目录 + 全功能编辑器 + 导入导出 | P1 | M | 058 软 | DONE（2026-09-30：Wave A–C 全 DONE——23 内置技能抽为 Bundled/*.md 资源、开放根 Documents/Recap/skills + 旧数据迁移 + Files 可见、编辑器解锁角色/步数/工具、导入带能力同意弹窗、导出分享、复制内置为我的模板；测试 7/7 + 全量回归绿） |
-| 061  | 自定义 ASR——OpenAI 兼容转写引擎（会后/导入路径，POC-gated） | P1 | M | **058 硬** | TODO |
+| 061  | 自定义 ASR——OpenAI 兼容转写引擎（会后/导入路径，POC-gated） | P1 | M | **058 硬** | IN PROGRESS（2026-09-30：Wave A+B 代码 DONE——分片引擎+拼接器+resolver LIVE 护栏+设置区+8 测试绿；Release 默认关；**Wave C 真机 POC 待用户**，门槛：CER/60min 内存/拼接误差） |
 | 062  | 开放工作区——增量镜像 + 显式 diff 回导（060 开放根的超集；manifest 增量） | P2 | M | 060 硬 | 计划待写（Phase 2） |
 | 063  | Web 伴侣 MVP——零后端静态 PWA 读改工作区（读+检索+编辑） | P2 | S–M | **062 硬** | 计划待写（Phase 2） |
 
