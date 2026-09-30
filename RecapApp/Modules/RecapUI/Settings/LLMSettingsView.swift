@@ -78,7 +78,7 @@ struct LLMSettingsView: View {
                 SettingsChoiceCard(
                     icon: "key",
                     title: "自备密钥",
-                    subtitle: "用你自己的厂商 Key，费用自理",
+                    subtitle: "免费 · 内置 9 家 + 任意自定义端点 · 费用走你的 Key",
                     selected: mode == .byok
                 ) {
                     selectMode(.byok)
@@ -141,10 +141,27 @@ struct LLMSettingsView: View {
                     .font(.recapMeta)
                     .foregroundStyle(Color.recapTea.opacity(0.75))
                     .lineSpacing(Leading.tight)
+
+
+            // plan 059 补强：免费路径的显式入口——开放能力不允许藏在卡片二级交互后。
+            Button {
+                selectMode(.byok)
+            } label: {
+                Label("用我自己的 Key（免费，任意 OpenAI 兼容端点）", systemImage: "key")
+                    .font(.recapBodyS.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.recapInk.opacity(0.06))
+                    )
+            }
+            .buttonStyle(SettingsPressStyle())
+
+            SettingsDivider()
             }
             .padding(.vertical, Spacing.xs)
 
-            SettingsDivider()
 
             NavigationLink {
                 MembershipSettingsView()
@@ -210,7 +227,24 @@ struct LLMSettingsView: View {
                 .foregroundStyle(Color.recapTea.opacity(0.75))
                 .lineSpacing(Leading.tight)
 
+
+            // plan 059 补强：免费路径的显式入口——开放能力不允许藏在卡片二级交互后。
+            Button {
+                selectMode(.byok)
+            } label: {
+                Label("用我自己的 Key（免费，任意 OpenAI 兼容端点）", systemImage: "key")
+                    .font(.recapBodyS.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.recapInk.opacity(0.06))
+                    )
+            }
+            .buttonStyle(SettingsPressStyle())
+
             SettingsDivider()
+
 
             NavigationLink {
                 MembershipSettingsView()
@@ -251,11 +285,11 @@ struct LLMSettingsView: View {
                 }
             }
 
-            credentialEditor
+            // plan 059 补强（用户反馈「看不到」）：端点管理在 BYOK 模式常驻展示——
+            // 藏两层（切模式→选自定义模板）才能看见等于不存在。选端点会自动切到 custom 模板。
+            endpointSection
 
-            if selected == .custom {
-                endpointSection
-            }
+            credentialEditor
 
             if !status.isEmpty {
                 Text(status)
